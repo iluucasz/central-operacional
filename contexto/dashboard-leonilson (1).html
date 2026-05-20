@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dashboard do Técnico — Leonilson</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#0b1f3a; --muted:#5b6b82; --border:#e2e8f0;
+    --card:#ffffff; --soft:#f1f6fd;
+    --primary:#0a3d91;       /* azul escuro */
+    --primary-2:#1e6dd8;     /* azul vibrante */
+    --accent:#38bdf8;        /* azul claro */
+    --danger:#dc2626;
+    --shadow:0 10px 30px -12px rgba(10,61,145,.18);
+    --grad:linear-gradient(135deg,#0a3d91 0%,#1e6dd8 55%,#38bdf8 100%);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1280px;margin:0 auto;padding:32px 20px 60px}
+  header{display:flex;flex-wrap:wrap;justify-content:space-between;gap:18px;align-items:flex-end;margin-bottom:28px}
+  .eyebrow{font-size:11px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--primary-2)}
+  h1{margin:6px 0 4px;font-size:30px;letter-spacing:-.5px}
+  .sub{color:var(--muted);font-size:13px}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);background:#fff;color:var(--primary);padding:9px 14px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s}
+  .btn:hover{border-color:var(--primary-2);background:var(--soft)}
+  .btn.primary{background:var(--grad);color:#fff;border-color:transparent;box-shadow:var(--shadow)}
+  .receber{background:var(--grad);color:#fff;padding:16px 22px;border-radius:16px;box-shadow:var(--shadow);min-width:240px}
+  .receber .l{font-size:11px;letter-spacing:.2em;text-transform:uppercase;opacity:.85}
+  .receber .v{font-size:30px;font-weight:800;margin-top:4px;font-variant-numeric:tabular-nums}
+  section.card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:18px;box-shadow:var(--shadow);margin-bottom:22px}
+  h2{margin:0 0 4px;font-size:16px}
+  .hint{color:var(--muted);font-size:12px;margin:0 0 14px}
+  .filters{display:flex;flex-direction:column;gap:10px}
+  .filter-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .flabel{font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-right:4px}
+  .chip{border:1px solid var(--border);background:#fff;color:var(--muted);padding:6px 12px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;transition:.15s}
+  .chip:hover{border-color:var(--primary-2);color:var(--primary)}
+  .chip.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+  .grid-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:22px}
+  .kpi{background:#fff;border:1px solid var(--border);border-radius:16px;padding:16px;box-shadow:var(--shadow);transition:.2s}
+  .kpi:hover{border-color:var(--primary-2);transform:translateY(-2px)}
+  .kpi .top{display:flex;justify-content:space-between;align-items:center}
+  .kpi .lab{font-size:11px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--muted)}
+  .kpi .ico{width:34px;height:34px;border-radius:10px;background:var(--soft);color:var(--primary);display:flex;align-items:center;justify-content:center;font-size:16px}
+  .kpi .val{font-size:24px;font-weight:800;margin-top:10px;font-variant-numeric:tabular-nums;color:var(--primary)}
+  .kpi .h{font-size:11px;color:var(--muted);margin-top:2px}
+  .row{display:grid;grid-template-columns:2fr 3fr;gap:22px}
+  @media (max-width:900px){.row{grid-template-columns:1fr}}
+  .break ul{list-style:none;padding:0;margin:14px 0 0}
+  .break li{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-top:1px solid var(--border)}
+  .break li:first-child{border-top:none}
+  .break .left{display:flex;gap:10px;align-items:center}
+  .badge{width:32px;height:32px;border-radius:9px;background:var(--soft);color:var(--primary);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700}
+  .badge.neg{background:#fee2e2;color:var(--danger)}
+  .v{font-variant-numeric:tabular-nums;font-weight:700;font-size:14px}
+  .v.neg{color:var(--danger)}
+  .total{display:flex;justify-content:space-between;align-items:center;margin-top:14px;padding:12px 16px;border-radius:12px;background:var(--soft);border:1px solid #c7dcfb}
+  .total .l{font-weight:700;font-size:14px}
+  .total .n{font-size:18px;font-weight:800;color:var(--primary);font-variant-numeric:tabular-nums}
+  .charts{display:grid;grid-template-columns:3fr 2fr;gap:16px}
+  @media (max-width:900px){.charts{grid-template-columns:1fr}}
+  .chart-box{position:relative;height:280px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border)}
+  th{background:var(--soft);color:var(--primary);font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+  tr:hover td{background:#fafcff}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .search{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:10px;padding:7px 12px;background:#fff;max-width:260px}
+  .search input{border:none;outline:none;font-size:13px;width:100%}
+  .table-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px}
+  .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  .empty{text-align:center;padding:30px;color:var(--muted)}
+  .note{font-size:11px;color:var(--muted);margin-top:6px;font-style:italic}
+  /* Velocímetros */
+  .gauges-wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:14px}
+  .gauge-card{border:1px solid var(--border);border-radius:14px;padding:14px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);text-align:center;transition:.2s}
+  .gauge-card:hover{border-color:var(--primary-2);transform:translateY(-2px);box-shadow:var(--shadow)}
+  .gauge-card.active{border-color:var(--primary);box-shadow:0 0 0 3px rgba(30,109,216,.15)}
+  .gauge-title{font-size:12px;font-weight:700;color:var(--primary);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px}
+  .gauge-svg{width:100%;max-width:240px;height:auto;display:block;margin:0 auto}
+  .gauge-count{font-size:34px;font-weight:800;color:var(--primary);font-variant-numeric:tabular-nums;line-height:1;margin-top:-30px}
+  .gauge-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin-top:2px}
+  .gauge-metas{display:flex;justify-content:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .meta-pill{font-size:10px;font-weight:700;padding:4px 9px;border-radius:999px;border:1px solid var(--border);color:var(--muted);background:#fff;letter-spacing:.05em}
+  .meta-pill.ok{background:linear-gradient(135deg,#10b981,#059669);color:#fff;border-color:transparent;box-shadow:0 4px 10px -3px rgba(16,185,129,.5)}
+  .gauge-needle{transition:transform 1.2s cubic-bezier(.34,1.56,.64,1);transform-origin:100px 90px}
+  .gauge-hero{grid-column:1/-1;background:var(--grad);color:#fff;border:none;padding:20px}
+  .gauge-hero .gauge-title,.gauge-hero .gauge-label{color:rgba(255,255,255,.85)}
+  .gauge-hero .gauge-count{color:#fff;font-size:48px}
+  .gauge-hero .meta-pill{background:rgba(255,255,255,.18);color:#fff;border-color:rgba(255,255,255,.3)}
+  .gauge-hero .meta-pill.ok{background:#fff;color:var(--primary)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">Dashboard individual</div>
+      <h1 id="tecNome">Leonilson dos Santos Silva</h1>
+      <div class="sub" id="subInfo"></div>
+    </div>
+    <div class="actions">
+      <input type="file" id="file" accept=".csv,.xlsx,.xls" style="display:none" />
+      <button class="btn" onclick="document.getElementById('file').click()">⬆ Importar CSV/XLSX</button>
+      <div class="receber">
+        <div class="l">Total a receber</div>
+        <div class="v" id="receberVal">R$ 0,00</div>
+      </div>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="filters">
+      <div class="filter-row"><span class="flabel">Ano</span><div id="yearChips"></div></div>
+      <div class="filter-row"><span class="flabel">Competência</span><div id="compChips"></div></div>
+    </div>
+  </section>
+
+  <div class="grid-kpi" id="kpis"></div>
+
+  <section class="card">
+    <h2>🎯 Velocímetros de metas por competência</h2>
+    <p class="hint">Meta 1: <b>80 OS</b> · Meta 2: <b>160 OS</b> · Cores: vermelho → amarelo → verde · Clique para filtrar</p>
+    <div class="gauges-wrap" id="gauges"></div>
+  </section>
+
+  <div class="row">
+    <section class="card break">
+      <h2>Breakdown salarial</h2>
+      <p class="hint">Composição da remuneração conforme planilha</p>
+      <ul id="breakList"></ul>
+      <div class="total"><span class="l">Líquido a receber</span><span class="n" id="liqVal">R$ 0,00</span></div>
+      <div class="note">* Valores conforme planilha original.</div>
+    </section>
+
+    <section class="card">
+      <h2>Serviços por tipo</h2>
+      <p class="hint">Clique numa barra para filtrar a tabela</p>
+      <div class="charts">
+        <div class="chart-box"><canvas id="barChart"></canvas></div>
+        <div class="chart-box"><canvas id="pieChart"></canvas></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="table-head">
+      <div><h2>Ordens de serviço</h2><p class="hint" id="tableInfo"></p></div>
+      <div class="search">🔍 <input id="q" placeholder="Buscar OS..." /></div>
+    </div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:12px">
+      <table>
+        <thead><tr><th>Código</th><th>Tipo de serviço</th><th>Competência</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+const SERVICES_INIT = [{"cod": "09/2143116-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2368404-26", "premio": 13.0, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2372740-26", "premio": 13.0, "tipo": "Desentupimento Externo", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2438762-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2534477-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2562772-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2579954-26", "premio": 13.0, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2606121-26", "premio": 38.5, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2605081-26", "premio": 28.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2614886-26", "premio": 62.99, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2611901-26", "premio": 32.0, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2585322-26", "premio": 28.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2632625-26", "premio": 13.0, "tipo": "Revisa Repara Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2634466-26", "premio": 28.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2554991-26", "premio": 28.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2602185-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2643699-26", "premio": 28.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2646818-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2639204-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2648327-26", "premio": 33.0, "tipo": "Revisa Repara Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2648112-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2654329-26", "premio": 14.74, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2661498-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2664894-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2671628-26", "premio": 28.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2656401-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2674796-26", "premio": 28.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2677295-26", "premio": 28.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2658213-26", "premio": 28.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2629473-26", "premio": 28.75, "tipo": "Revisa Repara Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2681997-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2680433-26", "premio": 13.0, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2672128-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2696439-26", "premio": 37.25, "tipo": "Ventilador De Teto", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2676811-26", "premio": 28.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2695523-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2698071-26", "premio": 13.0, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2707381-26", "premio": 32.0, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2706341-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2711913-26", "premio": 28.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2710254-26", "premio": 28.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2702670-26", "premio": 28.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2657264-26", "premio": 13.0, "tipo": "Desentupimento Interno Par", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2712223-26", "premio": 13.0, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2720650-26", "premio": 15.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2720299-26", "premio": 51.5, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2719113-26", "premio": 51.5, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2708951-26", "premio": 13.0, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2730710-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2701614-26", "premio": 33.1, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2736993-26", "premio": 34.25, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2698406-26", "premio": 15.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2741940-26", "premio": 51.5, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2657657-26", "premio": 34.25, "tipo": "Desentupimento Interno Par", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2723529-26", "premio": 22.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2785912-26", "premio": 14.74, "tipo": "Revisa Repara Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2684611-26", "premio": 30.49, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2721380-26", "premio": 15.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2769209-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2808040-26", "premio": 13.0, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2789516-26", "premio": 38.98, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2817703-26", "premio": 18.25, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2814419-26", "premio": 13.0, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2845173-26", "premio": 35.5, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2834905-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2856910-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2845851-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2871666-26", "premio": 35.5, "tipo": "Desentupimento Interno Par", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2866434-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2813503-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2871163-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2871381-26", "premio": 35.5, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2884362-26", "premio": 22.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2862803-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2853502-26", "premio": 31.25, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2897126-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2820203-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2902670-26", "premio": 30.61, "tipo": "Apoio Oper Basica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2910513-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2894647-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2894126-26", "premio": 19.75, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2914368-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.1Q"}, {"cod": "09/2484089-26", "premio": 13.0, "tipo": "Revisa Repara Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2541639-26", "premio": 28.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2584554-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2626137-26", "premio": 13.0, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2656184-26", "premio": 15.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2687835-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2916836-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2865693-26", "premio": 35.5, "tipo": "Desentupimento Interno Par", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2925613-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2923199-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2932604-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2938930-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2929872-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2946712-26", "premio": 29.75, "tipo": "Inst Hidraulicas", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2880613-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2867639-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2952949-26", "premio": 29.0, "tipo": "Apoio Oper Basica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2931980-26", "premio": 13.0, "tipo": "Inst Hidraulicas", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2950139-26", "premio": 13.0, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2943776-26", "premio": 35.5, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2954066-26", "premio": 35.75, "tipo": "Apoio Oper Basica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2911356-26", "premio": 13.0, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2938107-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2960312-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2967510-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2969064-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2966196-26", "premio": 29.75, "tipo": "Pfaz Revisa Rep Ilum", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2980883-26", "premio": 13.0, "tipo": "Inst Hidraulicas", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2983191-26", "premio": 29.0, "tipo": "Apoio Oper Basica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2938174-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2979658-26", "premio": 35.5, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2978446-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2930156-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3003495-26", "premio": 29.0, "tipo": "Apoio Oper Basica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2949917-26", "premio": 13.0, "tipo": "Desentup Ramais Inte", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3000327-26", "premio": 38.21, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3005518-26", "premio": 29.0, "tipo": "Apoio Oper Basica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2986845-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3009071-26", "premio": 29.0, "tipo": "Apoio Oper Basica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/2988970-26", "premio": 13.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3041230-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3031428-26", "premio": 13.0, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3024896-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3046763-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3045824-26", "premio": 13.0, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3057326-26", "premio": 35.75, "tipo": "Apoio Oper Basica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3053153-26", "premio": 29.75, "tipo": "Inst Lig Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3057436-26", "premio": 19.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3064211-26", "premio": 36.5, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3063429-26", "premio": 38.75, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3055854-26", "premio": 38.0, "tipo": "Pfaz * Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3066168-26", "premio": 36.5, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3015880-26", "premio": 39.5, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3058962-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3076384-26", "premio": 53.5, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3078600-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3092831-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3022828-26", "premio": 13.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3090809-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3066214-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3093875-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3102376-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3083672-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3071044-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3102584-26", "premio": 39.5, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3101750-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3110606-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3106303-26", "premio": 35.5, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3070304-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3102018-26", "premio": 13.0, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3117049-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3103101-26", "premio": 37.24, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3101445-26", "premio": 31.49, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3123900-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3133506-26", "premio": 16.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3115627-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3131493-26", "premio": 29.75, "tipo": "Revisa Repara Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3137353-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3141308-26", "premio": 29.0, "tipo": "Apoio Oper Basica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3144137-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3117337-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3119025-26", "premio": 26.5, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3073631-26", "premio": 35.46, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3142583-26", "premio": 29.75, "tipo": "Revisa Repara Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3137624-26", "premio": 29.75, "tipo": "Revisa Repara Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3155504-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3162287-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3164300-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3159540-26", "premio": 13.0, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3129659-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3162746-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3074656-26", "premio": 29.75, "tipo": "Revisa Repara Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3178105-26", "premio": 29.75, "tipo": "Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3182755-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3184309-26", "premio": 29.75, "tipo": "Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3193111-26", "premio": 35.5, "tipo": "Desentupimento", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3197115-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3204112-26", "premio": 29.75, "tipo": "Revisa Repara Hidraulica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3194598-26", "premio": 29.75, "tipo": "Inst Lig Eletrica", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}, {"cod": "09/3189650-26", "premio": 32.0, "tipo": "Kit Fixacao", "tecnico": "LEONILSON DOS SANTOS SILVA", "competencia": "ABR.2026.2Q"}];
+// Valores fixos conforme planilha
+const SALARIO=2664.53, ADIANTAMENTO=1100, VA=249, VR=783, DESCONTOS=250, HORA_EXTRA=0, COMISSAO=1070.75;
+const RECEBER_PLANILHA = 2385.28;
+
+let services = SERVICES_INIT.slice();
+let yearFilter=null, compFilter=null, tipoFilter=null, query="";
+let barChart, pieChart;
+
+const COLORS=["#0a3d91","#1e6dd8","#38bdf8","#0ea5e9","#6366f1","#8b5cf6","#06b6d4","#3b82f6","#0284c7","#1d4ed8","#2563eb","#0891b2","#4338ca","#0369a1","#075985","#1e40af"];
+
+const BRL = n => n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+const yearOf = c => { const m=(c||"").match(/(20\d{2})/); return m?m[1]:"—"; };
+const titleCase = s => s.toLowerCase().split(" ").map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(" ");
+
+function render(){
+  const scoped = services.filter(s=>!yearFilter||yearOf(s.competencia)===yearFilter);
+  const filtered = scoped.filter(s=>{
+    if(tipoFilter && s.tipo!==tipoFilter) return false;
+    if(compFilter && s.competencia!==compFilter) return false;
+    if(query && !s.cod.toLowerCase().includes(query.toLowerCase())) return false;
+    return true;
+  });
+
+  const tec = services[0]?.tecnico ? titleCase(services[0].tecnico) : "Técnico";
+  document.getElementById('tecNome').textContent = tec;
+  const comps = [...new Set(scoped.map(s=>s.competencia))];
+  document.getElementById('subInfo').textContent = `${scoped.length} ordens · ${comps.length} competência(s)${yearFilter?' · '+yearFilter:''}`;
+
+  // KPIs (sem prêmio/premiação)
+  const porTipo = {};
+  scoped.forEach(s=>{ porTipo[s.tipo]=(porTipo[s.tipo]||0)+1 });
+  const tipos = Object.entries(porTipo).sort((a,b)=>b[1]-a[1]);
+
+  const kpis=[
+    {ico:"📋", lab:"Ordens de serviço", val:scoped.length, hint:"Total executadas"},
+    {ico:"🔧", lab:"Tipos atendidos", val:tipos.length, hint:"Categorias diferentes"},
+    {ico:"📅", lab:"Competências", val:comps.length, hint:"Períodos no recorte"},
+    {ico:"⭐", lab:"Tipo mais frequente", val:tipos[0]?tipos[0][0]:"—", hint:tipos[0]?tipos[0][1]+" OS":""},
+  ];
+  document.getElementById('kpis').innerHTML = kpis.map(k=>`
+    <div class="kpi"><div class="top"><span class="lab">${k.lab}</span><span class="ico">${k.ico}</span></div>
+    <div class="val" style="font-size:${String(k.val).length>10?'15px':'24px'}">${k.val}</div><div class="h">${k.hint}</div></div>`).join('');
+
+  // Breakdown — SEM Premiação
+  const items=[
+    {l:"Salário base", v:SALARIO, sign:"+", ico:"💼"},
+    {l:"Comissão", v:COMISSAO, sign:"+", ico:"💰"},
+    {l:"Hora extra", v:HORA_EXTRA, sign:"+", ico:"⏱"},
+    {l:"VA", v:VA, sign:"+", ico:"＋"},
+    {l:"VR", v:VR, sign:"+", ico:"＋"},
+    {l:"Adiantamento", v:ADIANTAMENTO, sign:"-", ico:"−"},
+    {l:"Descontos", v:DESCONTOS, sign:"-", ico:"−"},
+  ];
+  document.getElementById('breakList').innerHTML = items.map(b=>`
+    <li><div class="left"><div class="badge ${b.sign==='-'?'neg':''}">${b.ico}</div><span style="font-size:14px;font-weight:600">${b.l}</span></div>
+    <span class="v ${b.sign==='-'?'neg':''}">${b.sign==='-'?'-':''}${BRL(b.v)}</span></li>`).join('');
+
+  // Líquido — valor exato da planilha
+  document.getElementById('liqVal').textContent = BRL(RECEBER_PLANILHA);
+  document.getElementById('receberVal').textContent = BRL(RECEBER_PLANILHA);
+
+  // Chips
+  const years = [...new Set(services.map(s=>yearOf(s.competencia)))].sort();
+  document.getElementById('yearChips').innerHTML =
+    `<button class="chip ${yearFilter===null?'active':''}" data-y="">Todos</button>` +
+    years.map(y=>`<button class="chip ${yearFilter===y?'active':''}" data-y="${y}">${y}</button>`).join('');
+  document.querySelectorAll('#yearChips .chip').forEach(b=>b.onclick=()=>{const v=b.dataset.y;yearFilter=v||null;compFilter=null;render();});
+
+  const compsAll=[...new Set(services.filter(s=>!yearFilter||yearOf(s.competencia)===yearFilter).map(s=>s.competencia))];
+  document.getElementById('compChips').innerHTML =
+    `<button class="chip ${compFilter===null?'active':''}" data-c="">Todas</button>` +
+    compsAll.map(c=>`<button class="chip ${compFilter===c?'active':''}" data-c="${c}">${c}</button>`).join('');
+  document.querySelectorAll('#compChips .chip').forEach(b=>b.onclick=()=>{const v=b.dataset.c;compFilter=v||null;render();});
+
+  // Velocímetros — um por competência + um destaque (total no recorte)
+  renderGauges(scoped, comps);
+
+  // Charts (sem valores monetários — apenas quantidades)
+  const labels = tipos.map(t=>t[0]);
+  const qtds = tipos.map(t=>t[1]);
+  const bg = labels.map((_,i)=>COLORS[i%COLORS.length]);
+  if(barChart) barChart.destroy();
+  if(pieChart) pieChart.destroy();
+  barChart = new Chart(document.getElementById('barChart'),{
+    type:'bar',
+    data:{labels, datasets:[{label:'Quantidade', data:qtds, backgroundColor:bg, borderRadius:8}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.y+' OS'}}},scales:{x:{ticks:{maxRotation:55,minRotation:35,font:{size:10}}},y:{beginAtZero:true,ticks:{precision:0}}},onClick:(_,els)=>{if(els[0]){const t=labels[els[0].index];tipoFilter=tipoFilter===t?null:t;render();}}}
+  });
+  pieChart = new Chart(document.getElementById('pieChart'),{
+    type:'doughnut',
+    data:{labels, datasets:[{data:qtds, backgroundColor:bg, borderWidth:2, borderColor:'#fff'}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'58%',plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10}}}}
+  });
+
+  // Tabela — sem coluna de prêmio
+  document.getElementById('tableInfo').textContent = `${filtered.length} de ${scoped.length} ordens${tipoFilter?' · filtro: '+tipoFilter:''}`;
+  const tipoIdx = Object.fromEntries(labels.map((l,i)=>[l,i]));
+  document.getElementById('rows').innerHTML = filtered.length ? filtered.map(s=>`
+    <tr><td class="mono">${s.cod}</td>
+    <td><span class="dot" style="background:${COLORS[(tipoIdx[s.tipo]||0)%COLORS.length]}"></span>${s.tipo}</td>
+    <td style="color:var(--muted)">${s.competencia}</td></tr>`).join('')
+    : '<tr><td colspan="3" class="empty">Nenhuma OS encontrada.</td></tr>';
+}
+
+document.getElementById('q').addEventListener('input', e=>{query=e.target.value;render();});
+
+document.getElementById('file').addEventListener('change', async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  try{
+    const buf=await f.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array',cellDates:false,raw:false});
+    // Procura a aba com mais linhas (caso a 1ª esteja vazia)
+    let bestWs=null,bestRows=[];
+    for(const name of wb.SheetNames){
+      const ws=wb.Sheets[name];
+      const rs=XLSX.utils.sheet_to_json(ws,{defval:'',raw:false});
+      if(rs.length>bestRows.length){bestRows=rs;bestWs=name;}
+    }
+    const rows=bestRows;
+    if(!rows.length){alert('Planilha vazia.');e.target.value='';return;}
+    // normaliza chave (remove acentos, espaços extras, BOM, pontuação)
+    const norm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/^\ufeff/,'').replace(/[^a-z0-9]/gi,'').toLowerCase();
+    const pick=(r,keys)=>{
+      const map={}; for(const k of Object.keys(r)) map[norm(k)]=r[k];
+      for(const k of keys){const v=map[norm(k)]; if(v!=null && v!=='') return v;}
+    };
+    const out=rows.map(r=>({
+      cod:String(pick(r,['cod','codigo','código','codserv','cod_serv','numeroos','numero','os','nº','n','idos'])||'').trim(),
+      premio:(()=>{const v=pick(r,['premio','prêmio','valor','valorpremio']);return parseFloat(String(v??'0').replace(/[^\d,.-]/g,'').replace(/\.(?=\d{3}(\D|$))/g,'').replace(',','.'))||0;})(),
+      tipo:String(pick(r,['tipo','tiposerv','tipo_serv','tipodeservico','tipodeserviço','servico','serviço','descricao','descrição'])||'').trim(),
+      tecnico:String(pick(r,['tecnico','técnico','tecnicoresponsavel','responsavel'])||'LEONILSON DOS SANTOS SILVA').trim(),
+      competencia:String(pick(r,['competencia','competência','mes','mês','periodo','período','mesreferencia'])||'').trim(),
+    })).filter(s=>s.cod&&s.tipo&&s.competencia);
+    if(!out.length){
+      const cols=Object.keys(rows[0]||{}).join(', ');
+      alert('Nenhuma OS válida encontrada.\n\nColunas detectadas: '+cols+'\n\nEsperado: COD, TIPO, COMPETÊNCIA (PRÊMIO opcional).');
+      e.target.value='';return;
+    }
+    services=out;yearFilter=compFilter=tipoFilter=null;query='';
+    document.getElementById('q').value='';
+    render();
+    alert('✓ '+out.length+' ordens importadas com sucesso.');
+  }catch(err){
+    console.error(err);
+    alert('Erro ao ler o arquivo: '+err.message);
+  }
+  e.target.value='';
+});
+
+
+// SVG gauge: semicírculo 180°, faixa gradiente vermelho→amarelo→verde, ponteiro
+function gaugeSVG(count, max, hero){
+  const pct = Math.min(count/max, 1);
+  // ângulo: -90 (esq) → +90 (dir)
+  const angle = -90 + pct*180;
+  // arco fundo dividido em segmentos coloridos para simular gradiente
+  const segs = 30;
+  const cx=100, cy=90, r=70;
+  let segments = '';
+  for(let i=0;i<segs;i++){
+    const a1 = (-90 + (i/segs)*180) * Math.PI/180;
+    const a2 = (-90 + ((i+1)/segs)*180) * Math.PI/180;
+    const x1 = cx + r*Math.cos(a1), y1 = cy + r*Math.sin(a1);
+    const x2 = cx + r*Math.cos(a2), y2 = cy + r*Math.sin(a2);
+    // cor: 0=vermelho, .5=amarelo, 1=verde
+    const t = i/(segs-1);
+    let R,G,B;
+    if(t<0.5){ const k=t/0.5; R=Math.round(220 + (250-220)*k); G=Math.round(38+(204-38)*k); B=Math.round(38+(21-38)*k); }
+    else { const k=(t-0.5)/0.5; R=Math.round(250+(16-250)*k); G=Math.round(204+(185-204)*k); B=Math.round(21+(129-21)*k); }
+    const filled = (i/segs) <= pct;
+    const op = filled ? 1 : 0.18;
+    segments += `<path d="M ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2}" stroke="rgb(${R},${G},${B})" stroke-width="16" fill="none" stroke-linecap="butt" opacity="${op}"/>`;
+  }
+  // marcadores das metas 80 e 160 (sobre max)
+  const tickMark = (val,label)=>{
+    if(val>max) return '';
+    const a = (-90 + (val/max)*180)*Math.PI/180;
+    const xi = cx + (r-12)*Math.cos(a), yi = cy + (r-12)*Math.sin(a);
+    const xo = cx + (r+12)*Math.cos(a), yo = cy + (r+12)*Math.sin(a);
+    const xt = cx + (r+22)*Math.cos(a), yt = cy + (r+22)*Math.sin(a);
+    return `<line x1="${xi}" y1="${yi}" x2="${xo}" y2="${yo}" stroke="${hero?'#fff':'#0a3d91'}" stroke-width="2"/>
+            <text x="${xt}" y="${yt}" font-size="9" font-weight="700" fill="${hero?'#fff':'#0a3d91'}" text-anchor="middle" dominant-baseline="middle">${label}</text>`;
+  };
+  // ponteiro
+  const ax = cx + (r-8)*Math.cos(angle*Math.PI/180);
+  const ay = cy + (r-8)*Math.sin(angle*Math.PI/180);
+  const needleColor = hero?'#fff':'#0a3d91';
+  return `<svg class="gauge-svg" viewBox="0 0 200 120">
+    ${segments}
+    ${tickMark(80,'80')}
+    ${tickMark(160,'160')}
+    <g class="gauge-needle" style="transform:rotate(${angle+90}deg);transform-box:fill-box;transform-origin:50% 75%">
+      <line x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy-r+8}" stroke="${needleColor}" stroke-width="3" stroke-linecap="round"/>
+    </g>
+    <circle cx="${cx}" cy="${cy}" r="8" fill="${needleColor}"/>
+    <circle cx="${cx}" cy="${cy}" r="3" fill="#fff"/>
+  </svg>`;
+}
+
+function renderGauges(scoped, comps){
+  const el = document.getElementById('gauges');
+  // por competência
+  const byComp = {};
+  scoped.forEach(s=>{ byComp[s.competencia]=(byComp[s.competencia]||0)+1 });
+  const compsList = comps.length ? comps : Object.keys(byComp);
+
+  // hero = total no recorte
+  const total = scoped.length;
+  const totalMax = Math.max(160, Math.ceil(total/80)*80 || 160);
+  const heroMetas = `
+    <span class="meta-pill ${total>=80?'ok':''}">Meta 1: 80 ${total>=80?'✓':''}</span>
+    <span class="meta-pill ${total>=160?'ok':''}">Meta 2: 160 ${total>=160?'✓':''}</span>`;
+  let html = `<div class="gauge-card gauge-hero">
+    <div class="gauge-title">Total no recorte</div>
+    ${gaugeSVG(Math.min(total,totalMax), totalMax, true)}
+    <div class="gauge-count">${total}</div>
+    <div class="gauge-label">Ordens de serviço</div>
+    <div class="gauge-metas">${heroMetas}</div>
+  </div>`;
+
+  // por competência
+  html += compsList.map(c=>{
+    const n = byComp[c]||0;
+    const m1 = n>=80, m2 = n>=160;
+    const active = compFilter===c?'active':'';
+    return `<div class="gauge-card ${active}" data-comp="${c}">
+      <div class="gauge-title">${c}</div>
+      ${gaugeSVG(Math.min(n,160), 160, false)}
+      <div class="gauge-count">${n}</div>
+      <div class="gauge-label">OS realizadas</div>
+      <div class="gauge-metas">
+        <span class="meta-pill ${m1?'ok':''}">Meta 1: 80 ${m1?'✓':''}</span>
+        <span class="meta-pill ${m2?'ok':''}">Meta 2: 160 ${m2?'✓':''}</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = html;
+  el.querySelectorAll('.gauge-card[data-comp]').forEach(card=>{
+    card.onclick = ()=>{ const c=card.dataset.comp; compFilter = compFilter===c?null:c; render(); };
+  });
+}
+
+render();
+</script>
+</body>
+</html>
+</body>
+</html>
