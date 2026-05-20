@@ -157,9 +157,10 @@ Folha de pagamento calculada
 ## API Endpoints
 
 ### Autenticação
-- `POST /api/auth/register` - Registrar novo usuário
 - `POST /api/auth/login` - Fazer login
 - `POST /api/auth/logout` - Fazer logout
+
+Criação de usuários: realizada apenas pelo administrador dentro da plataforma.
 
 ### Técnicos (Admin)
 - `GET /api/technicians` - Listar todos os técnicos

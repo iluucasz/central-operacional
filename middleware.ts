@@ -7,7 +7,7 @@ const JWT_SECRET = new TextEncoder().encode(
 
 const COOKIE_NAME = 'auth-token';
 
-const publicRoutes = ['/login', '/register', '/api/auth/login', '/api/auth/register', '/api/auth/me'];
+const publicRoutes = ['/login', '/api/auth/login', '/api/auth/register', '/api/auth/me'];
 const adminRoutes = ['/admin'];
 const technicianRoutes = ['/dashboard'];
 const hiddenTechnicianRoutes = ['/dashboard/services'];

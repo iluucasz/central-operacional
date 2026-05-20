@@ -1,13 +1,13 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { LockKeyhole, Mail } from 'lucide-react';
+import { Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
@@ -57,14 +57,23 @@ export default function LoginPage() {
             <span className="mb-1 block font-medium">Email</span>
             <div className="flex min-h-11 items-center gap-2 rounded-md border border-input bg-background px-3 focus-within:ring-2 focus-within:ring-ring">
               <Mail className="h-4 w-4 text-muted-foreground" />
-              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" className="w-full bg-transparent outline-none" required />
+              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="example@mail.com" className="w-full bg-transparent outline-none" required />
             </div>
           </label>
           <label className="block text-sm">
             <span className="mb-1 block font-medium">Senha</span>
             <div className="flex min-h-11 items-center gap-2 rounded-md border border-input bg-background px-3 focus-within:ring-2 focus-within:ring-ring">
               <LockKeyhole className="h-4 w-4 text-muted-foreground" />
-              <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" className="w-full bg-transparent outline-none" required />
+              <input type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="sua senha" className="w-full bg-transparent outline-none" required />
+              <button
+                type="button"
+                onClick={() => setShowPassword((value) => !value)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                aria-pressed={showPassword}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
             </div>
           </label>
           <button type="submit" disabled={loading} className="min-h-11 w-full rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60">
@@ -72,12 +81,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-6 text-center text-sm text-muted-foreground">
-          Não tem conta?{' '}
-          <Link href="/register" className="font-medium text-primary">
-            Cadastre-se
-          </Link>
-        </p>
+        <p className="mt-6 text-center text-sm text-muted-foreground">O acesso é liberado pelo administrador da plataforma.</p>
       </section>
     </main>
   );
