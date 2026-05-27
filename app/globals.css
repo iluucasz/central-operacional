@@ -134,3 +134,170 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
+@keyframes gauge-goal-pulse {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+
+  50% {
+    transform: translateY(-2px) scale(1.008);
+  }
+}
+
+@keyframes gauge-mega-pulse {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 22px 60px rgba(249, 115, 22, 0.24), 0 12px 34px rgba(245, 158, 11, 0.16);
+  }
+
+  50% {
+    transform: translateY(-3px) scale(1.016);
+    box-shadow: 0 30px 78px rgba(249, 115, 22, 0.34), 0 22px 58px rgba(239, 68, 68, 0.2);
+  }
+}
+
+@keyframes gauge-badge-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes gauge-ring {
+  0% {
+    transform: translateX(-50%) scale(0.9);
+    opacity: 0.12;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+
+  100% {
+    transform: translateX(-50%) scale(1.16);
+    opacity: 0;
+  }
+}
+
+@keyframes gauge-bar-flash {
+  0% {
+    transform: translateX(120%);
+    opacity: 0;
+  }
+
+  20% {
+    opacity: 0.85;
+  }
+
+  100% {
+    transform: translateX(-180%);
+    opacity: 0;
+  }
+}
+
+@keyframes gauge-confetti {
+  0% {
+    transform: translateY(-6px) rotate(0deg);
+    opacity: 0;
+  }
+
+  12% {
+    opacity: 1;
+  }
+
+  100% {
+    transform: translateY(42px) rotate(190deg);
+    opacity: 0;
+  }
+}
+
+@keyframes gauge-shine {
+  0% {
+    stroke-dashoffset: 42;
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0.45;
+  }
+}
+
+@keyframes gauge-needle-boost {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+
+  42% {
+    transform: rotate(1.8deg);
+  }
+
+  56% {
+    transform: rotate(-0.7deg);
+  }
+
+  70% {
+    transform: rotate(1deg);
+  }
+}
+
+@layer utilities {
+  .gauge-goal-celebration {
+    animation: gauge-goal-pulse 2.8s ease-in-out infinite;
+  }
+
+  .gauge-mega-celebration {
+    animation: gauge-mega-pulse 2.4s ease-in-out infinite;
+  }
+
+  .gauge-badge-float {
+    animation: gauge-badge-float 2.8s ease-in-out infinite;
+  }
+
+  .gauge-ring {
+    animation: gauge-ring 3.8s ease-out infinite;
+  }
+
+  .gauge-confetti-piece {
+    animation: gauge-confetti 3.4s ease-in infinite;
+  }
+
+  .gauge-bar-flash {
+    animation: gauge-bar-flash 2.9s linear infinite;
+  }
+
+  .gauge-shine {
+    animation: gauge-shine 2.6s linear infinite;
+  }
+
+  .gauge-needle-boost {
+    transform-box: view-box;
+    transform-origin: 90px 86px;
+    animation: gauge-needle-boost 1.35s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gauge-goal-celebration,
+  .gauge-mega-celebration,
+  .gauge-badge-float,
+  .gauge-ring,
+  .gauge-confetti-piece,
+  .gauge-bar-flash,
+  .gauge-shine,
+  .gauge-needle-boost {
+    animation: none !important;
+  }
+}

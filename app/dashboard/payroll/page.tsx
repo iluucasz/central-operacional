@@ -40,6 +40,8 @@ export default function TechnicianPayrollPage() {
     return <LoadingState />;
   }
 
+  const totalDiscounts = Number(currentPayroll?.discounts_total ?? 0) + Number(currentPayroll?.advances_total ?? 0);
+
   const items = [
     { label: 'Salário base', value: currentPayroll?.base_salary ?? 0, sign: 'plus' },
     { label: 'VA', value: currentPayroll?.va_deduction ?? 0, sign: 'plus' },
@@ -59,7 +61,7 @@ export default function TechnicianPayrollPage() {
         <MetricCard title="Líquido" value={formatCurrency(currentPayroll?.net_total ?? 0)} hint={currentPayroll?.competence_month ?? 'Sem competência'} icon={WalletCards} tone="success" />
         <MetricCard title="Comissão" value={formatCurrency(currentPayroll?.commission_value ?? 0)} hint="Valor diluído no holerite" icon={WalletCards} />
         <MetricCard title="Extraordinário" value={formatCurrency(currentPayroll?.extraordinary_award_value ?? 0)} hint="Meta de 80 ou 160 OS" icon={Trophy} tone="warning" />
-        <MetricCard title="Descontos" value={formatCurrency((currentPayroll?.discounts_total ?? 0) + (currentPayroll?.advances_total ?? 0))} hint="Adiantamento + descontos" icon={WalletCards} tone="danger" />
+        <MetricCard title="Descontos" value={formatCurrency(totalDiscounts)} hint="Adiantamento + descontos" icon={WalletCards} tone="danger" />
         <MetricCard title="Banco de horas" value={formatHours(hourBankBalance)} hint={hourBankHint} icon={Clock3} tone={hourBankBalance < 0 ? 'danger' : 'warning'} />
       </div>
 

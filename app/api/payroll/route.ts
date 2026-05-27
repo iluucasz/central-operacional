@@ -5,6 +5,30 @@ import { ensurePayrollSchema } from '@/lib/payroll-utils';
 
 const sql = neon(process.env.DATABASE_URL!);
 
+const payrollNumericFields = [
+  'total_services_value',
+  'commission_value',
+  'base_salary',
+  'va_deduction',
+  'vr_deduction',
+  'discounts_total',
+  'advances_total',
+  'extra_hours_value',
+  'extraordinary_award_value',
+  'hour_bank_balance',
+  'net_total',
+] as const;
+
+function normalizePayrollRow<T extends Record<string, unknown>>(row: T) {
+  return payrollNumericFields.reduce(
+    (normalized, field) => ({
+      ...normalized,
+      [field]: Number(row[field] ?? 0),
+    }),
+    { ...row },
+  );
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await verifyAuth(request);
@@ -44,7 +68,7 @@ export async function GET(request: NextRequest) {
     query += ` ORDER BY competence_month DESC`;
 
     const payrolls = await sql.query(query, params);
-    return NextResponse.json({ payrolls });
+    return NextResponse.json({ payrolls: payrolls.map((row) => normalizePayrollRow(row as Record<string, unknown>)) });
   } catch (error) {
     console.error('[v0] Get payroll error:', error);
     return NextResponse.json(
@@ -109,7 +133,7 @@ export async function POST(request: NextRequest) {
       RETURNING *
     `;
 
-    return NextResponse.json(result[0], { status: 201 });
+    return NextResponse.json(normalizePayrollRow(result[0] as Record<string, unknown>), { status: 201 });
   } catch (error) {
     console.error('[v0] Create/update payroll error:', error);
     return NextResponse.json(

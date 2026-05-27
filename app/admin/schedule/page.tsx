@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { demoSchedule, demoTechnicians } from '@/lib/demo-data';
-import { formatDate, normalizeText } from '@/lib/formatters';
+import { formatDate, formatTimeRange, normalizeText } from '@/lib/formatters';
 import type { Schedule, Technician } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
@@ -322,7 +322,7 @@ export default function SchedulePage() {
                                 <StatusBadge tone={entry.status === 'cancelled' ? 'warning' : entry.status === 'completed' ? 'success' : 'info'}>
                                   {getStatusLabel(entry.status)}
                                 </StatusBadge>
-                                <p className="mt-2 font-medium">{entry.start_time ? `${entry.start_time} - ${entry.end_time}` : 'Sem turno'}</p>
+                                <p className="mt-2 font-medium">{entry.start_time ? formatTimeRange(entry.start_time, entry.end_time) : 'Sem turno'}</p>
                               </>
                             ) : (
                               <span className="text-muted-foreground">Sem escala</span>
@@ -366,7 +366,7 @@ export default function SchedulePage() {
                   <tr key={item.id} className="border-b border-border last:border-0">
                     <td className="py-3 pr-4">{formatDate(item.date)}</td>
                     <td className="py-3 pr-4">{item.technician_name || item.technician_id}</td>
-                    <td className="py-3 pr-4">{item.start_time ? `${item.start_time} - ${item.end_time}` : '-'}</td>
+                    <td className="py-3 pr-4">{formatTimeRange(item.start_time, item.end_time)}</td>
                     <td className="py-3 pr-4">
                       <StatusBadge tone={item.status === 'cancelled' ? 'warning' : item.status === 'completed' ? 'success' : 'info'}>
                         {getStatusLabel(item.status)}

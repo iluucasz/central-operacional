@@ -24,6 +24,26 @@ export function formatHours(value: number | string | null | undefined): string {
   })}h`;
 }
 
+export function formatTime(value: string | null | undefined): string {
+  if (!value) return '-';
+
+  const normalized = String(value).trim();
+  const directMatch = normalized.match(/(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?/);
+
+  if (directMatch) {
+    const [, hours, minutes] = directMatch;
+    return `${hours.padStart(2, '0')}H${minutes}`;
+  }
+
+  return normalized;
+}
+
+export function formatTimeRange(startTime: string | null | undefined, endTime: string | null | undefined): string {
+  if (!startTime) return '-';
+  if (!endTime) return formatTime(startTime);
+  return `${formatTime(startTime)} - ${formatTime(endTime)}`;
+}
+
 export function formatDate(value: string | Date | null | undefined): string {
   if (!value) return '-';
 

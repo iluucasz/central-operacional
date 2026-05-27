@@ -9,9 +9,12 @@ import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { demoPayroll, demoTechnicians, demoWorkHours } from '@/lib/demo-data';
-import { formatDate, formatHours, normalizeText } from '@/lib/formatters';
+import { formatDate, formatHours, formatTime, normalizeText } from '@/lib/formatters';
 import type { WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+
+const MONTHLY_HOURS_TARGET = 220;
+const MONTHLY_HOURS_WARNING_FLOOR = 200;
 
 export default function TechnicianHoursPage() {
   const { user, loading } = useAppSession();
@@ -46,8 +49,12 @@ export default function TechnicianHoursPage() {
   }
 
   const totalHours = filteredWorkHours.reduce((total, item) => total + Number(item.hours_worked), 0);
-  const expectedHours = filteredWorkHours.length * 8;
-  const balance = totalHours - expectedHours;
+  const balance = totalHours - MONTHLY_HOURS_TARGET;
+  const hoursTone = totalHours >= MONTHLY_HOURS_TARGET ? 'success' : totalHours >= MONTHLY_HOURS_WARNING_FLOOR ? 'warning' : 'danger';
+  const balanceHint =
+    balance >= 0
+      ? `${formatHours(MONTHLY_HOURS_TARGET)} no total • ${formatHours(balance)} acima`
+      : `${formatHours(MONTHLY_HOURS_TARGET)} no total • faltam ${formatHours(Math.abs(balance))}`;
   const payrollBalance = demoPayroll.find((item) => item.technician_id === fallbackTechnician.id)?.hour_bank_balance ?? balance;
 
   return (
@@ -55,9 +62,9 @@ export default function TechnicianHoursPage() {
       <PageHeader eyebrow="Horas" title="Banco de horas" description="Horas realizadas, saldo diário e consolidado. Escala planejada e horas trabalhadas ficam separadas." />
 
       <div className="grid gap-3 md:grid-cols-4">
-        <MetricCard title="Horas realizadas" value={formatHours(totalHours)} hint={`${filteredWorkHours.length} dia(s)`} icon={Clock3} />
-        <MetricCard title="Horas previstas" value={formatHours(expectedHours)} hint="Base de 8h/dia" icon={Clock3} />
-        <MetricCard title="Saldo do recorte" value={formatHours(balance)} hint="Realizado menos previsto" icon={Clock3} tone={balance < 0 ? 'danger' : 'success'} />
+        <MetricCard title="Horas realizadas" value={formatHours(totalHours)} hint={`${filteredWorkHours.length} dia(s) no recorte`} icon={Clock3} tone={hoursTone} accentText />
+        <MetricCard title="Horas totais" value={formatHours(MONTHLY_HOURS_TARGET)} hint="Meta fixa do mês" icon={Clock3} />
+        <MetricCard title="Saldo do recorte" value={formatHours(balance)} hint={balanceHint} icon={Clock3} tone={hoursTone} accentText />
         <MetricCard title="Saldo acumulado" value={formatHours(payrollBalance)} hint="Conforme fechamento" icon={Clock3} tone={payrollBalance < 0 ? 'danger' : 'warning'} />
       </div>
 
@@ -91,8 +98,8 @@ export default function TechnicianHoursPage() {
                   return (
                     <tr key={item.id} className="border-b border-border last:border-0">
                       <td className="py-3 pr-4">{formatDate(item.date)}</td>
-                      <td className="py-3 pr-4">{item.start_time}</td>
-                      <td className="py-3 pr-4">{item.end_time}</td>
+                      <td className="py-3 pr-4">{formatTime(item.start_time)}</td>
+                      <td className="py-3 pr-4">{formatTime(item.end_time)}</td>
                       <td className="py-3 pr-4">{formatHours(item.hours_worked)}</td>
                       <td className="py-3 pr-4">
                         <StatusBadge tone={dailyBalance < 0 ? 'danger' : dailyBalance > 0 ? 'success' : 'neutral'}>
