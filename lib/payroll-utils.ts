@@ -64,10 +64,7 @@ export async function calculateTotalServices(
     SELECT COALESCE(SUM(value), 0) as total
     FROM services
     WHERE technician_id = ${technicianId}
-    AND (
-      TO_CHAR(date_performed::date, 'YYYY-MM') = ${competenceMonth}
-      OR competence_month = ${competenceMonth}
-    )
+    AND COALESCE(NULLIF(competence_month, ''), TO_CHAR(date_performed::date, 'YYYY-MM')) = ${competenceMonth}
   `;
 
   return roundCurrency(result[0]?.total || 0);
@@ -81,10 +78,7 @@ export async function calculateServiceCount(
     SELECT COUNT(*) as total
     FROM services
     WHERE technician_id = ${technicianId}
-    AND (
-      TO_CHAR(date_performed::date, 'YYYY-MM') = ${competenceMonth}
-      OR competence_month = ${competenceMonth}
-    )
+    AND COALESCE(NULLIF(competence_month, ''), TO_CHAR(date_performed::date, 'YYYY-MM')) = ${competenceMonth}
   `;
 
   return Number(result[0]?.total || 0);

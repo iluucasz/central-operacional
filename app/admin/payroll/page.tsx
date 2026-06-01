@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Calculator, CalendarDays, CheckCircle2, CreditCard, Eye, RefreshCw, Save, Search, WalletCards } from 'lucide-react';
+import { AlertCircle, Calculator, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, CreditCard, Eye, RefreshCw, Save, Search, WalletCards } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { LoadingState } from '@/components/loading-state';
@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { formatCurrency, monthKeyFromDate, normalizeText } from '@/lib/formatters';
-import type { Discount, Payroll, Service, Technician } from '@/lib/types';
+import type { Discount, Payroll, Service, ServiceFortnight, Technician } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
 const DEFAULT_BASE_SALARY = 2664.53;
@@ -62,8 +62,11 @@ type PayrollDraftField = keyof PayrollDraft;
 type PayrollRow = {
   technician: Technician;
   payrollItem?: Payroll;
+  hasMonthlyActivity: boolean;
   serviceCount: number;
   totalServicesValue: number;
+  profitValue: number;
+  serviceFortnightSummary: ServiceFortnightSummary;
   commissionPercentage: number;
   baseSalary: number;
   vaAllowance: number;
@@ -77,6 +80,17 @@ type PayrollRow = {
   extraordinaryAward: number;
   cashNetTotal: number;
   payrollNetTotal: number;
+};
+
+type ServiceFortnightBucket = {
+  count: number;
+  totalValue: number;
+};
+
+type ServiceFortnightSummary = {
+  Q1: ServiceFortnightBucket;
+  Q2: ServiceFortnightBucket;
+  unassigned: ServiceFortnightBucket;
 };
 
 const commissionFormulaFields: PayrollDraftField[] = [
@@ -127,16 +141,74 @@ function formatCompetenceLabel(value: string) {
   return `${month.padStart(2, '0')}/${year} - ${monthNames[monthNumber - 1]}`;
 }
 
+function shiftCompetenceMonth(value: string, monthOffset: number) {
+  const [year, month] = value.split('-').map(Number);
+
+  if (!year || !month) {
+    return value;
+  }
+
+  const shifted = new Date(Date.UTC(year, month - 1 + monthOffset, 1));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
 function getServiceCompetence(service: Service) {
+  const savedCompetence = String(service.competence_month ?? '').trim();
+  if (/^\d{4}-\d{2}$/.test(savedCompetence)) return savedCompetence;
+
   const datePrefix = String(service.date_performed ?? '').match(/^(\d{4}-\d{2})/);
   if (datePrefix?.[1]) return datePrefix[1];
 
   const dateMonth = monthKeyFromDate(service.date_performed);
   if (dateMonth) return dateMonth;
 
-  const savedCompetence = String(service.competence_month ?? '').trim();
-  if (/^\d{4}-\d{2}$/.test(savedCompetence)) return savedCompetence;
   return '';
+}
+
+function createServiceFortnightBucket(): ServiceFortnightBucket {
+  return {
+    count: 0,
+    totalValue: 0,
+  };
+}
+
+function createServiceFortnightSummary(services: Service[]): ServiceFortnightSummary {
+  const summary: ServiceFortnightSummary = {
+    Q1: createServiceFortnightBucket(),
+    Q2: createServiceFortnightBucket(),
+    unassigned: createServiceFortnightBucket(),
+  };
+
+  services.forEach((service) => {
+    const bucket = service.fortnight_period === 'Q1' || service.fortnight_period === 'Q2'
+      ? summary[service.fortnight_period as ServiceFortnight]
+      : summary.unassigned;
+
+    bucket.count += 1;
+    bucket.totalValue = roundMoney(bucket.totalValue + moneyValue(service.value));
+  });
+
+  return summary;
+}
+
+function formatServiceFortnightCountSummary(summary: ServiceFortnightSummary) {
+  const parts: string[] = [];
+
+  if (summary.Q1.count > 0) parts.push(`Q1 ${summary.Q1.count}`);
+  if (summary.Q2.count > 0) parts.push(`Q2 ${summary.Q2.count}`);
+  if (summary.unassigned.count > 0) parts.push(`Sem quinzena ${summary.unassigned.count}`);
+
+  return parts.join(' | ') || 'Sem OS';
+}
+
+function formatServiceFortnightValueSummary(summary: ServiceFortnightSummary) {
+  const parts: string[] = [];
+
+  if (summary.Q1.totalValue > 0) parts.push(`Q1 ${formatCurrency(summary.Q1.totalValue)}`);
+  if (summary.Q2.totalValue > 0) parts.push(`Q2 ${formatCurrency(summary.Q2.totalValue)}`);
+  if (summary.unassigned.totalValue > 0) parts.push(`Sem quinzena ${formatCurrency(summary.unassigned.totalValue)}`);
+
+  return parts.join(' | ') || 'Sem valor';
 }
 
 function serviceBelongsToTechnician(service: Service, technician: Technician) {
@@ -433,6 +505,8 @@ export default function PayrollPage() {
       const technicianDiscounts = discounts.filter(
         (discount) => discount.technician_id === technician.id && discount.competence_month === competenceMonth,
       );
+      const hasMonthlyActivity = Boolean(payrollItem || technicianServices.length > 0 || technicianDiscounts.length > 0);
+      const serviceFortnightSummary = createServiceFortnightSummary(technicianServices);
       const servicesTotal = roundMoney(technicianServices.reduce((total, service) => total + moneyValue(service.value), 0));
       const serviceCount = technicianServices.length;
       const totalServicesValue = roundMoney(servicesTotal || payrollItem?.total_services_value);
@@ -460,28 +534,39 @@ export default function PayrollPage() {
       const extraordinaryAward = payrollItem
         ? roundMoney(payrollItem.extraordinary_award_value)
         : calculateEstimatedAward(serviceCount);
-      const cashNetTotal = payrollItem
+      const projectedCashNetTotal = payrollItem
         ? roundMoney(payrollItem.net_total)
         : roundMoney(baseSalary + commission + extraHoursValue + extraordinaryAward - totalDeductions);
+      const cashNetTotal = hasMonthlyActivity ? projectedCashNetTotal : 0;
+      const displayBenefitsTotal = hasMonthlyActivity ? benefitsTotal : 0;
+      const displayCommission = hasMonthlyActivity ? commission : 0;
+      const displayDiscountsTotal = hasMonthlyActivity ? discountsTotal : 0;
+      const displayAdvancesTotal = hasMonthlyActivity ? advancesTotal : 0;
+      const displayTotalDeductions = hasMonthlyActivity ? totalDeductions : 0;
+      const displayExtraHoursValue = hasMonthlyActivity ? extraHoursValue : 0;
+      const displayExtraordinaryAward = hasMonthlyActivity ? extraordinaryAward : 0;
 
       return {
         technician,
         payrollItem,
+        hasMonthlyActivity,
         serviceCount,
         totalServicesValue,
+        profitValue: hasMonthlyActivity ? roundMoney(totalServicesValue - roundMoney(cashNetTotal + displayBenefitsTotal)) : 0,
+        serviceFortnightSummary,
         commissionPercentage,
         baseSalary,
         vaAllowance,
         vrAllowance,
-        benefitsTotal,
-        commission,
-        discountsTotal,
-        advancesTotal,
-        totalDeductions,
-        extraHoursValue,
-        extraordinaryAward,
+        benefitsTotal: displayBenefitsTotal,
+        commission: displayCommission,
+        discountsTotal: displayDiscountsTotal,
+        advancesTotal: displayAdvancesTotal,
+        totalDeductions: displayTotalDeductions,
+        extraHoursValue: displayExtraHoursValue,
+        extraordinaryAward: displayExtraordinaryAward,
         cashNetTotal,
-        payrollNetTotal: roundMoney(cashNetTotal + benefitsTotal),
+        payrollNetTotal: roundMoney(cashNetTotal + displayBenefitsTotal),
       };
     });
   }, [competenceMonth, discounts, payroll, services, technicians]);
@@ -491,11 +576,15 @@ export default function PayrollPage() {
     return normalizeText(haystack).includes(normalizeText(query));
   });
 
-  const totalCashNet = rows.reduce((total, row) => total + row.cashNetTotal, 0);
-  const totalBenefits = rows.reduce((total, row) => total + row.benefitsTotal, 0);
-  const totalPayrollNet = rows.reduce((total, row) => total + row.payrollNetTotal, 0);
-  const totalServicesValue = rows.reduce((total, row) => total + row.totalServicesValue, 0);
-  const closedCount = rows.filter((row) => row.payrollItem).length;
+  const rowsWithMonthlyActivity = rows.filter((row) => row.hasMonthlyActivity);
+
+  const totalCashNet = rowsWithMonthlyActivity.reduce((total, row) => total + row.cashNetTotal, 0);
+  const totalBenefits = rowsWithMonthlyActivity.reduce((total, row) => total + row.benefitsTotal, 0);
+  const totalPayrollNet = rowsWithMonthlyActivity.reduce((total, row) => total + row.payrollNetTotal, 0);
+  const totalServiceCount = rowsWithMonthlyActivity.reduce((total, row) => total + row.serviceCount, 0);
+  const totalServicesValue = rowsWithMonthlyActivity.reduce((total, row) => total + row.totalServicesValue, 0);
+  const totalProfit = rowsWithMonthlyActivity.reduce((total, row) => total + row.profitValue, 0);
+  const closedCount = rowsWithMonthlyActivity.filter((row) => row.payrollItem).length;
 
   function resetDialogState() {
     setSelectedRow(null);
@@ -634,6 +723,8 @@ export default function PayrollPage() {
   const currentCommissionPercentage = selectedRow?.commissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE;
   const formulaCommission = payrollDraft ? calculateFormulaCommission(payrollDraft, currentCommissionPercentage) : 0;
   const formulaCashNet = payrollDraft ? calculateCashNet(payrollDraft) : 0;
+  const previewPayrollNet = payrollDraft ? calculatePayrollNet(payrollDraft) : 0;
+  const previewProfit = payrollDraft ? roundMoney(payrollDraft.total_services_value - previewPayrollNet) : 0;
   const hasSavedPayroll = Boolean(selectedRow?.payrollItem);
   const hasManualNetAdjustment = payrollDraft ? roundMoney(payrollDraft.net_total) !== roundMoney(formulaCashNet) : false;
 
@@ -651,42 +742,96 @@ export default function PayrollPage() {
 
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
 
-      <div className="mb-4 grid gap-3 xl:grid-cols-5">
+      <div className="mb-4 grid gap-3 xl:grid-cols-7">
         <MetricCard title="Em conta" value={formatCurrency(totalCashNet)} hint="Pagamento corrente" icon={WalletCards} tone="success" />
         <MetricCard title="Cartões" value={formatCurrency(totalBenefits)} hint="VR + VA" icon={CreditCard} />
         <MetricCard title="Líquido da folha" value={formatCurrency(totalPayrollNet)} hint="Em conta + cartões" icon={Calculator} tone="success" />
-        <MetricCard title="Total de OS" value={formatCurrency(totalServicesValue)} hint="Produção do mês" icon={Calculator} />
-        <MetricCard title="Finalizados" value={`${closedCount}/${rows.length}`} hint="Cálculos salvos" icon={WalletCards} />
+        <MetricCard title="OS" value={totalServiceCount} hint="Ordens do mês" icon={Calculator} />
+        <MetricCard title="Valor bruto" value={formatCurrency(totalServicesValue)} hint="Produção do mês" icon={Calculator} />
+        <MetricCard title="Lucro gerado" value={formatCurrency(totalProfit)} hint="Valor bruto - folha total" icon={WalletCards} tone={totalProfit >= 0 ? 'success' : 'danger'} accentText />
+        <MetricCard title="Finalizados" value={`${closedCount}/${rowsWithMonthlyActivity.length}`} hint="Cálculos salvos com movimento" icon={WalletCards} />
       </div>
 
       <DataPanel
         title="Competência do fechamento"
-        description="Este mês controla as OS, os descontos e os cálculos exibidos na tabela."
+        description="Troque a competência para navegar pelo fechamento. A visão soma apenas técnicos com movimento real ou cálculo salvo no mês." 
         className="mb-4"
       >
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
-          <label className="flex w-full max-w-sm flex-col gap-2">
-            <span className="text-xs font-medium uppercase text-muted-foreground">Mês de referência</span>
-            <span className="flex h-14 items-center gap-3 rounded-md border border-border bg-background px-4">
-              <CalendarDays className="h-5 w-5 text-primary" />
-              <input
-                type="month"
-                value={competenceMonth}
-                onChange={(event) => setCompetenceMonth(event.target.value)}
-                className="w-full bg-transparent text-lg font-semibold outline-none"
-              />
-            </span>
-          </label>
-          <div className="rounded-md border border-border bg-muted/30 px-4 py-3">
-            <span className="block text-xs font-medium uppercase text-muted-foreground">Selecionado</span>
-            <strong className="mt-1 block text-lg">{formatCompetenceLabel(competenceMonth)}</strong>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
+          <section className="rounded-2xl border border-border bg-muted/20 p-4 sm:p-5">
+            <div className="flex flex-col gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Competência ativa</p>
+                <h3 className="mt-2 text-2xl font-semibold text-foreground sm:text-3xl">{formatCompetenceLabel(competenceMonth)}</h3>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                  Use os botões laterais ou selecione o mês diretamente. A tabela e os cards são recalculados imediatamente para a competência escolhida.
+                </p>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-stretch">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setCompetenceMonth((current) => shiftCompetenceMonth(current, -1))}
+                  aria-label="Competência anterior"
+                  className="h-12 w-full sm:w-12"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </Button>
+
+                <label className="flex min-w-0 flex-col rounded-2xl border border-border bg-background px-4 py-3 shadow-sm">
+                  <span className="flex items-center gap-2 text-xs font-medium uppercase text-muted-foreground">
+                    <CalendarDays className="h-4 w-4 text-primary" />
+                    Mês de referência
+                  </span>
+                  <input
+                    type="month"
+                    value={competenceMonth}
+                    onChange={(event) => setCompetenceMonth(event.target.value)}
+                    className="mt-2 w-full bg-transparent text-xl font-semibold outline-none scheme-light"
+                  />
+                </label>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setCompetenceMonth((current) => shiftCompetenceMonth(current, 1))}
+                  aria-label="Próxima competência"
+                  className="h-12 w-full sm:w-12"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </Button>
+              </div>
+            </div>
+          </section>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+            <div className="rounded-2xl border border-border bg-background p-4 shadow-sm">
+              <span className="text-xs font-medium uppercase text-muted-foreground">Movimento do mês</span>
+              <div className="mt-2 text-2xl font-semibold text-foreground">{rowsWithMonthlyActivity.length}</div>
+              <p className="mt-1 text-sm text-muted-foreground">Técnicos com OS, desconto ou cálculo salvo nesta competência.</p>
+            </div>
+            <div className="rounded-2xl border border-border bg-background p-4 shadow-sm">
+              <span className="text-xs font-medium uppercase text-muted-foreground">Leitura da tela</span>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                Quando o mês não tiver movimento, os cards ficam zerados. Os técnicos continuam visíveis na tabela, mas aparecem como sem movimento até existir lançamento real.
+              </p>
+            </div>
           </div>
         </div>
       </DataPanel>
 
+      {!rowsWithMonthlyActivity.length ? (
+        <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
+          Esta competência ainda não tem movimento real. Enquanto não houver OS, desconto ou cálculo salvo, os totais do topo ficam zerados.
+        </div>
+      ) : null}
+
       <DataPanel
         title="Fechamento por técnico"
-        description="A tabela mostra o resumo do mês. Abra o cálculo para ver a prévia, revisar os valores e salvar o fechamento."
+        description="A tabela mostra o resumo do mês com o breakdown de Q1 e Q2. Abra o cálculo para ver a prévia, revisar os valores e salvar o fechamento."
         action={
           <div className="flex min-h-10 items-center gap-2 rounded-md border border-border bg-background px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
@@ -700,11 +845,12 @@ export default function PayrollPage() {
               <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
                 <th className="py-3 pr-4 font-medium">Técnico</th>
                 <th className="py-3 pr-4 font-medium">OS</th>
-                <th className="py-3 pr-4 font-medium">Total OS</th>
+                <th className="py-3 pr-4 font-medium">Valor bruto</th>
                 <th className="py-3 pr-4 font-medium">Comissão</th>
                 <th className="py-3 pr-4 font-medium">Descontos</th>
                 <th className="py-3 pr-4 font-medium">Em conta</th>
                 <th className="py-3 pr-4 font-medium">Líquido da folha</th>
+                <th className="py-3 pr-4 font-medium">LUCRO GERADO</th>
                 <th className="py-3 pr-4 font-medium">Status</th>
                 <th className="py-3 font-medium">Ação</th>
               </tr>
@@ -716,14 +862,33 @@ export default function PayrollPage() {
                     <div className="font-medium">{row.technician.name}</div>
                     {row.technician.qra ? <div className="text-xs text-muted-foreground">{row.technician.qra}</div> : null}
                   </td>
-                  <td className="py-3 pr-4">{row.serviceCount}</td>
-                  <td className="py-3 pr-4">{formatCurrency(row.totalServicesValue)}</td>
-                  <td className="py-3 pr-4">{formatCurrency(row.commission)}</td>
-                  <td className="py-3 pr-4">{formatCurrency(row.totalDeductions)}</td>
-                  <td className="py-3 pr-4 font-semibold">{formatCurrency(row.cashNetTotal)}</td>
-                  <td className="py-3 pr-4 font-semibold">{formatCurrency(row.payrollNetTotal)}</td>
                   <td className="py-3 pr-4">
-                    {row.payrollItem ? <StatusBadge tone="success">Cálculo salvo</StatusBadge> : <StatusBadge>Sem salvar</StatusBadge>}
+                    <div className="font-medium">{row.serviceCount}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {row.hasMonthlyActivity ? formatServiceFortnightCountSummary(row.serviceFortnightSummary) : 'Sem movimento na competência'}
+                    </div>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <div className="font-medium">{formatCurrency(row.totalServicesValue)}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {row.hasMonthlyActivity ? formatServiceFortnightValueSummary(row.serviceFortnightSummary) : 'Sem valor lançado'}
+                    </div>
+                  </td>
+                  <td className="py-3 pr-4">{row.hasMonthlyActivity ? formatCurrency(row.commission) : '-'}</td>
+                  <td className="py-3 pr-4">{row.hasMonthlyActivity ? formatCurrency(row.totalDeductions) : '-'}</td>
+                  <td className="py-3 pr-4 font-semibold">{row.hasMonthlyActivity ? formatCurrency(row.cashNetTotal) : '-'}</td>
+                  <td className="py-3 pr-4 font-semibold">{row.hasMonthlyActivity ? formatCurrency(row.payrollNetTotal) : '-'}</td>
+                  <td className={`py-3 pr-4 font-semibold ${row.profitValue >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    {row.hasMonthlyActivity ? formatCurrency(row.profitValue) : '-'}
+                  </td>
+                  <td className="py-3 pr-4">
+                    {row.payrollItem ? (
+                      <StatusBadge tone="success">Cálculo salvo</StatusBadge>
+                    ) : row.hasMonthlyActivity ? (
+                      <StatusBadge tone="warning">Não salvo</StatusBadge>
+                    ) : (
+                      <StatusBadge tone="neutral">Sem movimento</StatusBadge>
+                    )}
                   </td>
                   <td className="py-3">
                     <Button
@@ -748,7 +913,7 @@ export default function PayrollPage() {
           <DialogHeader className="shrink-0 border-b border-border p-4 pb-3 sm:p-6 sm:pb-4">
             <DialogTitle>{hasSavedPayroll ? 'Revisão do cálculo salvo' : 'Prévia do cálculo'}</DialogTitle>
             <DialogDescription>
-              {selectedRow ? `${selectedRow.technician.name} - competência ${competenceMonth}` : 'Abra a prévia, revise e salve quando estiver certo.'}
+              {selectedRow ? `${selectedRow.technician.name} - competência ${formatCompetenceLabel(competenceMonth)}` : 'Abra a prévia, revise e salve quando estiver certo.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -777,9 +942,15 @@ export default function PayrollPage() {
                       {hasManualNetAdjustment ? 'Ajuste manual' : 'Fórmula'}
                     </StatusBadge>
                     <StatusBadge tone="info">{currentCommissionPercentage}% bruto</StatusBadge>
+                    {selectedRow ? <StatusBadge tone="info">{selectedRow.serviceCount} OS</StatusBadge> : null}
+                    {selectedRow ? <StatusBadge tone="info">Q1 {selectedRow.serviceFortnightSummary.Q1.count}</StatusBadge> : null}
+                    {selectedRow ? <StatusBadge tone="info">Q2 {selectedRow.serviceFortnightSummary.Q2.count}</StatusBadge> : null}
+                    {selectedRow && selectedRow.serviceFortnightSummary.unassigned.count > 0 ? (
+                      <StatusBadge tone="warning">Sem quinzena {selectedRow.serviceFortnightSummary.unassigned.count}</StatusBadge>
+                    ) : null}
                   </div>
 
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <div className="rounded-md border border-border bg-background p-3">
                       <div className="text-xs uppercase text-muted-foreground">Bruto</div>
                       <div className="mt-1 text-lg font-semibold">{formatCurrency(payrollDraft.total_services_value)}</div>
@@ -794,7 +965,11 @@ export default function PayrollPage() {
                     </div>
                     <div className="rounded-md border border-border bg-background p-3">
                       <div className="text-xs uppercase text-muted-foreground">Folha total</div>
-                      <div className="mt-1 text-lg font-semibold">{formatCurrency(calculatePayrollNet(payrollDraft))}</div>
+                      <div className="mt-1 text-lg font-semibold">{formatCurrency(previewPayrollNet)}</div>
+                    </div>
+                    <div className="rounded-md border border-border bg-background p-3">
+                      <div className="text-xs uppercase text-muted-foreground">LUCRO GERADO</div>
+                      <div className={`mt-1 text-lg font-semibold ${previewProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{formatCurrency(previewProfit)}</div>
                     </div>
                   </div>
                 </div>
@@ -807,7 +982,11 @@ export default function PayrollPage() {
                           <h3 className="font-semibold">1. Comissão</h3>
                           <HelpTip text="Os 25% do bruto formam a base do técnico. A comissão é o que sobra depois de abater salário base, VR e VA." />
                         </div>
-                        {selectedRow ? <p className="mt-1 text-xs text-muted-foreground">{selectedRow.serviceCount} OS</p> : null}
+                        {selectedRow ? (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {selectedRow.serviceCount} OS | {formatServiceFortnightCountSummary(selectedRow.serviceFortnightSummary)} | {formatServiceFortnightValueSummary(selectedRow.serviceFortnightSummary)}
+                          </p>
+                        ) : null}
                       </div>
                       <Button type="button" variant="secondary" size="sm" onClick={applyCommissionFormula} className="shrink-0">
                         <RefreshCw className="h-4 w-4" />

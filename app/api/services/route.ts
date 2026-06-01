@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
 
     if (competenceMonth) {
       params.push(competenceMonth);
-      conditions.push(`(TO_CHAR(s.date_performed::date, 'YYYY-MM') = $${params.length} OR s.competence_month = $${params.length})`);
+      conditions.push(`COALESCE(NULLIF(s.competence_month, ''), TO_CHAR(s.date_performed::date, 'YYYY-MM')) = $${params.length}`);
     }
 
     if (auth.role === 'admin' || scopedTechnicianId) {
