@@ -45,9 +45,9 @@ const initialFormData = {
   email: '',
   password: '',
   commission_percentage: 25,
-  base_salary: 2664,
+  base_salary: 2664.53,
   va_allowance: 249,
-  vr_allowance: 699.6,
+  vr_allowance: 783,
   status: 'active' as TechnicianStatus,
 };
 

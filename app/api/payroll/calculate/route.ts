@@ -50,6 +50,9 @@ export async function POST(request: NextRequest) {
       ON CONFLICT (technician_id, competence_month) DO UPDATE
       SET total_services_value = EXCLUDED.total_services_value,
           commission_value = EXCLUDED.commission_value,
+          base_salary = EXCLUDED.base_salary,
+          va_deduction = EXCLUDED.va_deduction,
+          vr_deduction = EXCLUDED.vr_deduction,
           discounts_total = EXCLUDED.discounts_total,
           advances_total = EXCLUDED.advances_total,
           extra_hours_value = EXCLUDED.extra_hours_value,

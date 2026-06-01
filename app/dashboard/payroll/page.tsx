@@ -41,11 +41,11 @@ export default function TechnicianPayrollPage() {
   }
 
   const totalDiscounts = Number(currentPayroll?.discounts_total ?? 0) + Number(currentPayroll?.advances_total ?? 0);
+  const benefitsTotal = Number(currentPayroll?.va_deduction ?? 0) + Number(currentPayroll?.vr_deduction ?? 0);
+  const payrollNetTotal = Number(currentPayroll?.net_total ?? 0) + benefitsTotal;
 
   const items = [
     { label: 'Salário base', value: currentPayroll?.base_salary ?? 0, sign: 'plus' },
-    { label: 'VA', value: currentPayroll?.va_deduction ?? 0, sign: 'plus' },
-    { label: 'VR', value: currentPayroll?.vr_deduction ?? 0, sign: 'plus' },
     { label: 'Comissão por serviços', value: currentPayroll?.commission_value ?? 0, sign: 'plus' },
     { label: 'Horas extras', value: currentPayroll?.extra_hours_value ?? 0, sign: 'plus' },
     { label: 'Premiação extraordinária', value: currentPayroll?.extraordinary_award_value ?? 0, sign: 'plus' },
@@ -58,7 +58,7 @@ export default function TechnicianPayrollPage() {
       <PageHeader eyebrow="Financeiro" title="Meu pagamento" description="Detalhamento do fechamento de folha por competência." />
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <MetricCard title="Líquido" value={formatCurrency(currentPayroll?.net_total ?? 0)} hint={currentPayroll?.competence_month ?? 'Sem competência'} icon={WalletCards} tone="success" />
+        <MetricCard title="Em conta" value={formatCurrency(currentPayroll?.net_total ?? 0)} hint={currentPayroll?.competence_month ?? 'Sem competência'} icon={WalletCards} tone="success" />
         <MetricCard title="Comissão" value={formatCurrency(currentPayroll?.commission_value ?? 0)} hint="Valor diluído no holerite" icon={WalletCards} />
         <MetricCard title="Extraordinário" value={formatCurrency(currentPayroll?.extraordinary_award_value ?? 0)} hint="Meta de 80 ou 160 OS" icon={Trophy} tone="warning" />
         <MetricCard title="Descontos" value={formatCurrency(totalDiscounts)} hint="Adiantamento + descontos" icon={WalletCards} tone="danger" />
@@ -78,8 +78,16 @@ export default function TechnicianPayrollPage() {
               </div>
             ))}
             <div className="flex items-center justify-between rounded-md bg-secondary p-3">
-              <span className="font-semibold">Total líquido</span>
+              <span className="font-semibold">Total em conta</span>
               <span className="text-lg font-semibold text-primary">{formatCurrency(currentPayroll?.net_total ?? 0)}</span>
+            </div>
+            <div className="flex items-center justify-between rounded-md bg-secondary p-3">
+              <span className="font-semibold">Cartões VA + VR</span>
+              <span className="text-lg font-semibold text-primary">{formatCurrency(benefitsTotal)}</span>
+            </div>
+            <div className="flex items-center justify-between rounded-md bg-secondary p-3">
+              <span className="font-semibold">Total com benefícios</span>
+              <span className="text-lg font-semibold text-primary">{formatCurrency(payrollNetTotal)}</span>
             </div>
           </div>
         </DataPanel>
@@ -93,8 +101,8 @@ export default function TechnicianPayrollPage() {
                   <th className="py-3 pr-4 font-medium">Produção</th>
                   <th className="py-3 pr-4 font-medium">Comissão</th>
                   <th className="py-3 pr-4 font-medium">Extraordinário</th>
-                  <th className="py-3 pr-4 font-medium">Banco</th>
-                  <th className="py-3 font-medium">Líquido</th>
+                  <th className="py-3 pr-4 font-medium">Cartões</th>
+                  <th className="py-3 font-medium">Em conta</th>
                 </tr>
               </thead>
               <tbody>
@@ -104,7 +112,7 @@ export default function TechnicianPayrollPage() {
                     <td className="py-3 pr-4">{formatCurrency(item.total_services_value)}</td>
                     <td className="py-3 pr-4">{formatCurrency(item.commission_value)}</td>
                     <td className="py-3 pr-4">{formatCurrency(item.extraordinary_award_value ?? 0)}</td>
-                    <td className="py-3 pr-4">{formatHours(item.hour_bank_balance)}</td>
+                    <td className="py-3 pr-4">{formatCurrency(Number(item.va_deduction ?? 0) + Number(item.vr_deduction ?? 0))}</td>
                     <td className="py-3 font-semibold">{formatCurrency(item.net_total)}</td>
                   </tr>
                 ))}

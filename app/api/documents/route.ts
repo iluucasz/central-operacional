@@ -11,6 +11,25 @@ export const runtime = 'nodejs';
 const uploadsDir = path.join(process.cwd(), 'public', 'uploads', 'library');
 const metadataPath = path.join(uploadsDir, 'documents.json');
 
+function normalizeDocumentAudience(value: string | null | undefined) {
+  const normalized = String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+  if (normalized.includes('admin')) return 'Administrativo';
+  if (
+    normalized.includes('individual') ||
+    normalized.includes('tecnico') ||
+    normalized.includes('colaborador') ||
+    normalized.includes('pessoal')
+  ) {
+    return 'Individual';
+  }
+
+  return 'Global';
+}
+
 function sanitizeFileName(value: string) {
   return value
     .normalize('NFD')
@@ -43,7 +62,11 @@ export async function GET(request: NextRequest) {
   }
 
   const documents = await readDocuments();
-  return NextResponse.json({ documents });
+  const visibleDocuments = auth.role === 'admin'
+    ? documents
+    : documents.filter((document) => normalizeDocumentAudience(document.audience) !== 'Administrativo');
+
+  return NextResponse.json({ documents: visibleDocuments });
 }
 
 export async function POST(request: NextRequest) {
@@ -77,7 +100,7 @@ export async function POST(request: NextRequest) {
     id,
     title: String(formData.get('title') || file.name.replace(/\.pdf$/i, '') || 'Documento'),
     category: String(formData.get('category') || 'Não classificado'),
-    audience: 'Todos',
+    audience: normalizeDocumentAudience(String(formData.get('audience') || 'Global')),
     updatedAt: new Date().toISOString().slice(0, 10),
     type: 'PDF',
     url: `/uploads/library/${fileName}`,

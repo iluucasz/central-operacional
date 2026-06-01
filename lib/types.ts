@@ -2,6 +2,7 @@ export type UserRole = 'admin' | 'technician'
 export type TechnicianStatus = 'active' | 'inactive'
 export type DiscountType = 'discount' | 'advance' | 'other'
 export type ScheduleStatus = 'scheduled' | 'completed' | 'cancelled'
+export type ServiceFortnight = 'Q1' | 'Q2'
 
 export interface User {
   id: string
@@ -33,7 +34,9 @@ export interface Service {
   service_type: string
   value: number
   date_performed: string
+  time_performed?: string
   competence_month: string
+  fortnight_period?: ServiceFortnight | null
   description?: string
   created_at: string
   technician_name?: string

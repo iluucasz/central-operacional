@@ -186,12 +186,14 @@ export default function TechnicianDashboard() {
   const competences = Array.from(new Set(scopedByYear.map((service) => service.competence_month)));
   const technicianName = user.name || fallbackTechnician.name;
   const netTotal = Number(payrollSummary?.net_total ?? 0);
+  const benefitsTotal =
+    Number(payrollSummary?.va_deduction ?? fallbackTechnician.va_allowance) +
+    Number(payrollSummary?.vr_deduction ?? fallbackTechnician.vr_allowance);
+  const payrollNetTotal = netTotal + benefitsTotal;
   const breakdown = [
     { label: 'Salário base', value: Number(payrollSummary?.base_salary ?? fallbackTechnician.base_salary), sign: 'plus' },
     { label: 'Comissão', value: Number(payrollSummary?.commission_value ?? 0), sign: 'plus' },
     { label: 'Hora extra', value: Number(payrollSummary?.extra_hours_value ?? 0), sign: 'plus' },
-    { label: 'VA', value: Number(payrollSummary?.va_deduction ?? fallbackTechnician.va_allowance), sign: 'plus' },
-    { label: 'VR', value: Number(payrollSummary?.vr_deduction ?? fallbackTechnician.vr_allowance), sign: 'plus' },
     { label: 'Adiantamento', value: Number(payrollSummary?.advances_total ?? 0), sign: 'minus' },
     { label: 'Descontos', value: Number(payrollSummary?.discounts_total ?? 0), sign: 'minus' },
   ];
@@ -209,7 +211,7 @@ export default function TechnicianDashboard() {
       </PageHeader>
 
       <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard title="Total a receber" value={formatCurrency(netTotal)} hint="Conforme fechamento da competência" icon={WalletCards} tone="success" />
+        <MetricCard title="Em conta" value={formatCurrency(netTotal)} hint="Depósito/PIX da competência" icon={WalletCards} tone="success" />
         <MetricCard title="Ordens" value={formatNumber(scopedByYear.length)} hint={`${filteredServices.length} no filtro atual`} icon={Wrench} />
         <MetricCard title="Banco de horas" value={formatHours(totalHours)} hint={hoursHint} icon={Clock3} tone={hoursTone} accentText />
         <MetricCard
@@ -271,8 +273,16 @@ export default function TechnicianDashboard() {
               </div>
             ))}
             <div className="flex items-center justify-between rounded-md bg-secondary p-5">
-              <span className="text-lg font-black">Líquido a receber</span>
+              <span className="text-lg font-black">Em conta</span>
               <span className="text-2xl font-black text-primary">{formatCurrency(netTotal)}</span>
+            </div>
+            <div className="flex items-center justify-between rounded-md bg-secondary p-5">
+              <span className="text-lg font-black">Cartões VA + VR</span>
+              <span className="text-2xl font-black text-primary">{formatCurrency(benefitsTotal)}</span>
+            </div>
+            <div className="flex items-center justify-between rounded-md bg-secondary p-5">
+              <span className="text-lg font-black">Total com benefícios</span>
+              <span className="text-2xl font-black text-primary">{formatCurrency(payrollNetTotal)}</span>
             </div>
           </div>
         </DataPanel>

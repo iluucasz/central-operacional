@@ -1,11 +1,18 @@
 import { neon } from '@neondatabase/serverless';
 
 const sql = neon(process.env.DATABASE_URL!);
-const DEFAULT_COMMISSION_PERCENTAGE = 25;
-const DEFAULT_BASE_SALARY = 2664;
+const DEFAULT_BASE_SALARY = 2664.53;
 const DEFAULT_VA_ALLOWANCE = 249;
-const DEFAULT_VR_ALLOWANCE = 699.6;
+const DEFAULT_VR_ALLOWANCE = 783;
+const DEFAULT_COMMISSION_PERCENTAGE = 25;
 let payrollSchemaReady: Promise<void> | null = null;
+
+function roundCurrency(value: number | string | null | undefined): number {
+  const numericValue = Number(value ?? 0);
+  if (!Number.isFinite(numericValue)) return 0;
+
+  return Math.round((numericValue + Number.EPSILON) * 100) / 100;
+}
 
 export interface PayrollCalculationInput {
   technicianId: string;
@@ -27,6 +34,8 @@ export interface PayrollCalculationResult {
   hour_bank_balance: number;
   net_total: number;
 }
+
+type PayrollReference = PayrollCalculationResult;
 
 export function ensurePayrollSchema() {
   if (!payrollSchemaReady) {
@@ -55,10 +64,13 @@ export async function calculateTotalServices(
     SELECT COALESCE(SUM(value), 0) as total
     FROM services
     WHERE technician_id = ${technicianId}
-    AND competence_month = ${competenceMonth}
+    AND (
+      TO_CHAR(date_performed::date, 'YYYY-MM') = ${competenceMonth}
+      OR competence_month = ${competenceMonth}
+    )
   `;
 
-  return Number(result[0]?.total || 0);
+  return roundCurrency(result[0]?.total || 0);
 }
 
 export async function calculateServiceCount(
@@ -69,7 +81,10 @@ export async function calculateServiceCount(
     SELECT COUNT(*) as total
     FROM services
     WHERE technician_id = ${technicianId}
-    AND competence_month = ${competenceMonth}
+    AND (
+      TO_CHAR(date_performed::date, 'YYYY-MM') = ${competenceMonth}
+      OR competence_month = ${competenceMonth}
+    )
   `;
 
   return Number(result[0]?.total || 0);
@@ -79,6 +94,98 @@ export function calculateExtraordinaryAward(serviceCount: number): number {
   if (serviceCount >= 160) return 600;
   if (serviceCount >= 80) return 250;
   return 0;
+}
+
+function calculateCommissionFromTotals(
+  totalServices: number,
+  commissionPercentage: number,
+): number {
+  const safeCommissionPercentage = commissionPercentage > 0 ? commissionPercentage : DEFAULT_COMMISSION_PERCENTAGE;
+
+  return roundCurrency(Math.max(0, totalServices) * (safeCommissionPercentage / 100));
+}
+
+function calculateCommissionRemainder(
+  calculationBase: number,
+  baseSalary: number,
+  vaAllowance: number,
+  vrAllowance: number,
+): number {
+  return roundCurrency(
+    Math.max(
+      0,
+      roundCurrency(calculationBase) -
+        roundCurrency(baseSalary) -
+        roundCurrency(vaAllowance) -
+        roundCurrency(vrAllowance),
+    ),
+  );
+}
+
+async function getPayrollReference(
+  technicianId: string,
+  competenceMonth: string,
+): Promise<PayrollReference | null> {
+  const result = await sql`
+    SELECT
+      technician_id,
+      competence_month,
+      total_services_value,
+      commission_value,
+      base_salary,
+      va_deduction,
+      vr_deduction,
+      discounts_total,
+      advances_total,
+      extra_hours_value,
+      extraordinary_award_value,
+      hour_bank_balance,
+      net_total
+    FROM payroll
+    WHERE technician_id = ${technicianId}
+    ORDER BY
+      CASE
+        WHEN competence_month = ${competenceMonth} THEN 0
+        ELSE 1
+      END,
+      updated_at DESC,
+      created_at DESC
+    LIMIT 1
+  `;
+
+  if (!result.length) {
+    return null;
+  }
+
+  const row = result[0] as Record<string, unknown>;
+  const toCurrency = (value: unknown) => roundCurrency(value as number | string | null | undefined);
+
+  return {
+    technician_id: String(row.technician_id ?? technicianId),
+    competence_month: String(row.competence_month ?? ''),
+    total_services_value: toCurrency(row.total_services_value),
+    commission_value: toCurrency(row.commission_value),
+    base_salary: toCurrency(row.base_salary),
+    va_deduction: toCurrency(row.va_deduction),
+    vr_deduction: toCurrency(row.vr_deduction),
+    discounts_total: toCurrency(row.discounts_total),
+    advances_total: toCurrency(row.advances_total),
+    extra_hours_value: toCurrency(row.extra_hours_value),
+    extraordinary_award_value: toCurrency(row.extraordinary_award_value),
+    hour_bank_balance: toCurrency(row.hour_bank_balance),
+    net_total: toCurrency(row.net_total),
+  };
+}
+
+function shouldUsePayrollReference(
+  totalServices: number,
+  reference: PayrollReference | null,
+): boolean {
+  if (!reference) {
+    return false;
+  }
+
+  return totalServices <= 0;
 }
 
 /**
@@ -99,18 +206,18 @@ export async function calculateCommission(
     return 0;
   }
 
-  const savedCommissionPercentage = Number(technician[0]?.commission_percentage || 0);
-  const commissionPercentage = savedCommissionPercentage > 0 ? savedCommissionPercentage : DEFAULT_COMMISSION_PERCENTAGE;
+  const commissionPercentage = Number(technician[0]?.commission_percentage || 0);
   const baseSalary = Number(technician[0]?.base_salary || 0);
   const vaAllowance = Number(technician[0]?.va_allowance || 0);
   const vrAllowance = Number(technician[0]?.vr_allowance || 0);
-  const targetCompensation = (totalServices * commissionPercentage) / 100;
-  const fixedCompensation =
-    (baseSalary > 0 ? baseSalary : DEFAULT_BASE_SALARY) +
-    (vaAllowance > 0 ? vaAllowance : DEFAULT_VA_ALLOWANCE) +
-    (vrAllowance > 0 ? vrAllowance : DEFAULT_VR_ALLOWANCE);
+  const calculationBase = calculateCommissionFromTotals(totalServices, commissionPercentage);
 
-  return Math.max(0, targetCompensation - fixedCompensation);
+  return calculateCommissionRemainder(
+    calculationBase,
+    baseSalary > 0 ? baseSalary : DEFAULT_BASE_SALARY,
+    vaAllowance > 0 ? vaAllowance : DEFAULT_VA_ALLOWANCE,
+    vrAllowance > 0 ? vrAllowance : DEFAULT_VR_ALLOWANCE,
+  );
 }
 
 /**
@@ -173,7 +280,7 @@ export async function calculateDiscounts(
 ): Promise<{ discounts_total: number; advances_total: number }> {
   const result = await sql`
     SELECT 
-      COALESCE(SUM(CASE WHEN type = 'discount' THEN amount ELSE 0 END), 0) as discounts,
+      COALESCE(SUM(CASE WHEN type IN ('discount', 'other') THEN amount ELSE 0 END), 0) as discounts,
       COALESCE(SUM(CASE WHEN type = 'advance' THEN amount ELSE 0 END), 0) as advances
     FROM discounts
     WHERE technician_id = ${technicianId}
@@ -181,8 +288,8 @@ export async function calculateDiscounts(
   `;
 
   return {
-    discounts_total: Number(result[0]?.discounts || 0),
-    advances_total: Number(result[0]?.advances || 0),
+    discounts_total: roundCurrency(result[0]?.discounts || 0),
+    advances_total: roundCurrency(result[0]?.advances || 0),
   };
 }
 
@@ -191,25 +298,27 @@ export async function calculateDiscounts(
  */
 export async function getTechnicianAllowances(
   technicianId: string
-): Promise<{ va_allowance: number; vr_allowance: number; base_salary: number }> {
+): Promise<{ va_allowance: number; vr_allowance: number; base_salary: number; commission_percentage: number }> {
   const result = await sql`
-    SELECT base_salary, va_allowance, vr_allowance
+    SELECT base_salary, va_allowance, vr_allowance, commission_percentage
     FROM technicians
     WHERE id = ${technicianId}
   `;
 
   if (!result || result.length === 0) {
-    return { va_allowance: 0, vr_allowance: 0, base_salary: 0 };
+    return { va_allowance: 0, vr_allowance: 0, base_salary: 0, commission_percentage: DEFAULT_COMMISSION_PERCENTAGE };
   }
 
   const baseSalary = Number(result[0]?.base_salary || 0);
   const vaAllowance = Number(result[0]?.va_allowance || 0);
   const vrAllowance = Number(result[0]?.vr_allowance || 0);
+  const commissionPercentage = Number(result[0]?.commission_percentage || 0);
 
   return {
-    base_salary: baseSalary > 0 ? baseSalary : DEFAULT_BASE_SALARY,
-    va_allowance: vaAllowance > 0 ? vaAllowance : DEFAULT_VA_ALLOWANCE,
-    vr_allowance: vrAllowance > 0 ? vrAllowance : DEFAULT_VR_ALLOWANCE,
+    base_salary: roundCurrency(baseSalary > 0 ? baseSalary : DEFAULT_BASE_SALARY),
+    va_allowance: roundCurrency(vaAllowance > 0 ? vaAllowance : DEFAULT_VA_ALLOWANCE),
+    vr_allowance: roundCurrency(vrAllowance > 0 ? vrAllowance : DEFAULT_VR_ALLOWANCE),
+    commission_percentage: roundCurrency(commissionPercentage > 0 ? commissionPercentage : DEFAULT_COMMISSION_PERCENTAGE),
   };
 }
 
@@ -226,7 +335,7 @@ export async function calculateExtraHoursValue(
   const hourlyRate = baseSalary / HOURS_PER_MONTH;
   const OVERTIME_MULTIPLIER = 1.5;
 
-  return extraHours * hourlyRate * OVERTIME_MULTIPLIER;
+  return roundCurrency(extraHours * hourlyRate * OVERTIME_MULTIPLIER);
 }
 
 /**
@@ -239,11 +348,22 @@ export async function calculatePayroll(
 
   // Get base info
   const allowances = await getTechnicianAllowances(technicianId);
+  const payrollReference = await getPayrollReference(technicianId, competenceMonth);
 
   // Calculate services and commission
-  const totalServices = await calculateTotalServices(technicianId, competenceMonth);
+  const calculatedTotalServices = await calculateTotalServices(technicianId, competenceMonth);
   const serviceCount = await calculateServiceCount(technicianId, competenceMonth);
-  const commission = await calculateCommission(technicianId, competenceMonth, totalServices);
+  const usePayrollReference = shouldUsePayrollReference(calculatedTotalServices, payrollReference);
+  const totalServices = usePayrollReference
+    ? roundCurrency(payrollReference?.total_services_value)
+    : roundCurrency(calculatedTotalServices);
+  const calculationBase = calculateCommissionFromTotals(totalServices, allowances.commission_percentage);
+  const commission = calculateCommissionRemainder(
+    calculationBase,
+    allowances.base_salary,
+    allowances.va_allowance,
+    allowances.vr_allowance,
+  );
   const extraordinaryAward = calculateExtraordinaryAward(serviceCount);
 
   // Calculate hours
@@ -252,35 +372,43 @@ export async function calculatePayroll(
   const extraHoursValue = await calculateExtraHoursValue(extra_hours, allowances.base_salary);
 
   // Calculate discounts
-  const { discounts_total, advances_total } = await calculateDiscounts(technicianId, competenceMonth);
+  const calculatedDiscounts = await calculateDiscounts(technicianId, competenceMonth);
+  const discounts_total =
+    usePayrollReference && calculatedDiscounts.discounts_total === 0
+      ? roundCurrency(payrollReference?.discounts_total)
+      : roundCurrency(calculatedDiscounts.discounts_total);
+  const advances_total =
+    usePayrollReference && calculatedDiscounts.advances_total === 0
+      ? roundCurrency(payrollReference?.advances_total)
+      : roundCurrency(calculatedDiscounts.advances_total);
 
   // Calculate net total
-  const grossTotal =
+  const grossCashTotal = roundCurrency(
     allowances.base_salary +
-    allowances.va_allowance +
-    allowances.vr_allowance +
     commission +
     extraHoursValue +
-    extraordinaryAward;
+    extraordinaryAward,
+  );
 
-  const netTotal =
-    grossTotal -
+  const netTotal = roundCurrency(
+    grossCashTotal -
     discounts_total -
-    advances_total;
+    advances_total,
+  );
 
   return {
     technician_id: technicianId,
     competence_month: competenceMonth,
-    total_services_value: totalServices,
-    commission_value: commission,
-    base_salary: allowances.base_salary,
-    va_deduction: allowances.va_allowance,
-    vr_deduction: allowances.vr_allowance,
+    total_services_value: roundCurrency(totalServices),
+    commission_value: roundCurrency(commission),
+    base_salary: roundCurrency(allowances.base_salary),
+    va_deduction: roundCurrency(allowances.va_allowance),
+    vr_deduction: roundCurrency(allowances.vr_allowance),
     discounts_total,
     advances_total,
-    extra_hours_value: extraHoursValue,
-    extraordinary_award_value: extraordinaryAward,
-    hour_bank_balance: bank_balance,
-    net_total: netTotal,
+    extra_hours_value: roundCurrency(extraHoursValue),
+    extraordinary_award_value: roundCurrency(extraordinaryAward),
+    hour_bank_balance: roundCurrency(bank_balance),
+    net_total: roundCurrency(netTotal),
   };
 }

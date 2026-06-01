@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CalendarDays, CheckCircle2, Clock3, FileSpreadsheet, Users, WalletCards, Wrench } from 'lucide-react';
+import { AlertTriangle, CalendarDays, CheckCircle2, Clock3, Users, WalletCards, Wrench } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { LoadingState } from '@/components/loading-state';
@@ -9,13 +9,25 @@ import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { demoPayroll, demoSchedule, demoServices, demoTechnicians, demoWorkHours } from '@/lib/demo-data';
-import { formatCurrency, formatHours, formatNumber } from '@/lib/formatters';
+import { formatCurrency, formatDate, formatHours, formatNumber, formatTimeRange } from '@/lib/formatters';
 import type { Payroll, Schedule, Service, Technician, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
-const DEFAULT_BASE_SALARY = 2664;
+const DEFAULT_BASE_SALARY = 2664.53;
 const DEFAULT_VA_ALLOWANCE = 249;
-const DEFAULT_VR_ALLOWANCE = 699.6;
+const DEFAULT_VR_ALLOWANCE = 783;
+
+function getDateKey(value: string | Date | null | undefined) {
+  if (!value) return '';
+
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return date.toISOString().slice(0, 10);
+}
 
 export default function AdminDashboard() {
   const { user, loading } = useAppSession();
@@ -81,16 +93,45 @@ export default function AdminDashboard() {
         (Number(technician.base_salary) > 0 ? Number(technician.base_salary) : DEFAULT_BASE_SALARY) +
         (Number(technician.va_allowance) > 0 ? Number(technician.va_allowance) : DEFAULT_VA_ALLOWANCE) +
         (Number(technician.vr_allowance) > 0 ? Number(technician.vr_allowance) : DEFAULT_VR_ALLOWANCE);
-      const commissionPercentage = Number(technician.commission_percentage) > 0 ? Number(technician.commission_percentage) : 25;
 
       return {
         technician,
         services: technicianServices.length,
         totalValue,
-        commission: Math.max(0, (totalValue * commissionPercentage) / 100 - fixedCompensation),
+        commission: Math.max(0, totalValue - fixedCompensation),
       };
     });
   }, [visibleServices, visibleTechnicians]);
+
+  const { referenceScheduleDate, techniciansWorkingToday } = useMemo(() => {
+    const todayKey = getDateKey(new Date());
+    const availableDates = visibleSchedule.map((item) => getDateKey(item.date)).filter(Boolean).sort();
+    const latestDate = availableDates.at(-1) ?? '';
+    const activeDate = availableDates.includes(todayKey) ? todayKey : latestDate;
+    const techniciansByDay = new Map<string, Schedule>();
+
+    visibleSchedule
+      .filter((item) => getDateKey(item.date) === activeDate && item.status !== 'cancelled')
+      .sort((left, right) => {
+        const timeComparison = (left.start_time ?? '').localeCompare(right.start_time ?? '');
+
+        if (timeComparison !== 0) {
+          return timeComparison;
+        }
+
+        return (left.technician_name ?? '').localeCompare(right.technician_name ?? '');
+      })
+      .forEach((item) => {
+        if (!techniciansByDay.has(item.technician_id)) {
+          techniciansByDay.set(item.technician_id, item);
+        }
+      });
+
+    return {
+      referenceScheduleDate: activeDate,
+      techniciansWorkingToday: Array.from(techniciansByDay.values()),
+    };
+  }, [visibleSchedule]);
 
   if (loading || !user) {
     return <LoadingState />;
@@ -162,8 +203,8 @@ export default function AdminDashboard() {
           <div className="space-y-3">
             {[
               {
-                icon: FileSpreadsheet,
-                title: 'Importação validada',
+                icon: Wrench,
+                title: 'OS validadas',
                 description: `${visibleServices.length} OS prontas para conciliação`,
                 tone: 'success' as const,
               },
@@ -207,33 +248,26 @@ export default function AdminDashboard() {
         </DataPanel>
       </div>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-3">
-        <DataPanel title="Fluxo recomendado" description="Ordem operacional para substituir as planilhas.">
-          <ol className="space-y-3 text-sm">
-            {['Importar planilhas da seguradora', 'Validar OS duplicadas e técnicos', 'Conferir horas realizadas', 'Fechar folha por competência'].map((step, index) => (
-              <li key={step} className="flex gap-3">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary text-xs font-semibold text-primary-foreground">
-                  {index + 1}
-                </span>
-                <span>{step}</span>
-              </li>
-            ))}
-          </ol>
-        </DataPanel>
-
-        <DataPanel title="Alertas de escala" description="Planejado versus disponibilidade.">
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <DataPanel
+          title="Técnicos trabalhando no dia"
+          description={referenceScheduleDate ? `Escala ativa em ${formatDate(referenceScheduleDate)}.` : 'Sem escala cadastrada para exibir.'}
+        >
           <div className="space-y-3 text-sm">
-            {visibleSchedule.slice(0, 5).map((item) => (
-              <div key={item.id} className="flex items-center justify-between gap-3 border-b border-border pb-3 last:border-0 last:pb-0">
-                <div>
+            {techniciansWorkingToday.length ? (
+              techniciansWorkingToday.map((item) => (
+                <div key={`${item.technician_id}-${referenceScheduleDate}`} className="border-b border-border pb-3 last:border-0 last:pb-0">
                   <p className="font-medium">{item.technician_name || 'Técnico'}</p>
-                  <p className="text-xs text-muted-foreground">{item.notes || 'Sem observação'}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {item.start_time ? formatTimeRange(item.start_time, item.end_time) : 'Horário não informado'}
+                  </p>
                 </div>
-                <StatusBadge tone={item.status === 'scheduled' ? 'info' : item.status === 'completed' ? 'success' : 'warning'}>
-                  {item.status === 'cancelled' ? 'Folga' : item.status === 'completed' ? 'Concluído' : 'Escalado'}
-                </StatusBadge>
-              </div>
-            ))}
+              ))
+            ) : (
+              <p className="rounded-md border border-dashed border-border px-3 py-4 text-muted-foreground">
+                Nenhum técnico em atividade no dia.
+              </p>
+            )}
           </div>
         </DataPanel>
 

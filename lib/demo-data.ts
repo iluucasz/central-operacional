@@ -10,7 +10,7 @@ export const demoTechnicians: Technician[] = [
     commission_percentage: 25,
     base_salary: 2664.53,
     va_allowance: 249,
-    vr_allowance: 699.6,
+    vr_allowance: 783,
     status: 'active',
     created_at: '2026-04-01T08:00:00.000Z',
     updated_at: '2026-04-01T08:00:00.000Z',
@@ -24,7 +24,7 @@ export const demoTechnicians: Technician[] = [
     commission_percentage: 25,
     base_salary: 2520,
     va_allowance: 249,
-    vr_allowance: 699.6,
+    vr_allowance: 783,
     status: 'active',
     created_at: '2026-04-01T08:00:00.000Z',
     updated_at: '2026-04-01T08:00:00.000Z',
@@ -38,7 +38,7 @@ export const demoTechnicians: Technician[] = [
     commission_percentage: 25,
     base_salary: 2580,
     va_allowance: 249,
-    vr_allowance: 699.6,
+    vr_allowance: 783,
     status: 'active',
     created_at: '2026-04-01T08:00:00.000Z',
     updated_at: '2026-04-01T08:00:00.000Z',
@@ -52,7 +52,7 @@ export const demoTechnicians: Technician[] = [
     commission_percentage: 25,
     base_salary: 2400,
     va_allowance: 249,
-    vr_allowance: 699.6,
+    vr_allowance: 783,
     status: 'active',
     created_at: '2026-04-01T08:00:00.000Z',
     updated_at: '2026-04-01T08:00:00.000Z',
@@ -66,7 +66,7 @@ export const demoTechnicians: Technician[] = [
     commission_percentage: 25,
     base_salary: 2480,
     va_allowance: 249,
-    vr_allowance: 699.6,
+    vr_allowance: 783,
     status: 'active',
     created_at: '2026-04-01T08:00:00.000Z',
     updated_at: '2026-04-01T08:00:00.000Z',
@@ -80,7 +80,7 @@ export const demoTechnicians: Technician[] = [
     commission_percentage: 25,
     base_salary: 2300,
     va_allowance: 249,
-    vr_allowance: 699.6,
+    vr_allowance: 783,
     status: 'inactive',
     created_at: '2026-04-01T08:00:00.000Z',
     updated_at: '2026-04-01T08:00:00.000Z',
@@ -183,17 +183,14 @@ function calculateDemoExtraordinaryAward(serviceCount: number) {
 export const demoPayroll: Payroll[] = demoTechnicians.map((technician) => {
   const services = demoServices.filter((service) => service.technician_id === technician.id);
   const totalServicesValue = services.reduce((total, service) => total + Number(service.value), 0);
-  const targetCompensation = (totalServicesValue * Number(technician.commission_percentage)) / 100;
   const fixedCompensation = Number(technician.base_salary) + Number(technician.va_allowance) + Number(technician.vr_allowance);
-  const commission = Math.max(0, targetCompensation - fixedCompensation);
+  const commission = Math.max(0, totalServicesValue - fixedCompensation);
   const extraordinaryAward = calculateDemoExtraordinaryAward(services.length);
   const advance = technician.id === 'tech-leonilson' ? 1100 : 700;
   const discounts = technician.id === 'tech-leonilson' ? 250 : 120;
   const extraHours = technician.id === 'tech-fabio' ? 310 : technician.id === 'tech-leonilson' ? 0 : 180;
   const netTotal =
     Number(technician.base_salary) +
-    Number(technician.va_allowance) +
-    Number(technician.vr_allowance) +
     commission +
     extraordinaryAward +
     extraHours -
@@ -226,24 +223,63 @@ export const demoDocuments: LibraryDocument[] = [
     id: 'doc-cobertura',
     title: 'Coberturas por seguradora',
     category: 'Cobertura',
-    audience: 'Todos',
-    updatedAt: '2026-05-12',
+    audience: 'Global',
+    updatedAt: '2026-05-28',
     type: 'PDF',
+    uploadedBy: 'operacao@empresa.local',
   },
   {
     id: 'doc-procedimento',
     title: 'Procedimento de atendimento residencial',
     category: 'Operação',
-    audience: 'Todos',
-    updatedAt: '2026-05-10',
+    audience: 'Global',
+    updatedAt: '2026-05-27',
     type: 'PDF',
+    uploadedBy: 'supervisao@empresa.local',
   },
   {
     id: 'doc-politica-horas',
     title: 'Política de banco de horas',
     category: 'RH',
-    audience: 'Todos',
-    updatedAt: '2026-05-05',
+    audience: 'Global',
+    updatedAt: '2026-05-24',
     type: 'PDF',
+    uploadedBy: 'rh@empresa.local',
+  },
+  {
+    id: 'doc-fechamento-admin',
+    title: 'Roteiro de fechamento financeiro mensal',
+    category: 'Financeiro',
+    audience: 'Administrativo',
+    updatedAt: '2026-05-30',
+    type: 'PDF',
+    uploadedBy: 'financeiro@empresa.local',
+  },
+  {
+    id: 'doc-auditoria-admin',
+    title: 'Checklist de auditoria interna e conformidade',
+    category: 'Compliance',
+    audience: 'Administrativo',
+    updatedAt: '2026-05-22',
+    type: 'PDF',
+    uploadedBy: 'diretoria@empresa.local',
+  },
+  {
+    id: 'doc-kit-individual',
+    title: 'Kit individual de onboarding operacional',
+    category: 'Treinamento',
+    audience: 'Individual',
+    updatedAt: '2026-05-26',
+    type: 'PDF',
+    uploadedBy: 'treinamento@empresa.local',
+  },
+  {
+    id: 'doc-termo-individual',
+    title: 'Termo individual de responsabilidade por equipamentos',
+    category: 'RH',
+    audience: 'Individual',
+    updatedAt: '2026-05-20',
+    type: 'PDF',
+    uploadedBy: 'rh@empresa.local',
   },
 ];

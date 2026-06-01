@@ -19,11 +19,18 @@ const payrollNumericFields = [
   'net_total',
 ] as const;
 
+function roundCurrency(value: number | string | null | undefined) {
+  const numericValue = Number(value ?? 0);
+  if (!Number.isFinite(numericValue)) return 0;
+
+  return Math.round((numericValue + Number.EPSILON) * 100) / 100;
+}
+
 function normalizePayrollRow<T extends Record<string, unknown>>(row: T) {
   return payrollNumericFields.reduce(
     (normalized, field) => ({
       ...normalized,
-      [field]: Number(row[field] ?? 0),
+      [field]: roundCurrency(row[field] as number | string | null | undefined),
     }),
     { ...row },
   );
@@ -106,6 +113,20 @@ export async function POST(request: NextRequest) {
 
     await ensurePayrollSchema();
 
+    const values = {
+      total_services_value: roundCurrency(total_services_value),
+      commission_value: roundCurrency(commission_value),
+      base_salary: roundCurrency(base_salary),
+      va_deduction: roundCurrency(va_deduction),
+      vr_deduction: roundCurrency(vr_deduction),
+      discounts_total: roundCurrency(discounts_total),
+      advances_total: roundCurrency(advances_total),
+      extra_hours_value: roundCurrency(extra_hours_value),
+      extraordinary_award_value: roundCurrency(extraordinary_award_value),
+      hour_bank_balance: roundCurrency(hour_bank_balance),
+      net_total: roundCurrency(net_total),
+    };
+
     const result = await sql`
       INSERT INTO payroll (
         technician_id, competence_month, total_services_value, commission_value,
@@ -113,9 +134,9 @@ export async function POST(request: NextRequest) {
         advances_total, extra_hours_value, extraordinary_award_value, hour_bank_balance, net_total
       )
       VALUES (
-        ${technician_id}, ${competence_month}, ${total_services_value}, ${commission_value},
-        ${base_salary}, ${va_deduction}, ${vr_deduction}, ${discounts_total},
-        ${advances_total}, ${extra_hours_value}, ${extraordinary_award_value}, ${hour_bank_balance}, ${net_total}
+        ${technician_id}, ${competence_month}, ${values.total_services_value}, ${values.commission_value},
+        ${values.base_salary}, ${values.va_deduction}, ${values.vr_deduction}, ${values.discounts_total},
+        ${values.advances_total}, ${values.extra_hours_value}, ${values.extraordinary_award_value}, ${values.hour_bank_balance}, ${values.net_total}
       )
       ON CONFLICT (technician_id, competence_month) DO UPDATE
       SET total_services_value = EXCLUDED.total_services_value,

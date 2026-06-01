@@ -7,7 +7,6 @@ import {
   BookOpen,
   CalendarDays,
   Clock3,
-  FileSpreadsheet,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -34,7 +33,6 @@ interface AppShellProps {
 
 const adminLinks: NavItem[] = [
   { href: '/admin', label: 'Operação', icon: LayoutDashboard },
-  { href: '/admin/import', label: 'Importação', icon: FileSpreadsheet },
   { href: '/admin/technicians', label: 'Técnicos', icon: Users },
   { href: '/admin/services', label: 'Serviços', icon: Wrench },
   { href: '/admin/schedule', label: 'Escala', icon: CalendarDays },

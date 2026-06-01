@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
       )
       VALUES (
         ${createdUserId}, ${qra || null}, ${name}, ${email}, ${Number(commission_percentage) > 0 ? commission_percentage : 25}, 
-        ${Number(base_salary) > 0 ? base_salary : 2664}, ${Number(va_allowance) > 0 ? va_allowance : 249}, ${Number(vr_allowance) > 0 ? vr_allowance : 699.6}
+        ${Number(base_salary) > 0 ? base_salary : 2664.53}, ${Number(va_allowance) > 0 ? va_allowance : 249}, ${Number(vr_allowance) > 0 ? vr_allowance : 783}
       )
       RETURNING *
     `;
@@ -232,9 +232,9 @@ export async function PATCH(request: NextRequest) {
         name = ${name},
         email = ${email},
         commission_percentage = ${Number(commission_percentage) > 0 ? commission_percentage : 25},
-        base_salary = ${Number(base_salary) > 0 ? base_salary : 2664},
+        base_salary = ${Number(base_salary) > 0 ? base_salary : 2664.53},
         va_allowance = ${Number(va_allowance) > 0 ? va_allowance : 249},
-        vr_allowance = ${Number(vr_allowance) > 0 ? vr_allowance : 699.6},
+        vr_allowance = ${Number(vr_allowance) > 0 ? vr_allowance : 783},
         status = ${status === 'inactive' ? 'inactive' : 'active'},
         updated_at = NOW()
       WHERE id = ${technicianId}
