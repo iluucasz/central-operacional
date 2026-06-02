@@ -2,7 +2,7 @@
 
 import { type ChangeEvent, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { AlertTriangle, CheckCircle2, CircleHelp, Download, FileSpreadsheet, Plus, Search, UploadCloud, Users, Wrench } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleHelp, Download, FileSpreadsheet, MoreHorizontal, PencilLine, Plus, Search, Trash2, UploadCloud, Users, Wrench } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { LoadingState } from '@/components/loading-state';
@@ -18,16 +18,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { formatCurrency, formatDate, formatTime, monthKeyFromDate, normalizeText, parseMoney, yearFromCompetence } from '@/lib/formatters';
+import { formatCurrency, formatDate, formatTime, normalizeText, parseMoney, resolveCompetenceMonth, yearFromCompetence } from '@/lib/formatters';
 import type { Service, ServiceFortnight, Technician } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
 const serviceImportTemplateUrl = '/planilhas/list_os.xlsx';
 const serviceFortnightOptions: ServiceFortnight[] = ['Q1', 'Q2'];
 const importStageOrder = ['prepare', 'upload', 'process', 'finalize'] as const;
+const defaultCompetenceMonth = new Date().toISOString().slice(0, 7);
 
 type ImportStageKey = (typeof importStageOrder)[number];
 
@@ -91,7 +98,8 @@ const initialFormData = {
   value: 0,
   date_performed: new Date().toISOString().split('T')[0],
   time_performed: new Date().toTimeString().slice(0, 5),
-  competence_month: new Date().toISOString().slice(0, 7),
+  competence_month: defaultCompetenceMonth,
+  fortnight_period: '' as '' | ServiceFortnight,
   description: '',
 };
 
@@ -102,13 +110,7 @@ function createInitialFormData(): ServiceFormData {
 }
 
 function getServiceCompetenceMonth(service: Pick<Service, 'competence_month' | 'date_performed'>) {
-  const savedCompetence = String(service.competence_month ?? '').trim();
-  if (/^\d{4}-\d{2}$/.test(savedCompetence)) return savedCompetence;
-
-  const dateMonth = monthKeyFromDate(service.date_performed);
-  if (dateMonth) return dateMonth;
-
-  return savedCompetence || yearFromCompetence(service.date_performed);
+  return resolveCompetenceMonth(service.competence_month, service.date_performed) || yearFromCompetence(service.date_performed);
 }
 
 function formatCompetenceLabel(value: string) {
@@ -298,12 +300,14 @@ export default function AdminServicesPage() {
   const [query, setQuery] = useState('');
   const [technicianFilter, setTechnicianFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
-  const [competenceFilter, setCompetenceFilter] = useState('all');
+  const [competenceFilter, setCompetenceFilter] = useState(defaultCompetenceMonth);
   const [fortnightFilter, setFortnightFilter] = useState<'all' | ServiceFortnight>('all');
   const [isFormDialogOpen, setIsFormDialogOpen] = useState(false);
   const [formData, setFormData] = useState<ServiceFormData>(createInitialFormData);
+  const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [importRows, setImportRows] = useState<ParsedServiceImportRow[]>([]);
   const [importFileName, setImportFileName] = useState('');
@@ -400,7 +404,7 @@ export default function AdminServicesPage() {
   }, [servicesWithDetails]);
 
   const availableCompetences = useMemo(() => {
-    return Array.from(new Set(servicesWithDetails.map((service) => getServiceCompetenceMonth(service)))).sort((left, right) =>
+    return Array.from(new Set([defaultCompetenceMonth, ...servicesWithDetails.map((service) => getServiceCompetenceMonth(service))])).sort((left, right) =>
       right.localeCompare(left, 'pt-BR'),
     );
   }, [servicesWithDetails]);
@@ -436,6 +440,7 @@ export default function AdminServicesPage() {
 
   function resetForm() {
     setFormData(createInitialFormData());
+    setEditingServiceId(null);
     setFormError('');
   }
 
@@ -586,10 +591,13 @@ export default function AdminServicesPage() {
     setFormError('');
     setIsSubmitting(true);
 
+    const currentEditingServiceId = editingServiceId;
+    const method = currentEditingServiceId ? 'PUT' : 'POST';
+
     const response = await fetch('/api/services', {
-      method: 'POST',
+      method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formData),
+      body: JSON.stringify(currentEditingServiceId ? { id: currentEditingServiceId, ...formData } : formData),
     });
 
     if (!response.ok) {
@@ -599,18 +607,76 @@ export default function AdminServicesPage() {
       return;
     }
 
-    const created = (await response.json()) as Service;
+    const saved = (await response.json()) as Service;
     const selectedTechnician = sortedTechnicians.find((technician) => technician.id === formData.technician_id);
+    const hydratedService = {
+      ...saved,
+      technician_name: saved.technician_name || selectedTechnician?.name || formData.technician_id,
+    };
 
-    setServices((current) => [
-      {
-        ...created,
-        technician_name: created.technician_name || selectedTechnician?.name || formData.technician_id,
-      },
-      ...current,
-    ]);
+    setServices((current) => {
+      if (currentEditingServiceId) {
+        return current.map((service) => (service.id === currentEditingServiceId ? hydratedService : service));
+      }
+
+      return [hydratedService, ...current];
+    });
     handleFormDialogChange(false);
     setIsSubmitting(false);
+  }
+
+  function openCreateDialog() {
+    resetForm();
+    setIsFormDialogOpen(true);
+  }
+
+  function openEditDialog(service: Service) {
+    setEditingServiceId(service.id);
+    setFormError('');
+    setFormData({
+      order_code: service.order_code,
+      technician_id: service.technician_id,
+      service_type: service.service_type,
+      value: Number(service.value ?? 0),
+      date_performed: String(service.date_performed ?? '').slice(0, 10),
+      time_performed: String(service.time_performed ?? '').slice(0, 5),
+      competence_month: getServiceCompetenceMonth(service),
+      fortnight_period: service.fortnight_period || '',
+      description: service.description || '',
+    });
+    setIsFormDialogOpen(true);
+  }
+
+  async function handleDeleteService(service: Service) {
+    if (typeof window !== 'undefined' && !window.confirm(`Excluir a OS ${service.order_code}?`)) {
+      return;
+    }
+
+    setDeletingServiceId(service.id);
+    setDataError('');
+
+    try {
+      const response = await fetch(`/api/services?id=${service.id}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        setDataError(data?.error || 'Nao foi possivel excluir a OS.');
+        return;
+      }
+
+      setServices((current) => current.filter((item) => item.id !== service.id));
+
+      if (editingServiceId === service.id) {
+        handleFormDialogChange(false);
+      }
+    } catch (error) {
+      console.error('[admin/services] delete service error:', error);
+      setDataError('Nao foi possivel excluir a OS.');
+    } finally {
+      setDeletingServiceId(null);
+    }
   }
 
   if (loading || !user || isDataLoading) {
@@ -663,7 +729,7 @@ export default function AdminServicesPage() {
             <UploadCloud className="h-4 w-4" />
             Importar
           </Button>
-          <Button type="button" onClick={() => setIsFormDialogOpen(true)}>
+          <Button type="button" onClick={openCreateDialog}>
             <Plus className="h-4 w-4" />
             Cadastrar OS
           </Button>
@@ -981,9 +1047,9 @@ export default function AdminServicesPage() {
         <DialogContent className="max-h-[88vh] overflow-hidden p-0 sm:max-w-4xl">
           <div className="flex max-h-[88vh] min-h-0 flex-col">
             <DialogHeader className="border-b border-border/70 px-6 py-5 sm:px-7">
-              <DialogTitle className="text-xl">Cadastrar OS</DialogTitle>
+              <DialogTitle className="text-xl">{editingServiceId ? 'Editar OS' : 'Cadastrar OS'}</DialogTitle>
               <DialogDescription className="max-w-2xl text-sm leading-6 text-muted-foreground">
-                Use importação para cargas grandes e este formulário para ajustes pontuais.
+                {editingServiceId ? 'Ajuste os dados da OS selecionada e salve as alterações.' : 'Use importação para cargas grandes e este formulário para ajustes pontuais.'}
               </DialogDescription>
             </DialogHeader>
 
@@ -1079,6 +1145,22 @@ export default function AdminServicesPage() {
                     </label>
 
                     <label className="text-sm">
+                      <span className="mb-1.5 block font-medium">Quinzena</span>
+                      <select
+                        value={formData.fortnight_period}
+                        onChange={(event) => setFormData((current) => ({ ...current, fortnight_period: event.target.value as '' | ServiceFortnight }))}
+                        className={inputClassName}
+                      >
+                        <option value="">Sem quinzena</option>
+                        {serviceFortnightOptions.map((fortnight) => (
+                          <option key={fortnight} value={fortnight}>
+                            {fortnight}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="text-sm">
                       <span className="mb-1.5 block font-medium">Hora</span>
                       <input
                         type="time"
@@ -1107,7 +1189,7 @@ export default function AdminServicesPage() {
                 Cancelar
               </Button>
               <Button type="submit" form="service-form" disabled={isSubmitting} className="min-w-36">
-                {isSubmitting ? 'Salvando...' : 'Salvar OS'}
+                {isSubmitting ? 'Salvando...' : editingServiceId ? 'Salvar alterações' : 'Salvar OS'}
               </Button>
             </DialogFooter>
           </div>
@@ -1185,7 +1267,7 @@ export default function AdminServicesPage() {
                 setQuery('');
                 setTechnicianFilter('all');
                 setTypeFilter('all');
-                setCompetenceFilter('all');
+                setCompetenceFilter(defaultCompetenceMonth);
                 setFortnightFilter('all');
               }}
             >
@@ -1212,7 +1294,8 @@ export default function AdminServicesPage() {
                     <th className="py-3 pr-4 font-medium">Competência</th>
                     <th className="py-3 pr-4 font-medium">Quinzena</th>
                     <th className="py-3 pr-4 font-medium">Data</th>
-                    <th className="py-3 font-medium">Hora</th>
+                    <th className="py-3 pr-4 font-medium">Hora</th>
+                    <th className="py-3 font-medium">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1227,7 +1310,30 @@ export default function AdminServicesPage() {
                       </td>
                       <td className="py-3 pr-4">{service.fortnight_period ? <StatusBadge tone="neutral">{service.fortnight_period}</StatusBadge> : '-'}</td>
                       <td className="py-3 pr-4 text-muted-foreground">{formatDate(service.date_performed)}</td>
-                      <td className="py-3 text-muted-foreground">{service.time_performed ? formatTime(service.time_performed) : '-'}</td>
+                      <td className="py-3 pr-4 text-muted-foreground">{service.time_performed ? formatTime(service.time_performed) : '-'}</td>
+                      <td className="py-3 text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button type="button" variant="ghost" size="icon-sm" aria-label={`Ações para a OS ${service.order_code}`}>
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onSelect={() => openEditDialog(service)}>
+                              <PencilLine className="h-4 w-4" />
+                              Editar
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onSelect={() => handleDeleteService(service)}
+                              disabled={deletingServiceId === service.id}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              {deletingServiceId === service.id ? 'Excluindo...' : 'Excluir'}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

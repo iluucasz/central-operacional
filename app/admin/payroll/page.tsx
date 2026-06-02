@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Calculator, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, CreditCard, Eye, RefreshCw, Save, Search, WalletCards } from 'lucide-react';
+import { AlertCircle, Calculator, CheckCircle2, CreditCard, FileText, RefreshCw, Search, WalletCards } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { LoadingState } from '@/components/loading-state';
@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { formatCurrency, monthKeyFromDate, normalizeText } from '@/lib/formatters';
+import { formatCurrency, normalizeText, resolveCompetenceMonth } from '@/lib/formatters';
 import type { Discount, Payroll, Service, ServiceFortnight, Technician } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
@@ -112,6 +112,15 @@ function roundMoney(value: number | string | null | undefined) {
   return Math.round((numericValue + Number.EPSILON) * 100) / 100;
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function formatMoneyInputValue(value: number) {
   return String(roundMoney(value));
 }
@@ -142,28 +151,8 @@ function formatCompetenceLabel(value: string) {
   return `${month.padStart(2, '0')}/${year} - ${monthNames[monthNumber - 1]}`;
 }
 
-function shiftCompetenceMonth(value: string, monthOffset: number) {
-  const [year, month] = value.split('-').map(Number);
-
-  if (!year || !month) {
-    return value;
-  }
-
-  const shifted = new Date(Date.UTC(year, month - 1 + monthOffset, 1));
-  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
 function getServiceCompetence(service: Service) {
-  const savedCompetence = String(service.competence_month ?? '').trim();
-  if (/^\d{4}-\d{2}$/.test(savedCompetence)) return savedCompetence;
-
-  const datePrefix = String(service.date_performed ?? '').match(/^(\d{4}-\d{2})/);
-  if (datePrefix?.[1]) return datePrefix[1];
-
-  const dateMonth = monthKeyFromDate(service.date_performed);
-  if (dateMonth) return dateMonth;
-
-  return '';
+  return resolveCompetenceMonth(service.competence_month, service.date_performed);
 }
 
 function createServiceFortnightBucket(): ServiceFortnightBucket {
@@ -432,6 +421,19 @@ export default function PayrollPage() {
   const [draftError, setDraftError] = useState('');
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const selectedCompetenceYear = Number(competenceMonth.slice(0, 4)) || new Date().getFullYear();
+  const selectedCompetenceMonth = Number(competenceMonth.slice(5, 7)) || new Date().getMonth() + 1;
+  const competenceYearOptions = useMemo(
+    () => Array.from(new Set([
+      selectedCompetenceYear,
+      new Date().getFullYear() - 2,
+      new Date().getFullYear() - 1,
+      new Date().getFullYear(),
+      new Date().getFullYear() + 1,
+      new Date().getFullYear() + 2,
+    ])).sort((left, right) => left - right),
+    [selectedCompetenceYear],
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -589,6 +591,8 @@ export default function PayrollPage() {
   const totalServicesValue = rowsWithMonthlyActivity.reduce((total, row) => total + row.totalServicesValue, 0);
   const totalProfit = rowsWithMonthlyObligation.reduce((total, row) => total + row.profitValue, 0);
   const closedCount = rowsWithMonthlyObligation.filter((row) => row.payrollItem).length;
+  const pendingClosureCount = rowsWithMonthlyObligation.length - closedCount;
+  const isPayrollAwaitingClosure = rowsWithMonthlyObligation.length > 0 && pendingClosureCount > 0;
 
   function resetDialogState() {
     setSelectedRow(null);
@@ -637,11 +641,103 @@ export default function PayrollPage() {
   }
 
   async function openPayrollDialog(row: PayrollRow) {
+    if (row.payrollItem || !row.hasMonthlyObligation) {
+      return;
+    }
+
     setSelectedRow(row);
     setIsPayrollDialogOpen(true);
     setDraftError('');
-    setPayrollDraft(row.payrollItem ? normalizeDraft(row.payrollItem) : null);
+    setPayrollDraft(null);
     await loadPreview(row);
+  }
+
+  function openPayrollPdf(row: PayrollRow) {
+    if (!row.payrollItem || typeof window === 'undefined') {
+      return;
+    }
+
+    const payrollItem = row.payrollItem;
+    const payrollTotal = roundMoney(payrollItem.net_total + payrollItem.va_deduction + payrollItem.vr_deduction);
+    const updatedAt = payrollItem.updated_at ? new Date(payrollItem.updated_at).toLocaleString('pt-BR') : '-';
+    const printWindow = window.open('', '_blank', 'width=960,height=1200');
+
+    if (!printWindow) {
+      return;
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html lang="pt-BR">
+        <head>
+          <meta charset="utf-8" />
+          <title>Folha - ${escapeHtml(row.technician.name)} - ${escapeHtml(formatCompetenceLabel(competenceMonth))}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 32px; color: #0f172a; }
+            h1, p { margin: 0; }
+            .header { margin-bottom: 24px; }
+            .eyebrow { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #64748b; margin-bottom: 8px; }
+            .title { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+            .subtitle { font-size: 14px; color: #475569; line-height: 1.5; }
+            .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }
+            .card { border: 1px solid #cbd5e1; border-radius: 12px; padding: 14px; }
+            .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin-bottom: 6px; }
+            .value { font-size: 20px; font-weight: 700; }
+            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+            th, td { text-align: left; padding: 10px 0; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+            th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; }
+            .footer { margin-top: 24px; font-size: 12px; color: #64748b; }
+            @media print { body { margin: 20px; } }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="eyebrow">Folha fechada</div>
+            <div class="title">${escapeHtml(row.technician.name)}</div>
+            <p class="subtitle">Competência ${escapeHtml(formatCompetenceLabel(competenceMonth))} | QRA ${escapeHtml(row.technician.qra || '-')} | Atualizado em ${escapeHtml(updatedAt)}</p>
+          </div>
+
+          <div class="grid">
+            <div class="card"><div class="label">Valor bruto</div><div class="value">${escapeHtml(formatCurrency(payrollItem.total_services_value))}</div></div>
+            <div class="card"><div class="label">Em conta</div><div class="value">${escapeHtml(formatCurrency(payrollItem.net_total))}</div></div>
+            <div class="card"><div class="label">Folha total</div><div class="value">${escapeHtml(formatCurrency(payrollTotal))}</div></div>
+            <div class="card"><div class="label">Lucro gerado</div><div class="value">${escapeHtml(formatCurrency(row.profitValue))}</div></div>
+          </div>
+
+          <table>
+            <thead>
+              <tr><th>Item</th><th>Valor</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Ordens de serviço</td><td>${escapeHtml(String(row.serviceCount))}</td></tr>
+              <tr><td>Resumo de quinzena</td><td>${escapeHtml(formatServiceFortnightCountSummary(row.serviceFortnightSummary))}</td></tr>
+              <tr><td>Valor por quinzena</td><td>${escapeHtml(formatServiceFortnightValueSummary(row.serviceFortnightSummary))}</td></tr>
+              <tr><td>Comissão</td><td>${escapeHtml(formatCurrency(payrollItem.commission_value))}</td></tr>
+              <tr><td>Salário base</td><td>${escapeHtml(formatCurrency(payrollItem.base_salary))}</td></tr>
+              <tr><td>Vale-refeição</td><td>${escapeHtml(formatCurrency(payrollItem.vr_deduction))}</td></tr>
+              <tr><td>Vale-alimentação</td><td>${escapeHtml(formatCurrency(payrollItem.va_deduction))}</td></tr>
+              <tr><td>Horas extras</td><td>${escapeHtml(formatCurrency(payrollItem.extra_hours_value))}</td></tr>
+              <tr><td>Prêmio extraordinário</td><td>${escapeHtml(formatCurrency(payrollItem.extraordinary_award_value))}</td></tr>
+              <tr><td>Banco de horas</td><td>${escapeHtml(formatCurrency(payrollItem.hour_bank_balance))}</td></tr>
+              <tr><td>Descontos</td><td>${escapeHtml(formatCurrency(payrollItem.discounts_total))}</td></tr>
+              <tr><td>Adiantamentos</td><td>${escapeHtml(formatCurrency(payrollItem.advances_total))}</td></tr>
+            </tbody>
+          </table>
+
+          <div class="footer">Use a opção "Salvar como PDF" da impressão para guardar a folha deste técnico.</div>
+          <script>
+            window.onload = function () {
+              window.focus();
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
   }
 
   function updateCalculationBase(value: number) {
@@ -718,7 +814,7 @@ export default function PayrollPage() {
       setIsPayrollDialogOpen(false);
       resetDialogState();
     } catch {
-      setDraftError('Não foi possível salvar o cálculo. Confira os valores e tente novamente.');
+      setDraftError('Não foi possível fechar a folha. Confira os valores e tente novamente.');
     } finally {
       setIsSavingDraft(false);
     }
@@ -741,7 +837,7 @@ export default function PayrollPage() {
       <PageHeader
         eyebrow="Fechamento"
         title="Folha de pagamento"
-        description="Escolha a competência, abra a prévia do técnico, revise o resultado e salve somente quando estiver certo."
+        description="Escolha a competência, abra a folha do técnico, revise os valores e feche somente quando estiver certo."
       />
 
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
@@ -753,77 +849,59 @@ export default function PayrollPage() {
         <MetricCard title="OS" value={totalServiceCount} hint="Ordens do mês" icon={Calculator} />
         <MetricCard title="Valor bruto" value={formatCurrency(totalServicesValue)} hint="Produção do mês" icon={Calculator} />
         <MetricCard title="Lucro gerado" value={formatCurrency(totalProfit)} hint="Valor bruto - folha total" icon={WalletCards} tone={totalProfit >= 0 ? 'success' : 'danger'} accentText />
-        <MetricCard title="Finalizados" value={`${closedCount}/${rowsWithMonthlyObligation.length}`} hint="Cálculos salvos com custo no mês" icon={WalletCards} />
+        <MetricCard
+          title="Finalizados"
+          value={`${closedCount}/${rowsWithMonthlyObligation.length}`}
+          hint={isPayrollAwaitingClosure ? `Faltam ${pendingClosureCount} folha(s) para concluir a competência.` : 'Todas as folhas da competência foram fechadas.'}
+          icon={WalletCards}
+          tone={isPayrollAwaitingClosure ? 'warning' : 'success'}
+        />
       </div>
 
+      {isPayrollAwaitingClosure ? (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            A competência {formatCompetenceLabel(competenceMonth)} ainda não foi fechada. Falta concluir a folha de {pendingClosureCount} técnico(s). Enquanto isso, os totais desta tela servem como conferência e o painel administrativo continua aguardando o fechamento completo.
+          </div>
+        </div>
+      ) : null}
+
       <DataPanel
-        title="Competência do fechamento"
-        description="Troque a competência para navegar pelo fechamento. O topo mostra o custo já devido no mês, mesmo quando ainda não existem OS lançadas." 
+        title="Filtro da competência"
+        description="Selecione mês e ano para ver o fechamento." 
         className="mb-4"
       >
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
-          <section className="rounded-2xl border border-border bg-muted/20 p-4 sm:p-5">
-            <div className="flex flex-col gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Competência ativa</p>
-                <h3 className="mt-2 text-2xl font-semibold text-foreground sm:text-3xl">{formatCompetenceLabel(competenceMonth)}</h3>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                  Use os botões laterais ou selecione o mês diretamente. A tabela e os cards são recalculados imediatamente para a competência escolhida.
-                </p>
-              </div>
+        <div className="grid gap-3 md:max-w-xl md:grid-cols-2">
+          <label className="text-sm">
+            <span className="mb-1.5 block font-medium">Mês</span>
+            <select
+              value={String(selectedCompetenceMonth)}
+              onChange={(event) => setCompetenceMonth(`${selectedCompetenceYear}-${String(Number(event.target.value)).padStart(2, '0')}`)}
+              className="min-h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+            >
+              {monthNames.map((month, index) => (
+                <option key={month} value={index + 1}>
+                  {month}
+                </option>
+              ))}
+            </select>
+          </label>
 
-              <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-stretch">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setCompetenceMonth((current) => shiftCompetenceMonth(current, -1))}
-                  aria-label="Competência anterior"
-                  className="h-12 w-full sm:w-12"
-                >
-                  <ChevronLeft className="h-5 w-5" />
-                </Button>
-
-                <label className="flex min-w-0 flex-col rounded-2xl border border-border bg-background px-4 py-3 shadow-sm">
-                  <span className="flex items-center gap-2 text-xs font-medium uppercase text-muted-foreground">
-                    <CalendarDays className="h-4 w-4 text-primary" />
-                    Mês de referência
-                  </span>
-                  <input
-                    type="month"
-                    value={competenceMonth}
-                    onChange={(event) => setCompetenceMonth(event.target.value)}
-                    className="mt-2 w-full bg-transparent text-xl font-semibold outline-none scheme-light"
-                  />
-                </label>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setCompetenceMonth((current) => shiftCompetenceMonth(current, 1))}
-                  aria-label="Próxima competência"
-                  className="h-12 w-full sm:w-12"
-                >
-                  <ChevronRight className="h-5 w-5" />
-                </Button>
-              </div>
-            </div>
-          </section>
-
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-            <div className="rounded-2xl border border-border bg-background p-4 shadow-sm">
-              <span className="text-xs font-medium uppercase text-muted-foreground">Movimento do mês</span>
-              <div className="mt-2 text-2xl font-semibold text-foreground">{rowsWithMonthlyActivity.length}</div>
-              <p className="mt-1 text-sm text-muted-foreground">Técnicos com OS, desconto ou cálculo salvo nesta competência.</p>
-            </div>
-            <div className="rounded-2xl border border-border bg-background p-4 shadow-sm">
-              <span className="text-xs font-medium uppercase text-muted-foreground">Leitura da tela</span>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Mesmo sem OS lançadas, o painel já soma salário base e benefícios dos técnicos ativos para mostrar o valor devido no mês.
-              </p>
-            </div>
-          </div>
+          <label className="text-sm">
+            <span className="mb-1.5 block font-medium">Ano</span>
+            <select
+              value={String(selectedCompetenceYear)}
+              onChange={(event) => setCompetenceMonth(`${event.target.value}-${String(selectedCompetenceMonth).padStart(2, '0')}`)}
+              className="min-h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+            >
+              {competenceYearOptions.map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </DataPanel>
 
@@ -835,7 +913,7 @@ export default function PayrollPage() {
 
       <DataPanel
         title="Fechamento por técnico"
-        description="A tabela mostra o resumo do mês com o breakdown de Q1 e Q2. Abra o cálculo para ver a prévia, revisar os valores e salvar o fechamento."
+        description="A tabela mostra o resumo do mês com o breakdown de Q1 e Q2. Abra a folha para revisar e fechar. Depois de fechada, a ação disponível passa a ser o PDF do técnico."
         action={
           <div className="flex min-h-10 items-center gap-2 rounded-md border border-border bg-background px-3">
             <Search className="h-4 w-4 text-muted-foreground" />
@@ -887,25 +965,42 @@ export default function PayrollPage() {
                   </td>
                   <td className="py-3 pr-4">
                     {row.payrollItem ? (
-                      <StatusBadge tone="success">Cálculo salvo</StatusBadge>
-                    ) : row.hasMonthlyActivity ? (
-                      <StatusBadge tone="warning">Não salvo</StatusBadge>
+                      <StatusBadge tone="success">Folha fechada</StatusBadge>
                     ) : row.hasMonthlyObligation ? (
-                      <StatusBadge tone="info">Custo fixo</StatusBadge>
+                      <StatusBadge tone="warning">Aguardando fechamento</StatusBadge>
                     ) : (
                       <StatusBadge tone="neutral">Sem movimento</StatusBadge>
                     )}
                   </td>
                   <td className="py-3">
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => openPayrollDialog(row)}
-                      disabled={openingTechnicianId === row.technician.id}
-                    >
-                      {row.payrollItem ? <Eye className="h-4 w-4" /> : <Calculator className="h-4 w-4" />}
-                      {openingTechnicianId === row.technician.id ? 'Carregando' : row.payrollItem ? 'Revisar' : 'Abrir cálculo'}
-                    </Button>
+                    {row.payrollItem ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon-sm"
+                            onClick={() => openPayrollPdf(row)}
+                            aria-label={`Gerar PDF da folha de ${row.technician.name}`}
+                          >
+                            <FileText className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" sideOffset={6}>Gerar PDF da folha</TooltipContent>
+                      </Tooltip>
+                    ) : row.hasMonthlyObligation ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => openPayrollDialog(row)}
+                        disabled={openingTechnicianId === row.technician.id}
+                      >
+                        <Calculator className="h-4 w-4" />
+                        {openingTechnicianId === row.technician.id ? 'Carregando' : 'Abrir Folha'}
+                      </Button>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">-</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -917,9 +1012,9 @@ export default function PayrollPage() {
       <Dialog open={isPayrollDialogOpen} onOpenChange={handleDialogOpenChange}>
         <DialogContent className="flex h-auto max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100vw-2rem)] sm:max-w-5xl xl:max-w-6xl 2xl:max-w-7xl">
           <DialogHeader className="shrink-0 border-b border-border p-4 pb-3 sm:p-6 sm:pb-4">
-            <DialogTitle>{hasSavedPayroll ? 'Revisão do cálculo salvo' : 'Prévia do cálculo'}</DialogTitle>
+            <DialogTitle>Folha do técnico</DialogTitle>
             <DialogDescription>
-              {selectedRow ? `${selectedRow.technician.name} - competência ${formatCompetenceLabel(competenceMonth)}` : 'Abra a prévia, revise e salve quando estiver certo.'}
+              {selectedRow ? `${selectedRow.technician.name} - competência ${formatCompetenceLabel(competenceMonth)}` : 'Abra a folha, revise os valores e feche quando estiver certo.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -940,9 +1035,9 @@ export default function PayrollPage() {
                 <div className="rounded-lg border border-border bg-muted/20 p-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-base font-semibold">Resumo</h3>
-                    <HelpTip text="Esses números já foram calculados automaticamente. Eles só ficam gravados na folha quando você clicar em salvar." />
+                    <HelpTip text="Esses números já foram calculados automaticamente. Eles só ficam gravados quando você clicar em fechar a folha." />
                     <StatusBadge tone={hasSavedPayroll ? 'success' : 'warning'}>
-                      {hasSavedPayroll ? 'Salvo' : 'Não salvo'}
+                      {hasSavedPayroll ? 'Fechada' : 'Em aberto'}
                     </StatusBadge>
                     <StatusBadge tone={hasManualNetAdjustment ? 'warning' : 'info'}>
                       {hasManualNetAdjustment ? 'Ajuste manual' : 'Fórmula'}
@@ -1047,7 +1142,7 @@ export default function PayrollPage() {
                     <div className="mb-4">
                       <div className="flex items-center gap-2">
                         <h3 className="font-semibold">4. Descontos e pagamento</h3>
-                        <HelpTip text="Descontos de folha e adiantamentos reduzem o valor em conta. Se necessário, você pode ajustar o valor final manualmente antes de salvar." />
+                        <HelpTip text="Descontos de folha e adiantamentos reduzem o valor em conta. Se necessário, você pode ajustar o valor final manualmente antes de fechar a folha." />
                       </div>
                     </div>
                     <div className="grid gap-3">
@@ -1073,7 +1168,7 @@ export default function PayrollPage() {
                       <strong>{formatCurrency(formulaCashNet)}</strong>
                     </div>
                     <div>
-                      <span className="block text-xs uppercase text-muted-foreground">Para salvar</span>
+                      <span className="block text-xs uppercase text-muted-foreground">Para fechar</span>
                       <strong>{formatCurrency(payrollDraft.net_total)}</strong>
                     </div>
                   </div>
@@ -1097,8 +1192,8 @@ export default function PayrollPage() {
               Fechar
             </Button>
             <Button type="button" onClick={savePayrollDraft} disabled={!payrollDraft || isSavingDraft || isPreviewLoading} className="w-full sm:w-auto">
-              {hasSavedPayroll ? <CheckCircle2 className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-              {isSavingDraft ? 'Salvando' : 'Salvar'}
+              <CheckCircle2 className="h-4 w-4" />
+              {isSavingDraft ? 'Fechando' : 'Fechar Folha'}
             </Button>
           </DialogFooter>
         </DialogContent>

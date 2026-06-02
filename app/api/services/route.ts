@@ -109,3 +109,112 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+export async function PUT(request: NextRequest) {
+  try {
+    const auth = await verifyAuth(request);
+    if (!auth || auth.role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    const {
+      id,
+      order_code,
+      technician_id,
+      service_type,
+      value,
+      date_performed,
+      time_performed,
+      competence_month,
+      fortnight_period,
+      description,
+    } = await request.json();
+
+    if (!id) {
+      return NextResponse.json(
+        { error: 'Service id is required' },
+        { status: 400 }
+      );
+    }
+
+    await ensureServicesSchema();
+
+    const result = await sql`
+      UPDATE services
+      SET order_code = ${order_code},
+          technician_id = ${technician_id},
+          service_type = ${service_type},
+          value = ${value},
+          date_performed = ${date_performed},
+          time_performed = ${time_performed || null},
+          competence_month = ${competence_month || String(date_performed ?? '').slice(0, 7)},
+          fortnight_period = ${fortnight_period || null},
+          description = ${description || null}
+      WHERE id = ${id}
+      RETURNING *
+    `;
+
+    if (!result.length) {
+      return NextResponse.json(
+        { error: 'Service not found' },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json(result[0]);
+  } catch (error) {
+    console.error('[v0] Update service error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const auth = await verifyAuth(request);
+    if (!auth || auth.role !== 'admin') {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    await ensureServicesSchema();
+
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+
+    if (!id) {
+      return NextResponse.json(
+        { error: 'Service id is required' },
+        { status: 400 }
+      );
+    }
+
+    const result = await sql`
+      DELETE FROM services
+      WHERE id = ${id}
+      RETURNING id
+    `;
+
+    if (!result.length) {
+      return NextResponse.json(
+        { error: 'Service not found' },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ success: true, id });
+  } catch (error) {
+    console.error('[v0] Delete service error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}

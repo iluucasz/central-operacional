@@ -11,7 +11,7 @@ import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { ProgressGauge } from '@/components/progress-gauge';
 import { StatusBadge } from '@/components/status-badge';
-import { formatCurrency, formatDate, formatHours, formatNumber, formatTime, formatTimeRange, monthKeyFromDate } from '@/lib/formatters';
+import { formatCurrency, formatDate, formatHours, formatNumber, formatTime, formatTimeRange, monthKeyFromDate, resolveCompetenceMonth } from '@/lib/formatters';
 import type { Payroll, Schedule, Service, ServiceFortnight, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
@@ -51,14 +51,7 @@ function roundCurrency(value: number | string | null | undefined) {
 }
 
 function getServiceCompetence(service: Service) {
-  const datePrefix = String(service.date_performed ?? '').match(/^(\d{4}-\d{2})/);
-  if (datePrefix?.[1]) return datePrefix[1];
-
-  const dateMonth = monthKeyFromDate(service.date_performed);
-  if (dateMonth) return dateMonth;
-
-  const savedCompetence = String(service.competence_month ?? '').trim();
-  return /^\d{4}-\d{2}$/.test(savedCompetence) ? savedCompetence : '';
+  return resolveCompetenceMonth(service.competence_month, service.date_performed);
 }
 
 function getDateDay(value: string | Date | null | undefined) {
@@ -195,18 +188,9 @@ export default function TechnicianDashboard() {
       if (competence) values.add(competence);
     });
 
-    workHours.forEach((item) => {
-      const competence = monthKeyFromDate(item.date);
-      if (competence) values.add(competence);
-    });
-
-    payroll.forEach((item) => {
-      const competence = String(item.competence_month ?? '').trim();
-      if (/^\d{4}-\d{2}$/.test(competence)) values.add(competence);
-    });
 
     return Array.from(values).sort((left, right) => right.localeCompare(left, 'pt-BR'));
-  }, [payroll, services, workHours]);
+  }, [services]);
 
   useEffect(() => {
     if (!competenceOptions.length) return;
@@ -253,7 +237,7 @@ export default function TechnicianDashboard() {
 
   const q1ServicesCount = monthlyServices.filter((service) => getServicePeriod(service) === 'Q1').length;
   const q2ServicesCount = monthlyServices.filter((service) => getServicePeriod(service) === 'Q2').length;
-  const currentPayroll = payroll.find((item) => item.competence_month === competenceMonth);
+  const currentPayroll = payroll.find((item) => resolveCompetenceMonth(item.competence_month) === competenceMonth);
   const nextSchedule = useMemo(() => {
     const todayKey = getDateKey(new Date());
 

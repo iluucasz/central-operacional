@@ -94,6 +94,62 @@ export function monthKeyFromDate(value: string | Date | null | undefined): strin
   return date.toISOString().slice(0, 7);
 }
 
+const competenceMonthAliases: Record<string, string> = {
+  jan: '01',
+  janeiro: '01',
+  fev: '02',
+  fevereiro: '02',
+  mar: '03',
+  marco: '03',
+  abr: '04',
+  abril: '04',
+  mai: '05',
+  maio: '05',
+  jun: '06',
+  junho: '06',
+  jul: '07',
+  julho: '07',
+  ago: '08',
+  agosto: '08',
+  set: '09',
+  setembro: '09',
+  out: '10',
+  outubro: '10',
+  nov: '11',
+  novembro: '11',
+  dez: '12',
+  dezembro: '12',
+};
+
+export function normalizeCompetenceMonth(value: unknown): string {
+  const normalizedValue = String(value ?? '').trim();
+  if (!normalizedValue) return '';
+
+  const yearMonthMatch = normalizedValue.match(/^(20\d{2})-(\d{2})/);
+  if (yearMonthMatch) {
+    return `${yearMonthMatch[1]}-${yearMonthMatch[2]}`;
+  }
+
+  const monthYearMatch = normalizedValue.match(/^(\d{2})[/.\-](20\d{2})/);
+  if (monthYearMatch) {
+    return `${monthYearMatch[2]}-${monthYearMatch[1]}`;
+  }
+
+  const namedMonthMatch = normalizedValue.match(/^([A-Za-zÀ-ÿ]{3,12})[^\d]*(20\d{2})/);
+  if (namedMonthMatch) {
+    const monthAlias = competenceMonthAliases[normalizeText(namedMonthMatch[1])];
+    if (monthAlias) {
+      return `${namedMonthMatch[2]}-${monthAlias}`;
+    }
+  }
+
+  return '';
+}
+
+export function resolveCompetenceMonth(competenceValue: unknown, fallbackDate?: string | Date | null): string {
+  return normalizeCompetenceMonth(competenceValue) || monthKeyFromDate(fallbackDate);
+}
+
 export function compactName(value: string | null | undefined): string {
   const parts = String(value ?? '')
     .trim()

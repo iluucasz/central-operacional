@@ -10,7 +10,7 @@ import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
-import { compactName, formatCurrency, formatNumber, monthKeyFromDate, normalizeText } from '@/lib/formatters';
+import { compactName, formatCurrency, formatNumber, normalizeText, resolveCompetenceMonth } from '@/lib/formatters';
 import type { Payroll, Service, Technician } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
@@ -61,14 +61,7 @@ function formatCompetenceLabel(value: string) {
 }
 
 function getServiceCompetence(service: Service) {
-  const datePrefix = String(service.date_performed ?? '').match(/^(\d{4}-\d{2})/);
-  if (datePrefix?.[1]) return datePrefix[1];
-
-  const dateMonth = monthKeyFromDate(service.date_performed);
-  if (dateMonth) return dateMonth;
-
-  const savedCompetence = String(service.competence_month ?? '').trim();
-  return /^\d{4}-\d{2}$/.test(savedCompetence) ? savedCompetence : '';
+  return resolveCompetenceMonth(service.competence_month, service.date_performed);
 }
 
 function serviceBelongsToTechnician(service: Service, technician: Technician) {
@@ -105,21 +98,23 @@ function PriorityItem({
   action: string;
 }) {
   return (
-    <div className="rounded-md border border-border bg-background p-3">
+    <Link
+      href={href}
+      className="group block rounded-2xl border border-border bg-background p-4 shadow-sm transition hover:border-primary/40 hover:bg-muted/30"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-sm font-medium text-foreground">{title}</p>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
+          <p className="text-base font-semibold text-foreground">{title}</p>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p>
         </div>
         <StatusBadge tone={tone}>{value}</StatusBadge>
       </div>
-      <Button asChild variant="secondary" size="sm" className="mt-3 w-full justify-between">
-        <Link href={href}>
-          {action}
-          <ArrowRight className="h-4 w-4" />
-        </Link>
-      </Button>
-    </div>
+
+      <div className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-primary">
+        {action}
+        <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+      </div>
+    </Link>
   );
 }
 
@@ -208,6 +203,16 @@ export default function AdminDashboard() {
     }
   }, [competenceMonth, competenceOptions]);
 
+  const selectedCompetenceYear = Number(competenceMonth.slice(0, 4)) || new Date().getFullYear();
+  const selectedCompetenceMonth = Number(competenceMonth.slice(5, 7)) || new Date().getMonth() + 1;
+  const competenceYearOptions = useMemo(() => {
+    const years = competenceOptions
+      .map((value) => Number(value.slice(0, 4)))
+      .filter((value) => Number.isInteger(value));
+
+    return Array.from(new Set([selectedCompetenceYear, ...years])).sort((left, right) => left - right);
+  }, [competenceOptions, selectedCompetenceYear]);
+
   const servicesInCompetence = useMemo(
     () => services.filter((service) => getServiceCompetence(service) === competenceMonth),
     [competenceMonth, services],
@@ -253,7 +258,8 @@ export default function AdminDashboard() {
 
   const activeTechnicians = technicians.filter((technician) => technician.status === 'active');
   const rowsWithServices = summaries.filter((row) => row.serviceCount > 0);
-  const pendingPayrollRows = summaries.filter((row) => row.serviceCount > 0 && !row.payrollItem);
+  const rowsWithPayrollObligation = summaries.filter((row) => row.hasActivity || row.technician.status === 'active');
+  const pendingPayrollRows = rowsWithPayrollObligation.filter((row) => !row.payrollItem);
   const negativeResultRows = summaries.filter((row) => typeof row.result === 'number' && row.result < 0);
   const activeWithoutServicesRows = summaries.filter((row) => row.technician.status === 'active' && row.serviceCount === 0);
   const totalGrossValue = roundCurrency(servicesInCompetence.reduce((total, service) => total + moneyValue(service.value), 0));
@@ -261,7 +267,35 @@ export default function AdminDashboard() {
   const closedResultTotal = roundCurrency(
     payrollInCompetence.reduce((total, item) => total + (moneyValue(item.total_services_value) - getPayrollCost(item)), 0),
   );
+  const hasPayrollWorkInCompetence = rowsWithPayrollObligation.length > 0;
+  const isPayrollAwaitingClosure = hasPayrollWorkInCompetence && pendingPayrollRows.length > 0;
   const payrollProgress = rowsWithServices.length ? Math.round((payrollInCompetence.length / rowsWithServices.length) * 100) : 0;
+  const shortcutCards = [
+    {
+      href: '/admin/services',
+      title: 'Importar OS',
+      description: 'Enviar e revisar as ordens de serviço da competência.',
+      icon: UploadCloud,
+    },
+    {
+      href: '/admin/payroll',
+      title: 'Calcular folha',
+      description: 'Abrir os fechamentos e salvar os cálculos do mês.',
+      icon: WalletCards,
+    },
+    {
+      href: '/admin/technicians',
+      title: 'Técnicos',
+      description: 'Atualizar cadastro, comissão e situação da equipe.',
+      icon: Users,
+    },
+    {
+      href: '/admin/schedule',
+      title: 'Escala',
+      description: 'Organizar a cobertura e revisar a programação da equipe.',
+      icon: CalendarDays,
+    },
+  ];
 
   return (
     <AppShell role="admin" userName={user.name || user.email}>
@@ -278,69 +312,94 @@ export default function AdminDashboard() {
       <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <MetricCard title="Valor bruto" value={formatCurrency(totalGrossValue)} hint="Soma das OS do mês" icon={Wrench} tone="success" />
         <MetricCard title="OS" value={formatNumber(servicesInCompetence.length)} hint={`${rowsWithServices.length} técnico(s)`} icon={Wrench} />
-        <MetricCard title="Folha finalizada" value={formatCurrency(payrollCostTotal)} hint={`${payrollInCompetence.length} cálculo(s) salvo(s)`} icon={WalletCards} />
-        <MetricCard title="Resultado fechado" value={formatCurrency(closedResultTotal)} hint="Bruto salvo - folha salva" icon={WalletCards} tone={closedResultTotal >= 0 ? 'success' : 'danger'} accentText />
-        <MetricCard title="Pendentes" value={pendingPayrollRows.length} hint="Técnicos com OS sem folha" icon={AlertTriangle} tone={pendingPayrollRows.length ? 'warning' : 'success'} />
+        <MetricCard
+          title="Folha finalizada"
+          value={isPayrollAwaitingClosure ? 'Aguardando' : formatCurrency(payrollCostTotal)}
+          hint={
+            isPayrollAwaitingClosure
+              ? `Feche a folha de ${pendingPayrollRows.length} técnico(s) para liberar o total.`
+              : `${payrollInCompetence.length} cálculo(s) salvo(s)`
+          }
+          icon={WalletCards}
+          tone={isPayrollAwaitingClosure ? 'warning' : 'default'}
+        />
+        <MetricCard
+          title="Resultado fechado"
+          value={isPayrollAwaitingClosure ? 'Aguardando' : formatCurrency(closedResultTotal)}
+          hint={isPayrollAwaitingClosure ? 'O resultado final aparece após o fechamento completo da folha.' : 'Bruto salvo - folha salva'}
+          icon={WalletCards}
+          tone={isPayrollAwaitingClosure ? 'warning' : closedResultTotal >= 0 ? 'success' : 'danger'}
+          accentText
+        />
+        <MetricCard title="Pendentes" value={pendingPayrollRows.length} hint="Técnicos da competência sem folha" icon={AlertTriangle} tone={pendingPayrollRows.length ? 'warning' : 'success'} />
       </div>
+
+      {isPayrollAwaitingClosure ? (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          A competência {formatCompetenceLabel(competenceMonth)} ainda aguarda fechamento da folha. Finalize os cálculos em{' '}
+          <Link href="/admin/payroll" className="font-semibold underline underline-offset-2">
+            Folha de pagamento
+          </Link>{' '}
+          para liberar os valores finais do painel.
+        </div>
+      ) : null}
 
       <div className="mb-4 grid gap-4 xl:grid-cols-[1fr_1.25fr]">
         <DataPanel title="Competência" description="Escolha o mês que será analisado no painel.">
-          <label className="flex max-w-sm flex-col gap-2">
-            <span className="text-xs font-medium uppercase text-muted-foreground">Mês de referência</span>
-            <span className="flex h-12 items-center gap-3 rounded-md border border-border bg-background px-3">
-              <CalendarDays className="h-4 w-4 text-primary" />
-              <input
-                type="month"
-                value={competenceMonth}
-                onChange={(event) => setCompetenceMonth(event.target.value)}
-                className="w-full bg-transparent text-base font-semibold outline-none"
-              />
-            </span>
-          </label>
-          <div className="mt-3 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
-            <span className="text-muted-foreground">Selecionado: </span>
-            <strong>{formatCompetenceLabel(competenceMonth)}</strong>
+          <div className="grid gap-3 md:max-w-xl md:grid-cols-2">
+            <label className="text-sm">
+              <span className="mb-1.5 block font-medium">Mês</span>
+              <select
+                value={String(selectedCompetenceMonth)}
+                onChange={(event) => setCompetenceMonth(`${selectedCompetenceYear}-${String(Number(event.target.value)).padStart(2, '0')}`)}
+                className="min-h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+              >
+                {monthNames.map((month, index) => (
+                  <option key={month} value={index + 1}>
+                    {month}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="text-sm">
+              <span className="mb-1.5 block font-medium">Ano</span>
+              <select
+                value={String(selectedCompetenceYear)}
+                onChange={(event) => setCompetenceMonth(`${event.target.value}-${String(selectedCompetenceMonth).padStart(2, '0')}`)}
+                className="min-h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+              >
+                {competenceYearOptions.map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </DataPanel>
 
         <DataPanel title="Atalhos úteis" description="Ações mais comuns para manter a operação atualizada.">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Button asChild variant="secondary" className="justify-between">
-              <Link href="/admin/services">
-                <span className="inline-flex items-center gap-2">
-                  <UploadCloud className="h-4 w-4" />
-                  Importar OS
-                </span>
-                <ArrowRight className="h-4 w-4" />
+            {shortcutCards.map(({ href, title, description, icon: Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className="group rounded-2xl border border-border bg-background p-4 shadow-sm transition hover:border-primary/40 hover:bg-muted/30"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  <ArrowRight className="mt-1 h-4 w-4 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-foreground" />
+                </div>
+
+                <div className="mt-4 space-y-1">
+                  <div className="text-base font-semibold text-foreground">{title}</div>
+                  <p className="text-sm leading-5 text-muted-foreground">{description}</p>
+                </div>
               </Link>
-            </Button>
-            <Button asChild variant="secondary" className="justify-between">
-              <Link href="/admin/payroll">
-                <span className="inline-flex items-center gap-2">
-                  <WalletCards className="h-4 w-4" />
-                  Calcular folha
-                </span>
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            </Button>
-            <Button asChild variant="secondary" className="justify-between">
-              <Link href="/admin/technicians">
-                <span className="inline-flex items-center gap-2">
-                  <Users className="h-4 w-4" />
-                  Técnicos
-                </span>
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            </Button>
-            <Button asChild variant="secondary" className="justify-between">
-              <Link href="/admin/schedule">
-                <span className="inline-flex items-center gap-2">
-                  <CalendarDays className="h-4 w-4" />
-                  Escala
-                </span>
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            </Button>
+            ))}
           </div>
         </DataPanel>
       </div>
@@ -389,7 +448,13 @@ export default function AdminDashboard() {
 
         <DataPanel
           title="Produção por técnico"
-          description={`Fechamento da competência: ${payrollProgress}% concluído.`}
+          description={
+            isPayrollAwaitingClosure
+              ? `Fechamento aguardando a folha de ${pendingPayrollRows.length} técnico(s).`
+              : hasPayrollWorkInCompetence
+                ? `Fechamento da competência: ${payrollProgress}% concluído.`
+                : 'Sem OS com impacto em folha nesta competência.'
+          }
         >
           {summaries.length ? (
             <div className="overflow-x-auto">
