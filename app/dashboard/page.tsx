@@ -12,7 +12,6 @@ import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { ProgressGauge } from '@/components/progress-gauge';
 import { StatusBadge } from '@/components/status-badge';
-import { demoPayroll, demoSchedule, demoServices, demoTechnicians, demoWorkHours } from '@/lib/demo-data';
 import { compactName, formatCurrency, formatDate, formatHours, formatNumber, formatTime, formatTimeRange, yearFromCompetence } from '@/lib/formatters';
 import type { Payroll, Schedule, Service, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
@@ -52,34 +51,41 @@ export default function TechnicianDashboard() {
       if (servicesRes.status === 'fulfilled' && servicesRes.value.ok) {
         const data = await servicesRes.value.json();
         setServices(data.services ?? []);
+      } else {
+        setServices([]);
       }
-      setServicesLoaded(true);
 
       if (hoursRes.status === 'fulfilled' && hoursRes.value.ok) {
         const data = await hoursRes.value.json();
         setWorkHours(data.workHours ?? []);
+      } else {
+        setWorkHours([]);
       }
 
       if (payrollRes.status === 'fulfilled' && payrollRes.value.ok) {
         const data = await payrollRes.value.json();
         setPayroll(data.payrolls ?? []);
+      } else {
+        setPayroll([]);
       }
 
       if (scheduleRes.status === 'fulfilled' && scheduleRes.value.ok) {
         const data = await scheduleRes.value.json();
         setSchedule(data.schedules ?? []);
+      } else {
+        setSchedule([]);
       }
+
+      setServicesLoaded(true);
     }
 
     loadData();
   }, [user]);
 
-  const fallbackTechnician = demoTechnicians[0];
-  const visibleServices = services.length ? services : demoServices.filter((service) => service.technician_id === fallbackTechnician.id);
-  const visibleWorkHours = workHours.length ? workHours : demoWorkHours.filter((item) => item.technician_id === fallbackTechnician.id);
-  const visiblePayroll = payroll.length ? payroll : demoPayroll.filter((item) => item.technician_id === fallbackTechnician.id);
-  const visibleSchedule = schedule.length ? schedule : demoSchedule.filter((item) => item.technician_id === fallbackTechnician.id);
-  const usingDemoData = !services.length;
+  const visibleServices = services;
+  const visibleWorkHours = workHours;
+  const visiblePayroll = payroll;
+  const visibleSchedule = schedule;
 
   const scopedByYear = useMemo(() => {
     return visibleServices.filter((service) => !yearFilter || yearFromCompetence(service.competence_month) === yearFilter);
@@ -155,7 +161,7 @@ export default function TechnicianDashboard() {
 
     fireworksCheckedRef.current = true;
 
-    if (usingDemoData || scopedByYear.length < 160) return;
+    if (scopedByYear.length < 160) return;
 
     const storageKey = `dashboard-fireworks-meta160-shown:${user.userId}`;
 
@@ -168,9 +174,9 @@ export default function TechnicianDashboard() {
     }
 
     setShowFireworks(true);
-  }, [scopedByYear.length, servicesLoaded, user, usingDemoData]);
+  }, [scopedByYear.length, servicesLoaded, user]);
 
-  if (loading || !user) {
+  if (loading || !user || !servicesLoaded) {
     return <LoadingState />;
   }
 
@@ -184,14 +190,12 @@ export default function TechnicianDashboard() {
       : `${formatHours(MONTHLY_HOURS_TARGET)} no total • faltam ${formatHours(Math.abs(hoursDifference))}`;
   const years = Array.from(new Set(visibleServices.map((service) => yearFromCompetence(service.competence_month)))).sort();
   const competences = Array.from(new Set(scopedByYear.map((service) => service.competence_month)));
-  const technicianName = user.name || fallbackTechnician.name;
+  const technicianName = user.name || user.email;
   const netTotal = Number(payrollSummary?.net_total ?? 0);
-  const benefitsTotal =
-    Number(payrollSummary?.va_deduction ?? fallbackTechnician.va_allowance) +
-    Number(payrollSummary?.vr_deduction ?? fallbackTechnician.vr_allowance);
+  const benefitsTotal = Number(payrollSummary?.va_deduction ?? 0) + Number(payrollSummary?.vr_deduction ?? 0);
   const payrollNetTotal = netTotal + benefitsTotal;
   const breakdown = [
-    { label: 'Salário base', value: Number(payrollSummary?.base_salary ?? fallbackTechnician.base_salary), sign: 'plus' },
+    { label: 'Salário base', value: Number(payrollSummary?.base_salary ?? 0), sign: 'plus' },
     { label: 'Comissão', value: Number(payrollSummary?.commission_value ?? 0), sign: 'plus' },
     { label: 'Hora extra', value: Number(payrollSummary?.extra_hours_value ?? 0), sign: 'plus' },
     { label: 'Adiantamento', value: Number(payrollSummary?.advances_total ?? 0), sign: 'minus' },
@@ -207,7 +211,7 @@ export default function TechnicianDashboard() {
         title={technicianName}
         description="Produção, metas, pagamento, banco de horas e agenda em uma única visão."
       >
-        {usingDemoData ? <StatusBadge tone="warning">Amostra</StatusBadge> : <StatusBadge tone="success">Dados atualizados</StatusBadge>}
+        <StatusBadge tone="success">Dados atualizados</StatusBadge>
       </PageHeader>
 
       <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">

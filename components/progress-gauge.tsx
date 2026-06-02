@@ -123,10 +123,12 @@ export function ProgressGauge({
 }: ProgressGaugeProps) {
   const normalizedValue = Math.max(value, 0);
   const [animatedValue, setAnimatedValue] = useState(0);
+  const [showCelebration, setShowCelebration] = useState(false);
   const animatedNormalizedValue = Math.max(animatedValue, 0);
   const resolvedCelebration = celebrationLevel ?? (normalizedValue >= TARGET_THRESHOLD ? 'goal' : undefined);
-  const isGoalCelebration = resolvedCelebration === 'goal' || resolvedCelebration === 'mega';
-  const isMegaCelebration = resolvedCelebration === 'mega';
+  const shouldCelebrate = resolvedCelebration === 'goal' || resolvedCelebration === 'mega';
+  const isGoalCelebration = showCelebration && shouldCelebrate;
+  const isMegaCelebration = showCelebration && resolvedCelebration === 'mega';
   const clampedValue = Math.min(animatedNormalizedValue, TARGET_THRESHOLD);
   const currentAngle = (clampedValue / TARGET_THRESHOLD) * 180;
   const redAngle = (DANGER_THRESHOLD / TARGET_THRESHOLD) * 180;
@@ -150,6 +152,7 @@ export function ProgressGauge({
 
     if (reduceMotion || normalizedValue === 0) {
       setAnimatedValue(normalizedValue);
+      setShowCelebration(reduceMotion && normalizedValue > 0 && shouldCelebrate);
       return;
     }
 
@@ -157,6 +160,7 @@ export function ProgressGauge({
     const startTime = performance.now();
 
     setAnimatedValue(0);
+    setShowCelebration(false);
 
     const animate = (currentTime: number) => {
       const elapsed = currentTime - startTime;
@@ -169,13 +173,14 @@ export function ProgressGauge({
         frameId = requestAnimationFrame(animate);
       } else {
         setAnimatedValue(normalizedValue);
+        setShowCelebration(shouldCelebrate);
       }
     };
 
     frameId = requestAnimationFrame(animate);
 
     return () => cancelAnimationFrame(frameId);
-  }, [normalizedValue]);
+  }, [normalizedValue, shouldCelebrate]);
 
   return (
     <button
