@@ -1,25 +1,115 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bar, BarChart, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useEffect, useMemo, useState } from 'react';
+import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { CalendarDays, ChevronLeft, ChevronRight, Clock3, FileText, WalletCards, Wrench } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
-import { FireworksOverlay } from '@/components/fireworks-overlay';
 import { LoadingState } from '@/components/loading-state';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { ProgressGauge } from '@/components/progress-gauge';
 import { StatusBadge } from '@/components/status-badge';
-import { compactName, formatCurrency, formatDate, formatHours, formatNumber, formatTime, formatTimeRange, yearFromCompetence } from '@/lib/formatters';
-import type { Payroll, Schedule, Service, WorkHours } from '@/lib/types';
+import { formatCurrency, formatDate, formatHours, formatNumber, formatTime, formatTimeRange, monthKeyFromDate } from '@/lib/formatters';
+import type { Payroll, Schedule, Service, ServiceFortnight, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
 const chartColors = ['#168a65', '#d06b36', '#3e6fba', '#b48b17', '#914b8f', '#2f8fa1', '#6b7280'];
-const SERVICES_PAGE_SIZE = 14;
-const MONTHLY_HOURS_TARGET = 220;
-const MONTHLY_HOURS_WARNING_FLOOR = 200;
+const SERVICES_PAGE_SIZE = 12;
+const defaultCompetenceMonth = new Date().toISOString().slice(0, 7);
+const monthNames = [
+  'Janeiro',
+  'Fevereiro',
+  'Março',
+  'Abril',
+  'Maio',
+  'Junho',
+  'Julho',
+  'Agosto',
+  'Setembro',
+  'Outubro',
+  'Novembro',
+  'Dezembro',
+];
+
+type PeriodFilter = 'monthly' | ServiceFortnight;
+
+const periodOptions: Array<{ value: PeriodFilter; label: string; description: string }> = [
+  { value: 'monthly', label: 'Mensal', description: 'Todas as OS do mês' },
+  { value: 'Q1', label: 'Q1', description: 'Primeira quinzena' },
+  { value: 'Q2', label: 'Q2', description: 'Segunda quinzena' },
+];
+
+function moneyValue(value: number | string | null | undefined) {
+  const numericValue = Number(value ?? 0);
+  return Number.isFinite(numericValue) ? numericValue : 0;
+}
+
+function roundCurrency(value: number | string | null | undefined) {
+  return Math.round((moneyValue(value) + Number.EPSILON) * 100) / 100;
+}
+
+function getServiceCompetence(service: Service) {
+  const datePrefix = String(service.date_performed ?? '').match(/^(\d{4}-\d{2})/);
+  if (datePrefix?.[1]) return datePrefix[1];
+
+  const dateMonth = monthKeyFromDate(service.date_performed);
+  if (dateMonth) return dateMonth;
+
+  const savedCompetence = String(service.competence_month ?? '').trim();
+  return /^\d{4}-\d{2}$/.test(savedCompetence) ? savedCompetence : '';
+}
+
+function getDateDay(value: string | Date | null | undefined) {
+  if (!value) return 0;
+
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return Number(value.slice(8, 10));
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getDate();
+}
+
+function getServicePeriod(service: Service): ServiceFortnight {
+  if (service.fortnight_period === 'Q1' || service.fortnight_period === 'Q2') {
+    return service.fortnight_period;
+  }
+
+  return getDateDay(service.date_performed) <= 15 ? 'Q1' : 'Q2';
+}
+
+function getDateKey(value: string | Date | null | undefined) {
+  if (!value) return '';
+
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+}
+
+function getPeriodLabel(period: PeriodFilter) {
+  return periodOptions.find((item) => item.value === period)?.label ?? 'Mensal';
+}
+
+function formatCompetence(value: string) {
+  const [year, month] = value.split('-');
+  const monthNumber = Number(month);
+
+  if (!year || !month || !monthNames[monthNumber - 1]) {
+    return value || 'Sem data';
+  }
+
+  return `${monthNames[monthNumber - 1]}/${year}`;
+}
+
+function matchesPeriod(dateValue: string | Date | null | undefined, period: PeriodFilter) {
+  if (period === 'monthly') return true;
+  return getDateDay(dateValue) <= 15 ? period === 'Q1' : period === 'Q2';
+}
 
 export default function TechnicianDashboard() {
   const { user, loading } = useAppSession();
@@ -27,122 +117,154 @@ export default function TechnicianDashboard() {
   const [workHours, setWorkHours] = useState<WorkHours[]>([]);
   const [payroll, setPayroll] = useState<Payroll[]>([]);
   const [schedule, setSchedule] = useState<Schedule[]>([]);
-  const [servicesLoaded, setServicesLoaded] = useState(false);
-  const [showFireworks, setShowFireworks] = useState(false);
-  const fireworksCheckedRef = useRef(false);
-  const [yearFilter, setYearFilter] = useState<string | null>(null);
-  const [competenceFilter, setCompetenceFilter] = useState<string | null>(null);
+  const [isDataLoading, setIsDataLoading] = useState(true);
+  const [dataError, setDataError] = useState('');
+  const [competenceMonth, setCompetenceMonth] = useState(defaultCompetenceMonth);
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('monthly');
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [servicesPage, setServicesPage] = useState(1);
 
   useEffect(() => {
+    let mounted = true;
+
     async function loadData() {
       if (!user) return;
-      setServicesLoaded(false);
-      const technicianId = user.technicianId ?? user.userId;
 
-      const [servicesRes, hoursRes, payrollRes, scheduleRes] = await Promise.allSettled([
+      setIsDataLoading(true);
+      setDataError('');
+
+      const technicianId = user.technicianId ?? user.userId;
+      const [servicesResult, hoursResult, payrollResult, scheduleResult] = await Promise.allSettled([
         fetch(`/api/services?technicianId=${technicianId}`),
         fetch(`/api/work-hours?technicianId=${technicianId}`),
         fetch(`/api/payroll?technicianId=${technicianId}`),
         fetch(`/api/schedule?technicianId=${technicianId}`),
       ]);
+      const errors: string[] = [];
 
-      if (servicesRes.status === 'fulfilled' && servicesRes.value.ok) {
-        const data = await servicesRes.value.json();
-        setServices(data.services ?? []);
+      if (servicesResult.status === 'fulfilled' && servicesResult.value.ok) {
+        const data = await servicesResult.value.json();
+        if (mounted) setServices(Array.isArray(data.services) ? data.services : []);
       } else {
-        setServices([]);
+        errors.push('OS');
+        if (mounted) setServices([]);
       }
 
-      if (hoursRes.status === 'fulfilled' && hoursRes.value.ok) {
-        const data = await hoursRes.value.json();
-        setWorkHours(data.workHours ?? []);
+      if (hoursResult.status === 'fulfilled' && hoursResult.value.ok) {
+        const data = await hoursResult.value.json();
+        if (mounted) setWorkHours(Array.isArray(data.workHours) ? data.workHours : []);
       } else {
-        setWorkHours([]);
+        errors.push('banco de horas');
+        if (mounted) setWorkHours([]);
       }
 
-      if (payrollRes.status === 'fulfilled' && payrollRes.value.ok) {
-        const data = await payrollRes.value.json();
-        setPayroll(data.payrolls ?? []);
+      if (payrollResult.status === 'fulfilled' && payrollResult.value.ok) {
+        const data = await payrollResult.value.json();
+        if (mounted) setPayroll(Array.isArray(data.payrolls) ? data.payrolls : []);
       } else {
-        setPayroll([]);
+        errors.push('folha');
+        if (mounted) setPayroll([]);
       }
 
-      if (scheduleRes.status === 'fulfilled' && scheduleRes.value.ok) {
-        const data = await scheduleRes.value.json();
-        setSchedule(data.schedules ?? []);
+      if (scheduleResult.status === 'fulfilled' && scheduleResult.value.ok) {
+        const data = await scheduleResult.value.json();
+        if (mounted) setSchedule(Array.isArray(data.schedules) ? data.schedules : []);
       } else {
-        setSchedule([]);
+        errors.push('escala');
+        if (mounted) setSchedule([]);
       }
 
-      setServicesLoaded(true);
+      if (mounted) {
+        setDataError(errors.length ? `Não foi possível carregar dados reais de ${errors.join(', ')}.` : '');
+        setIsDataLoading(false);
+      }
     }
 
     loadData();
+
+    return () => {
+      mounted = false;
+    };
   }, [user]);
 
-  const visibleServices = services;
-  const visibleWorkHours = workHours;
-  const visiblePayroll = payroll;
-  const visibleSchedule = schedule;
+  const competenceOptions = useMemo(() => {
+    const values = new Set<string>();
 
-  const scopedByYear = useMemo(() => {
-    return visibleServices.filter((service) => !yearFilter || yearFromCompetence(service.competence_month) === yearFilter);
-  }, [visibleServices, yearFilter]);
-
-  const filteredServices = useMemo(() => {
-    return scopedByYear.filter((service) => {
-      if (competenceFilter && service.competence_month !== competenceFilter) return false;
-      if (typeFilter && service.service_type !== typeFilter) return false;
-      return true;
+    services.forEach((service) => {
+      const competence = getServiceCompetence(service);
+      if (competence) values.add(competence);
     });
-  }, [competenceFilter, scopedByYear, typeFilter]);
+
+    workHours.forEach((item) => {
+      const competence = monthKeyFromDate(item.date);
+      if (competence) values.add(competence);
+    });
+
+    payroll.forEach((item) => {
+      const competence = String(item.competence_month ?? '').trim();
+      if (/^\d{4}-\d{2}$/.test(competence)) values.add(competence);
+    });
+
+    return Array.from(values).sort((left, right) => right.localeCompare(left, 'pt-BR'));
+  }, [payroll, services, workHours]);
+
+  useEffect(() => {
+    if (!competenceOptions.length) return;
+    if (!competenceOptions.includes(competenceMonth)) {
+      setCompetenceMonth(competenceOptions[0]);
+    }
+  }, [competenceMonth, competenceOptions]);
+
+  const monthlyServices = useMemo(
+    () => services.filter((service) => getServiceCompetence(service) === competenceMonth),
+    [competenceMonth, services],
+  );
+
+  const periodServices = useMemo(
+    () => monthlyServices.filter((service) => periodFilter === 'monthly' || getServicePeriod(service) === periodFilter),
+    [monthlyServices, periodFilter],
+  );
 
   const servicesByType = useMemo(() => {
     const grouped = new Map<string, number>();
-    scopedByYear.forEach((service) => grouped.set(service.service_type, (grouped.get(service.service_type) ?? 0) + 1));
-    return Array.from(grouped.entries())
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count);
-  }, [scopedByYear]);
 
-  const servicesByCompetence = useMemo(() => {
-    const grouped = new Map<string, number>();
-    scopedByYear.forEach((service) => grouped.set(service.competence_month, (grouped.get(service.competence_month) ?? 0) + 1));
-    return Array.from(grouped.entries()).map(([competence, count]) => ({ competence, count }));
-  }, [scopedByYear]);
-
-  const totalCelebration = useMemo(() => {
-    const grouped = new Map<string, { firstQuarter: number; secondQuarter: number }>();
-
-    servicesByCompetence.forEach(({ competence, count }) => {
-      const match = competence.match(/^(.*)\.(1Q|2Q)$/i);
-      if (!match) return;
-
-      const [, baseCompetence, quarter] = match;
-      const current = grouped.get(baseCompetence) ?? { firstQuarter: 0, secondQuarter: 0 };
-
-      if (quarter.toUpperCase() === '1Q') {
-        current.firstQuarter = count;
-      } else {
-        current.secondQuarter = count;
-      }
-
-      grouped.set(baseCompetence, current);
+    periodServices.forEach((service) => {
+      grouped.set(service.service_type, (grouped.get(service.service_type) ?? 0) + 1);
     });
 
-    const combo = Array.from(grouped.entries()).find(([, quarters]) => quarters.firstQuarter >= 80 && quarters.secondQuarter >= 80);
+    return Array.from(grouped.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((left, right) => right.count - left.count);
+  }, [periodServices]);
 
-    if (!combo) return null;
+  const filteredServices = useMemo(() => {
+    return periodServices.filter((service) => !typeFilter || service.service_type === typeFilter);
+  }, [periodServices, typeFilter]);
 
-    const [baseCompetence, quarters] = combo;
-    return {
-      baseCompetence,
-      firstQuarter: quarters.firstQuarter,
-      secondQuarter: quarters.secondQuarter,
-    };
-  }, [servicesByCompetence]);
+  const monthlyWorkHours = useMemo(
+    () => workHours.filter((item) => monthKeyFromDate(item.date) === competenceMonth),
+    [competenceMonth, workHours],
+  );
+
+  const periodWorkHours = useMemo(
+    () => monthlyWorkHours.filter((item) => matchesPeriod(item.date, periodFilter)),
+    [monthlyWorkHours, periodFilter],
+  );
+
+  const q1ServicesCount = monthlyServices.filter((service) => getServicePeriod(service) === 'Q1').length;
+  const q2ServicesCount = monthlyServices.filter((service) => getServicePeriod(service) === 'Q2').length;
+  const currentPayroll = payroll.find((item) => item.competence_month === competenceMonth);
+  const nextSchedule = useMemo(() => {
+    const todayKey = getDateKey(new Date());
+
+    return schedule
+      .filter((item) => item.status !== 'cancelled' && getDateKey(item.date) >= todayKey)
+      .sort((left, right) => {
+        const dateComparison = getDateKey(left.date).localeCompare(getDateKey(right.date));
+        if (dateComparison !== 0) return dateComparison;
+        return String(left.start_time ?? '').localeCompare(String(right.start_time ?? ''));
+      })[0];
+  }, [schedule]);
 
   const servicesPageCount = Math.max(Math.ceil(filteredServices.length / SERVICES_PAGE_SIZE), 1);
   const visibleServiceRows = useMemo(() => {
@@ -154,251 +276,191 @@ export default function TechnicianDashboard() {
 
   useEffect(() => {
     setServicesPage(1);
-  }, [competenceFilter, filteredServices.length, typeFilter, yearFilter]);
+  }, [competenceMonth, filteredServices.length, periodFilter, typeFilter]);
 
-  useEffect(() => {
-    if (!user || !servicesLoaded || fireworksCheckedRef.current) return;
-
-    fireworksCheckedRef.current = true;
-
-    if (scopedByYear.length < 160) return;
-
-    const storageKey = `dashboard-fireworks-meta160-shown:${user.userId}`;
-
-    try {
-      if (window.localStorage.getItem(storageKey) === '1') return;
-
-      window.localStorage.setItem(storageKey, '1');
-    } catch {
-      // If storage is blocked, still celebrate without interrupting the dashboard.
-    }
-
-    setShowFireworks(true);
-  }, [scopedByYear.length, servicesLoaded, user]);
-
-  if (loading || !user || !servicesLoaded) {
+  if (loading || isDataLoading || !user) {
     return <LoadingState />;
   }
 
-  const payrollSummary = visiblePayroll[0];
-  const totalHours = visibleWorkHours.reduce((total, item) => total + Number(item.hours_worked), 0);
-  const hoursDifference = totalHours - MONTHLY_HOURS_TARGET;
-  const hoursTone = totalHours >= MONTHLY_HOURS_TARGET ? 'success' : totalHours >= MONTHLY_HOURS_WARNING_FLOOR ? 'warning' : 'danger';
-  const hoursHint =
-    hoursDifference >= 0
-      ? `${formatHours(MONTHLY_HOURS_TARGET)} no total • ${formatHours(hoursDifference)} acima`
-      : `${formatHours(MONTHLY_HOURS_TARGET)} no total • faltam ${formatHours(Math.abs(hoursDifference))}`;
-  const years = Array.from(new Set(visibleServices.map((service) => yearFromCompetence(service.competence_month)))).sort();
-  const competences = Array.from(new Set(scopedByYear.map((service) => service.competence_month)));
   const technicianName = user.name || user.email;
-  const netTotal = Number(payrollSummary?.net_total ?? 0);
-  const benefitsTotal = Number(payrollSummary?.va_deduction ?? 0) + Number(payrollSummary?.vr_deduction ?? 0);
-  const payrollNetTotal = netTotal + benefitsTotal;
-  const breakdown = [
-    { label: 'Salário base', value: Number(payrollSummary?.base_salary ?? 0), sign: 'plus' },
-    { label: 'Comissão', value: Number(payrollSummary?.commission_value ?? 0), sign: 'plus' },
-    { label: 'Hora extra', value: Number(payrollSummary?.extra_hours_value ?? 0), sign: 'plus' },
-    { label: 'Adiantamento', value: Number(payrollSummary?.advances_total ?? 0), sign: 'minus' },
-    { label: 'Descontos', value: Number(payrollSummary?.discounts_total ?? 0), sign: 'minus' },
-  ];
+  const payrollClosed = Boolean(currentPayroll);
+  const netTotal = roundCurrency(currentPayroll?.net_total);
+  const periodHours = periodWorkHours.reduce((total, item) => total + moneyValue(item.hours_worked), 0);
+  const monthlyHourBalance = currentPayroll ? moneyValue(currentPayroll.hour_bank_balance) : monthlyWorkHours.reduce((total, item) => total + moneyValue(item.hours_worked), 0);
+  const selectedPeriodLabel = getPeriodLabel(periodFilter);
+  const nextScheduleTime = nextSchedule?.start_time ? formatTime(nextSchedule.start_time) : 'Sem escala';
+  const nextScheduleHint = nextSchedule
+    ? `${formatDate(nextSchedule.date)}${nextSchedule.end_time ? ` • ${formatTimeRange(nextSchedule.start_time, nextSchedule.end_time)}` : ''}`
+    : 'Nenhum registro futuro';
 
   return (
     <AppShell role={user.role} userName={technicianName || user.email}>
-      {showFireworks ? <FireworksOverlay duration={6000} onDone={() => setShowFireworks(false)} /> : null}
-
       <PageHeader
         eyebrow="Dashboard individual"
         title={technicianName}
-        description="Produção, metas, pagamento, banco de horas e agenda em uma única visão."
+        description="Produção, pagamento, banco de horas e próxima escala com dados reais."
       >
-        <StatusBadge tone="success">Dados atualizados</StatusBadge>
+        <StatusBadge tone={payrollClosed ? 'success' : 'warning'}>{payrollClosed ? 'Folha fechada' : 'Folha aguardando'}</StatusBadge>
       </PageHeader>
 
+      {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
+
       <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard title="Em conta" value={formatCurrency(netTotal)} hint="Depósito/PIX da competência" icon={WalletCards} tone="success" />
-        <MetricCard title="Ordens" value={formatNumber(scopedByYear.length)} hint={`${filteredServices.length} no filtro atual`} icon={Wrench} />
-        <MetricCard title="Banco de horas" value={formatHours(totalHours)} hint={hoursHint} icon={Clock3} tone={hoursTone} accentText />
         <MetricCard
-          title="Proxima escala"
-          value={visibleSchedule[0]?.start_time ? formatTime(visibleSchedule[0].start_time) : 'Folga'}
-          hint={visibleSchedule[0] ? formatDate(visibleSchedule[0].date) : 'Sem agenda'}
-          icon={CalendarDays}
+          title="Em conta"
+          value={payrollClosed ? formatCurrency(netTotal) : 'Aguardando...'}
+          hint={payrollClosed ? `Folha ${formatCompetence(competenceMonth)}` : 'Folha ainda não finalizada'}
+          icon={WalletCards}
+          tone={payrollClosed ? 'success' : 'warning'}
         />
+        <MetricCard title="Ordens" value={formatNumber(filteredServices.length)} hint={`${selectedPeriodLabel} no recorte atual`} icon={Wrench} />
+        <MetricCard
+          title="Banco de horas"
+          value={formatHours(periodFilter === 'monthly' ? monthlyHourBalance : periodHours)}
+          hint={periodFilter === 'monthly' && payrollClosed ? 'Saldo da folha fechada' : 'Horas lançadas no recorte'}
+          icon={Clock3}
+          tone="warning"
+          accentText
+        />
+        <MetricCard title="Próxima escala" value={nextScheduleTime} hint={nextScheduleHint} icon={CalendarDays} />
       </div>
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-2">
-        <DataPanel title="Metas por competência" description="Meta 1: 80 OS. Meta 2: 160 OS. Clique em uma competência para filtrar.">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <ProgressGauge
-                title="Total no corte"
-                value={scopedByYear.length}
-                max={Math.max(160, scopedByYear.length)}
-                subtitle="OS no recorte"
-                active={!competenceFilter}
-                celebrationLevel={totalCelebration ? 'mega' : scopedByYear.length >= 80 ? 'goal' : undefined}
-                celebrationLabel={
-                  totalCelebration
-                    ? `${totalCelebration.baseCompetence}: 1Q ${formatNumber(totalCelebration.firstQuarter)} | 2Q ${formatNumber(totalCelebration.secondQuarter)}`
-                    : undefined
-                }
-                onClick={() => setCompetenceFilter(null)}
-              />
+      <div className="mb-5">
+        <DataPanel title="Filtros" description="Escolha a data e o recorte que serão usados nos indicadores, metas e OS.">
+          <div className="grid gap-4 lg:grid-cols-[minmax(16rem,0.5fr)_1fr]">
+            <label className="flex flex-col gap-2">
+              <span className="text-xs font-medium uppercase text-muted-foreground">Data</span>
+              <span className="flex h-12 items-center gap-3 rounded-md border border-border bg-background px-3">
+                <CalendarDays className="h-4 w-4 text-primary" />
+                <select
+                  value={competenceMonth}
+                  onChange={(event) => setCompetenceMonth(event.target.value)}
+                  className="w-full bg-transparent text-sm font-semibold outline-none"
+                >
+                  {competenceOptions.length ? (
+                    competenceOptions.map((competence) => (
+                      <option key={competence} value={competence}>
+                        {formatCompetence(competence)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value={competenceMonth}>{formatCompetence(competenceMonth)}</option>
+                  )}
+                </select>
+              </span>
+            </label>
+
+            <div>
+              <span className="text-xs font-medium uppercase text-muted-foreground">Período</span>
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                {periodOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setPeriodFilter(option.value)}
+                    className={`rounded-md border px-3 py-2 text-left transition ${
+                      periodFilter === option.value ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background hover:bg-secondary'
+                    }`}
+                  >
+                    <span className="block text-sm font-semibold">{option.label}</span>
+                    <span className={`mt-0.5 block text-xs ${periodFilter === option.value ? 'text-primary-foreground/80' : 'text-muted-foreground'}`}>
+                      {option.description}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-            {servicesByCompetence.map((item) => (
-              <ProgressGauge
-                key={item.competence}
-                title={item.competence}
-                value={item.count}
-                celebrationLevel={item.count >= 80 ? 'goal' : undefined}
-                active={competenceFilter === item.competence}
-                onClick={() => setCompetenceFilter(competenceFilter === item.competence ? null : item.competence)}
-              />
-            ))}
+          </div>
+        </DataPanel>
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <DataPanel title="Metas por competência" description="Meta 1: 80 OS. Meta 2: 160 OS. Clique em um card para mudar o período.">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <ProgressGauge
+              title="Mensal"
+              value={monthlyServices.length}
+              max={Math.max(160, monthlyServices.length)}
+              subtitle="OS no mês"
+              active={periodFilter === 'monthly'}
+              celebrationLevel={monthlyServices.length >= 160 ? 'mega' : monthlyServices.length >= 80 ? 'goal' : undefined}
+              onClick={() => setPeriodFilter('monthly')}
+            />
+            <ProgressGauge
+              title="Q1"
+              value={q1ServicesCount}
+              max={Math.max(80, q1ServicesCount)}
+              subtitle="OS no Q1"
+              active={periodFilter === 'Q1'}
+              celebrationLevel={q1ServicesCount >= 80 ? 'goal' : undefined}
+              onClick={() => setPeriodFilter('Q1')}
+            />
+            <ProgressGauge
+              title="Q2"
+              value={q2ServicesCount}
+              max={Math.max(80, q2ServicesCount)}
+              subtitle="OS no Q2"
+              active={periodFilter === 'Q2'}
+              celebrationLevel={q2ServicesCount >= 80 ? 'goal' : undefined}
+              onClick={() => setPeriodFilter('Q2')}
+            />
           </div>
         </DataPanel>
 
-        <DataPanel
-          title="Composição salarial"
-          description="Composição do valor líquido exibido ao colaborador, sem detalhar premiação extraordinária."
-          className="flex h-full flex-col"
-          contentClassName="flex flex-1 flex-col"
-          titleClassName="text-xl"
-          descriptionClassName="text-base"
-        >
-          <div className="flex flex-1 flex-col justify-between gap-5">
-            {breakdown.map((item) => (
-              <div key={item.label} className="flex items-center justify-between border-b border-border py-3 last:border-0">
-                <span className="text-base text-muted-foreground xl:text-lg">{item.label}</span>
-                <span className={`text-lg font-black xl:text-xl ${item.sign === 'minus' ? 'text-rose-600' : 'text-foreground'}`}>
-                  {item.sign === 'minus' ? '-' : ''}
-                  {formatCurrency(item.value)}
-                </span>
+        <DataPanel title="Serviços por tipo" description="Clique em uma barra para refinar o recorte.">
+          {servicesByType.length ? (
+            <>
+              <div className="h-84">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={servicesByType} margin={{ left: -24, right: 12, bottom: 28 }}>
+                    <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-25} textAnchor="end" height={82} />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Bar dataKey="count" radius={[4, 4, 0, 0]} onClick={(data) => setTypeFilter(typeFilter === data.name ? null : data.name)}>
+                      {servicesByType.map((_, index) => (
+                        <Cell key={`bar-${index}`} fill={chartColors[index % chartColors.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
-            ))}
-            <div className="flex items-center justify-between rounded-md bg-secondary p-5">
-              <span className="text-lg font-black">Em conta</span>
-              <span className="text-2xl font-black text-primary">{formatCurrency(netTotal)}</span>
-            </div>
-            <div className="flex items-center justify-between rounded-md bg-secondary p-5">
-              <span className="text-lg font-black">Cartões VA + VR</span>
-              <span className="text-2xl font-black text-primary">{formatCurrency(benefitsTotal)}</span>
-            </div>
-            <div className="flex items-center justify-between rounded-md bg-secondary p-5">
-              <span className="text-lg font-black">Total com benefícios</span>
-              <span className="text-2xl font-black text-primary">{formatCurrency(payrollNetTotal)}</span>
-            </div>
-          </div>
+              {typeFilter ? (
+                <button type="button" onClick={() => setTypeFilter(null)} className="mt-3 rounded-md border border-border px-3 py-2 text-sm">
+                  Limpar filtro de tipo: {typeFilter}
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <EmptyState icon={Wrench} title="Sem tipos no recorte" description="Não há OS para agrupar nesse período." />
+          )}
         </DataPanel>
       </div>
 
       <div className="mt-5">
-        <DataPanel title="Filtros de competência">
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="w-24 text-xs font-semibold uppercase text-muted-foreground">Ano</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setYearFilter(null);
-                  setCompetenceFilter(null);
-                }}
-                className={`rounded-md border px-3 py-1.5 text-sm ${!yearFilter ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background'}`}
-              >
-                Todos
-              </button>
-              {years.map((year) => (
-                <button
-                  key={year}
-                  type="button"
-                  onClick={() => {
-                    setYearFilter(year);
-                    setCompetenceFilter(null);
-                  }}
-                  className={`rounded-md border px-3 py-1.5 text-sm ${yearFilter === year ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background'}`}
-                >
-                  {year}
-                </button>
-              ))}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="w-24 text-xs font-semibold uppercase text-muted-foreground">Competência</span>
-              <button
-                type="button"
-                onClick={() => setCompetenceFilter(null)}
-                className={`rounded-md border px-3 py-1.5 text-sm ${!competenceFilter ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background'}`}
-              >
-                Todas
-              </button>
-              {competences.map((competence) => (
-                <button
-                  key={competence}
-                  type="button"
-                  onClick={() => setCompetenceFilter(competence)}
-                  className={`rounded-md border px-3 py-1.5 text-sm ${competenceFilter === competence ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background'}`}
-                >
-                  {competence}
-                </button>
-              ))}
-            </div>
-          </div>
-        </DataPanel>
-      </div>
-
-      <div className="mt-5 grid gap-5 xl:grid-cols-2">
-        <DataPanel title="Serviços por tipo" description="Clique em uma barra para refinar o recorte." className="flex h-full flex-col" contentClassName="flex flex-1 flex-col">
-          <div className="flex flex-col gap-4">
-            <div className="mx-auto h-72 w-full max-w-xl">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={servicesByType} dataKey="count" nameKey="name" innerRadius={46} outerRadius={78}>
-                    {servicesByType.map((_, index) => (
-                      <Cell key={`pie-${index}`} fill={chartColors[index % chartColors.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={servicesByType} margin={{ left: -24, right: 12 }}>
-                  <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} angle={-25} textAnchor="end" height={76} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Bar dataKey="count" radius={[4, 4, 0, 0]} onClick={(data) => setTypeFilter(typeFilter === data.name ? null : data.name)}>
-                    {servicesByType.map((_, index) => (
-                      <Cell key={`bar-${index}`} fill={chartColors[index % chartColors.length]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-          {typeFilter ? (
-            <button type="button" onClick={() => setTypeFilter(null)} className="mt-3 rounded-md border border-border px-3 py-2 text-sm">
-              Limpar filtro de tipo: {typeFilter}
-            </button>
-          ) : null}
-        </DataPanel>
-
-        <DataPanel title="Serviços realizados" description="OS realizadas no recorte atual." className="flex h-full flex-col" contentClassName="flex flex-1 flex-col">
+        <DataPanel title="Serviços realizados" description="OS realizadas no recorte atual.">
           {filteredServices.length ? (
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border">
-              <div className="min-h-0 flex-1 overflow-auto">
-                <table className="w-full min-w-130 border-collapse text-sm">
-                  <thead className="sticky top-0 z-10 bg-slate-100 text-xs font-black uppercase tracking-[0.08em] text-foreground">
+            <div className="overflow-hidden rounded-md border border-border">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-180 text-sm">
+                  <thead className="bg-secondary text-xs uppercase text-muted-foreground">
                     <tr>
-                      <th className="px-4 py-3 text-center">Tipo Serv</th>
-                      <th className="px-4 py-3 text-center">Cod Serv</th>
+                      <th className="px-4 py-3 text-left font-medium">OS</th>
+                      <th className="px-4 py-3 text-left font-medium">Tipo</th>
+                      <th className="px-4 py-3 text-left font-medium">Período</th>
+                      <th className="px-4 py-3 text-left font-medium">Data</th>
+                      <th className="px-4 py-3 text-left font-medium">Hora</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleServiceRows.map((service, index) => (
-                      <tr key={service.id} className={index % 2 === 0 ? 'bg-white' : 'bg-slate-100'}>
-                        <td className="px-4 py-2 text-center text-muted-foreground">{service.service_type}</td>
-                        <td className="px-4 py-2 text-center font-medium text-muted-foreground">{service.order_code}</td>
+                    {visibleServiceRows.map((service) => (
+                      <tr key={service.id} className="border-t border-border">
+                        <td className="px-4 py-3 font-medium">{service.order_code}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{service.service_type}</td>
+                        <td className="px-4 py-3">
+                          <StatusBadge tone="info">{getServicePeriod(service)}</StatusBadge>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{formatDate(service.date_performed)}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{service.time_performed ? formatTime(service.time_performed) : '-'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -429,47 +491,8 @@ export default function TechnicianDashboard() {
               </div>
             </div>
           ) : (
-            <EmptyState icon={FileText} title="Nenhum serviço no recorte" description="Ajuste os filtros para visualizar as OS realizadas." />
+            <EmptyState icon={FileText} title="Nenhuma OS no recorte" description="Altere a competência, período ou tipo para visualizar serviços reais." />
           )}
-        </DataPanel>
-      </div>
-
-      <div className="mt-5 grid gap-5 lg:grid-cols-2">
-        <DataPanel title="Agenda curta" description="Próximos registros de escala e folga.">
-          <div className="space-y-3">
-            {visibleSchedule.slice(0, 5).map((item) => (
-              <div key={item.id} className="flex items-center justify-between border-b border-border pb-3 last:border-0 last:pb-0">
-                <div>
-                  <p className="text-sm font-medium">{formatDate(item.date)}</p>
-                  <p className="text-xs text-muted-foreground">{item.start_time ? formatTimeRange(item.start_time, item.end_time) : item.notes}</p>
-                </div>
-                <StatusBadge tone={item.status === 'scheduled' ? 'info' : item.status === 'completed' ? 'success' : 'warning'}>
-                  {item.status === 'cancelled' ? 'Folga' : item.status === 'completed' ? 'Concluído' : 'Escalado'}
-                </StatusBadge>
-              </div>
-            ))}
-          </div>
-        </DataPanel>
-
-        <DataPanel title="Resumo pessoal" description="Leitura rápida para o colaborador.">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-md border border-border bg-background p-3">
-              <p className="text-xs text-muted-foreground">Nome exibido</p>
-              <p className="mt-1 font-semibold">{compactName(technicianName)}</p>
-            </div>
-            <div className="rounded-md border border-border bg-background p-3">
-              <p className="text-xs text-muted-foreground">Tipo mais frequente</p>
-              <p className="mt-1 font-semibold">{servicesByType[0]?.name ?? '-'}</p>
-            </div>
-            <div className="rounded-md border border-border bg-background p-3">
-              <p className="text-xs text-muted-foreground">Competências</p>
-              <p className="mt-1 font-semibold">{competences.length}</p>
-            </div>
-            <div className="rounded-md border border-border bg-background p-3">
-              <p className="text-xs text-muted-foreground">Meta principal</p>
-              <p className="mt-1 font-semibold">{scopedByYear.length >= 160 ? 'Meta 2 batida' : scopedByYear.length >= 80 ? 'Meta 1 batida' : 'Em andamento'}</p>
-            </div>
-          </div>
         </DataPanel>
       </div>
     </AppShell>
