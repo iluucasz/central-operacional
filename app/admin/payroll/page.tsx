@@ -63,6 +63,7 @@ type PayrollRow = {
   technician: Technician;
   payrollItem?: Payroll;
   hasMonthlyActivity: boolean;
+  hasMonthlyObligation: boolean;
   serviceCount: number;
   totalServicesValue: number;
   profitValue: number;
@@ -506,6 +507,7 @@ export default function PayrollPage() {
         (discount) => discount.technician_id === technician.id && discount.competence_month === competenceMonth,
       );
       const hasMonthlyActivity = Boolean(payrollItem || technicianServices.length > 0 || technicianDiscounts.length > 0);
+      const hasMonthlyObligation = Boolean(hasMonthlyActivity || technician.status === 'active');
       const serviceFortnightSummary = createServiceFortnightSummary(technicianServices);
       const servicesTotal = roundMoney(technicianServices.reduce((total, service) => total + moneyValue(service.value), 0));
       const serviceCount = technicianServices.length;
@@ -537,22 +539,23 @@ export default function PayrollPage() {
       const projectedCashNetTotal = payrollItem
         ? roundMoney(payrollItem.net_total)
         : roundMoney(baseSalary + commission + extraHoursValue + extraordinaryAward - totalDeductions);
-      const cashNetTotal = hasMonthlyActivity ? projectedCashNetTotal : 0;
-      const displayBenefitsTotal = hasMonthlyActivity ? benefitsTotal : 0;
-      const displayCommission = hasMonthlyActivity ? commission : 0;
-      const displayDiscountsTotal = hasMonthlyActivity ? discountsTotal : 0;
-      const displayAdvancesTotal = hasMonthlyActivity ? advancesTotal : 0;
-      const displayTotalDeductions = hasMonthlyActivity ? totalDeductions : 0;
-      const displayExtraHoursValue = hasMonthlyActivity ? extraHoursValue : 0;
-      const displayExtraordinaryAward = hasMonthlyActivity ? extraordinaryAward : 0;
+      const cashNetTotal = hasMonthlyObligation ? projectedCashNetTotal : 0;
+      const displayBenefitsTotal = hasMonthlyObligation ? benefitsTotal : 0;
+      const displayCommission = hasMonthlyObligation ? commission : 0;
+      const displayDiscountsTotal = hasMonthlyObligation ? discountsTotal : 0;
+      const displayAdvancesTotal = hasMonthlyObligation ? advancesTotal : 0;
+      const displayTotalDeductions = hasMonthlyObligation ? totalDeductions : 0;
+      const displayExtraHoursValue = hasMonthlyObligation ? extraHoursValue : 0;
+      const displayExtraordinaryAward = hasMonthlyObligation ? extraordinaryAward : 0;
 
       return {
         technician,
         payrollItem,
         hasMonthlyActivity,
+        hasMonthlyObligation,
         serviceCount,
         totalServicesValue,
-        profitValue: hasMonthlyActivity ? roundMoney(totalServicesValue - roundMoney(cashNetTotal + displayBenefitsTotal)) : 0,
+        profitValue: hasMonthlyObligation ? roundMoney(totalServicesValue - roundMoney(cashNetTotal + displayBenefitsTotal)) : 0,
         serviceFortnightSummary,
         commissionPercentage,
         baseSalary,
@@ -577,14 +580,15 @@ export default function PayrollPage() {
   });
 
   const rowsWithMonthlyActivity = rows.filter((row) => row.hasMonthlyActivity);
+  const rowsWithMonthlyObligation = rows.filter((row) => row.hasMonthlyObligation);
 
-  const totalCashNet = rowsWithMonthlyActivity.reduce((total, row) => total + row.cashNetTotal, 0);
-  const totalBenefits = rowsWithMonthlyActivity.reduce((total, row) => total + row.benefitsTotal, 0);
-  const totalPayrollNet = rowsWithMonthlyActivity.reduce((total, row) => total + row.payrollNetTotal, 0);
+  const totalCashNet = rowsWithMonthlyObligation.reduce((total, row) => total + row.cashNetTotal, 0);
+  const totalBenefits = rowsWithMonthlyObligation.reduce((total, row) => total + row.benefitsTotal, 0);
+  const totalPayrollNet = rowsWithMonthlyObligation.reduce((total, row) => total + row.payrollNetTotal, 0);
   const totalServiceCount = rowsWithMonthlyActivity.reduce((total, row) => total + row.serviceCount, 0);
   const totalServicesValue = rowsWithMonthlyActivity.reduce((total, row) => total + row.totalServicesValue, 0);
-  const totalProfit = rowsWithMonthlyActivity.reduce((total, row) => total + row.profitValue, 0);
-  const closedCount = rowsWithMonthlyActivity.filter((row) => row.payrollItem).length;
+  const totalProfit = rowsWithMonthlyObligation.reduce((total, row) => total + row.profitValue, 0);
+  const closedCount = rowsWithMonthlyObligation.filter((row) => row.payrollItem).length;
 
   function resetDialogState() {
     setSelectedRow(null);
@@ -743,18 +747,18 @@ export default function PayrollPage() {
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
 
       <div className="mb-4 grid gap-3 xl:grid-cols-7">
-        <MetricCard title="Em conta" value={formatCurrency(totalCashNet)} hint="Pagamento corrente" icon={WalletCards} tone="success" />
-        <MetricCard title="Cartões" value={formatCurrency(totalBenefits)} hint="VR + VA" icon={CreditCard} />
-        <MetricCard title="Líquido da folha" value={formatCurrency(totalPayrollNet)} hint="Em conta + cartões" icon={Calculator} tone="success" />
+        <MetricCard title="Em conta" value={formatCurrency(totalCashNet)} hint="Valor já devido em conta" icon={WalletCards} tone="success" />
+        <MetricCard title="Cartões" value={formatCurrency(totalBenefits)} hint="VR + VA já devidos" icon={CreditCard} />
+        <MetricCard title="Líquido da folha" value={formatCurrency(totalPayrollNet)} hint="Custo total já devido" icon={Calculator} tone="success" />
         <MetricCard title="OS" value={totalServiceCount} hint="Ordens do mês" icon={Calculator} />
         <MetricCard title="Valor bruto" value={formatCurrency(totalServicesValue)} hint="Produção do mês" icon={Calculator} />
         <MetricCard title="Lucro gerado" value={formatCurrency(totalProfit)} hint="Valor bruto - folha total" icon={WalletCards} tone={totalProfit >= 0 ? 'success' : 'danger'} accentText />
-        <MetricCard title="Finalizados" value={`${closedCount}/${rowsWithMonthlyActivity.length}`} hint="Cálculos salvos com movimento" icon={WalletCards} />
+        <MetricCard title="Finalizados" value={`${closedCount}/${rowsWithMonthlyObligation.length}`} hint="Cálculos salvos com custo no mês" icon={WalletCards} />
       </div>
 
       <DataPanel
         title="Competência do fechamento"
-        description="Troque a competência para navegar pelo fechamento. A visão soma apenas técnicos com movimento real ou cálculo salvo no mês." 
+        description="Troque a competência para navegar pelo fechamento. O topo mostra o custo já devido no mês, mesmo quando ainda não existem OS lançadas." 
         className="mb-4"
       >
         <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
@@ -816,16 +820,16 @@ export default function PayrollPage() {
             <div className="rounded-2xl border border-border bg-background p-4 shadow-sm">
               <span className="text-xs font-medium uppercase text-muted-foreground">Leitura da tela</span>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Quando o mês não tiver movimento, os cards ficam zerados. Os técnicos continuam visíveis na tabela, mas aparecem como sem movimento até existir lançamento real.
+                Mesmo sem OS lançadas, o painel já soma salário base e benefícios dos técnicos ativos para mostrar o valor devido no mês.
               </p>
             </div>
           </div>
         </div>
       </DataPanel>
 
-      {!rowsWithMonthlyActivity.length ? (
+      {!rowsWithMonthlyActivity.length && rowsWithMonthlyObligation.length ? (
         <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
-          Esta competência ainda não tem movimento real. Enquanto não houver OS, desconto ou cálculo salvo, os totais do topo ficam zerados.
+          Esta competência ainda não tem OS lançadas. Os totais do topo já mostram o salário fixo e os benefícios que a operação deve pagar no mês.
         </div>
       ) : null}
 
@@ -865,27 +869,29 @@ export default function PayrollPage() {
                   <td className="py-3 pr-4">
                     <div className="font-medium">{row.serviceCount}</div>
                     <div className="text-xs text-muted-foreground">
-                      {row.hasMonthlyActivity ? formatServiceFortnightCountSummary(row.serviceFortnightSummary) : 'Sem movimento na competência'}
+                      {row.hasMonthlyActivity ? formatServiceFortnightCountSummary(row.serviceFortnightSummary) : row.hasMonthlyObligation ? 'Sem OS na competência' : 'Sem movimento na competência'}
                     </div>
                   </td>
                   <td className="py-3 pr-4">
                     <div className="font-medium">{formatCurrency(row.totalServicesValue)}</div>
                     <div className="text-xs text-muted-foreground">
-                      {row.hasMonthlyActivity ? formatServiceFortnightValueSummary(row.serviceFortnightSummary) : 'Sem valor lançado'}
+                      {row.hasMonthlyActivity ? formatServiceFortnightValueSummary(row.serviceFortnightSummary) : row.hasMonthlyObligation ? 'Somente custo fixo' : 'Sem valor lançado'}
                     </div>
                   </td>
-                  <td className="py-3 pr-4">{row.hasMonthlyActivity ? formatCurrency(row.commission) : '-'}</td>
-                  <td className="py-3 pr-4">{row.hasMonthlyActivity ? formatCurrency(row.totalDeductions) : '-'}</td>
-                  <td className="py-3 pr-4 font-semibold">{row.hasMonthlyActivity ? formatCurrency(row.cashNetTotal) : '-'}</td>
-                  <td className="py-3 pr-4 font-semibold">{row.hasMonthlyActivity ? formatCurrency(row.payrollNetTotal) : '-'}</td>
+                  <td className="py-3 pr-4">{row.hasMonthlyObligation ? formatCurrency(row.commission) : '-'}</td>
+                  <td className="py-3 pr-4">{row.hasMonthlyObligation ? formatCurrency(row.totalDeductions) : '-'}</td>
+                  <td className="py-3 pr-4 font-semibold">{row.hasMonthlyObligation ? formatCurrency(row.cashNetTotal) : '-'}</td>
+                  <td className="py-3 pr-4 font-semibold">{row.hasMonthlyObligation ? formatCurrency(row.payrollNetTotal) : '-'}</td>
                   <td className={`py-3 pr-4 font-semibold ${row.profitValue >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                    {row.hasMonthlyActivity ? formatCurrency(row.profitValue) : '-'}
+                    {row.hasMonthlyObligation ? formatCurrency(row.profitValue) : '-'}
                   </td>
                   <td className="py-3 pr-4">
                     {row.payrollItem ? (
                       <StatusBadge tone="success">Cálculo salvo</StatusBadge>
                     ) : row.hasMonthlyActivity ? (
                       <StatusBadge tone="warning">Não salvo</StatusBadge>
+                    ) : row.hasMonthlyObligation ? (
+                      <StatusBadge tone="info">Custo fixo</StatusBadge>
                     ) : (
                       <StatusBadge tone="neutral">Sem movimento</StatusBadge>
                     )}
@@ -921,7 +927,7 @@ export default function PayrollPage() {
             {draftError ? <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{draftError}</div> : null}
             {selectedRow && selectedRow.serviceCount === 0 ? (
               <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                Existem OS cadastradas em Serviços, mas nenhuma está vinculada a este técnico nesta competência. Confira o técnico e a data da OS.
+                Não há OS lançadas para este técnico nesta competência. A prévia abaixo já considera salário base, VR, VA e demais valores fixos do mês.
               </div>
             ) : null}
 
