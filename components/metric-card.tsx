@@ -6,6 +6,7 @@ interface MetricCardProps {
   hint?: string;
   icon: LucideIcon;
   tone?: 'default' | 'success' | 'warning' | 'danger';
+  hintTone?: 'default' | 'success' | 'warning' | 'danger';
   accentText?: boolean;
 }
 
@@ -30,7 +31,13 @@ const toneHintClasses = {
   danger: 'text-rose-700/90',
 };
 
-export function MetricCard({ title, value, hint, icon: Icon, tone = 'default', accentText = false }: MetricCardProps) {
+export function MetricCard({ title, value, hint, icon: Icon, tone = 'default', hintTone, accentText = false }: MetricCardProps) {
+  const resolvedHintClass = hintTone
+    ? toneHintClasses[hintTone]
+    : accentText
+      ? toneHintClasses[tone]
+      : 'text-muted-foreground';
+
   return (
     <section className="rounded-md border border-border bg-card p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -42,7 +49,7 @@ export function MetricCard({ title, value, hint, icon: Icon, tone = 'default', a
           <Icon className="h-5 w-5" />
         </div>
       </div>
-      {hint ? <p className={`mt-1 text-xs ${accentText ? toneHintClasses[tone] : 'text-muted-foreground'}`}>{hint}</p> : null}
+      {hint ? <p className={`mt-1 text-xs ${resolvedHintClass}`}>{hint}</p> : null}
     </section>
   );
 }

@@ -59,8 +59,8 @@ export async function GET(request: NextRequest) {
       params.push(technicianId || auth.technicianId || auth.userId);
     }
 
-    if (month && auth.role === 'admin') {
-      query += params.length > 0 ? ` AND competence_month = $${params.length + 1}` : ` WHERE competence_month = $1`;
+    if (month) {
+      query += params.length > 0 ? ` AND TO_CHAR(date::date, 'YYYY-MM') = $${params.length + 1}` : ` WHERE TO_CHAR(date::date, 'YYYY-MM') = $1`;
       params.push(month);
     }
 

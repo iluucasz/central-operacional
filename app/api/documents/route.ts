@@ -1,15 +1,14 @@
 import { randomUUID } from 'crypto';
-import { mkdir, readFile, writeFile } from 'fs/promises';
+import { mkdir, writeFile } from 'fs/promises';
 import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
-import { demoDocuments } from '@/lib/demo-data';
-import type { LibraryDocument } from '@/lib/types';
+import { sql } from '@/lib/db';
+import { ensureLibrarySchema } from '@/lib/library-schema';
 
 export const runtime = 'nodejs';
 
 const uploadsDir = path.join(process.cwd(), 'public', 'uploads', 'library');
-const metadataPath = path.join(uploadsDir, 'documents.json');
 
 function normalizeDocumentAudience(value: string | null | undefined) {
   const normalized = String(value ?? '')
@@ -40,76 +39,144 @@ function sanitizeFileName(value: string) {
     .toLowerCase();
 }
 
-async function readDocuments(): Promise<LibraryDocument[]> {
-  try {
-    const content = await readFile(metadataPath, 'utf8');
-    const documents = JSON.parse(content) as LibraryDocument[];
-    return documents.length ? documents : demoDocuments;
-  } catch {
-    return demoDocuments;
-  }
-}
+type DocumentAuthScope = {
+  role: 'admin' | 'technician';
+  technicianId?: string;
+};
 
-async function writeDocuments(documents: LibraryDocument[]) {
-  await mkdir(uploadsDir, { recursive: true });
-  await writeFile(metadataPath, JSON.stringify(documents, null, 2), 'utf8');
+async function listDocuments(scope: DocumentAuthScope) {
+  const conditions: string[] = [];
+  const params: string[] = [];
+
+  if (scope.role !== 'admin') {
+    params.push(scope.technicianId ?? '');
+    conditions.push(`d.audience <> 'Administrativo'`);
+    conditions.push(`(d.audience <> 'Individual' OR d.technician_id = $${params.length})`);
+  }
+
+  const query = `
+    SELECT
+      d.id,
+      d.title,
+      d.category,
+      d.audience,
+      d.technician_id,
+      t.name AS "technician_name",
+      TO_CHAR(d.updated_at::date, 'YYYY-MM-DD') AS "updatedAt",
+      d.type,
+      d.url,
+      d.uploaded_by AS "uploadedBy"
+    FROM library_documents d
+    LEFT JOIN technicians t ON t.id::text = d.technician_id
+    ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+    ORDER BY d.updated_at DESC, d.created_at DESC
+  `;
+
+  return sql.query(query, params);
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await verifyAuth(request);
-  if (!auth) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  try {
+    const auth = await verifyAuth(request);
+    if (!auth) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    await ensureLibrarySchema();
+
+    const documents = await listDocuments({ role: auth.role, technicianId: auth.technicianId || auth.userId });
+    return NextResponse.json({ documents });
+  } catch (error) {
+    console.error('[documents] Get documents error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
-
-  const documents = await readDocuments();
-  const visibleDocuments = auth.role === 'admin'
-    ? documents
-    : documents.filter((document) => normalizeDocumentAudience(document.audience) !== 'Administrativo');
-
-  return NextResponse.json({ documents: visibleDocuments });
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await verifyAuth(request);
-  if (!auth) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  try {
+    const auth = await verifyAuth(request);
+    if (!auth) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (auth.role !== 'admin') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    await ensureLibrarySchema();
+
+    const formData = await request.formData();
+    const file = formData.get('file');
+
+    if (!(file instanceof File) || file.type !== 'application/pdf') {
+      return NextResponse.json({ error: 'Envie um arquivo PDF válido.' }, { status: 400 });
+    }
+
+    const id = randomUUID();
+    const title = String(formData.get('title') || file.name.replace(/\.pdf$/i, '') || 'Documento').trim();
+    const category = String(formData.get('category') || 'Não classificado').trim() || 'Não classificado';
+    const audience = normalizeDocumentAudience(String(formData.get('audience') || 'Global'));
+    const technicianId = String(formData.get('technician_id') || '').trim();
+
+    let targetTechnicianId: string | null = null;
+    if (audience === 'Individual') {
+      if (!technicianId) {
+        return NextResponse.json({ error: 'Selecione o técnico destinatário do documento individual.' }, { status: 400 });
+      }
+
+      const technicians = await sql`
+        SELECT id
+        FROM technicians
+        WHERE id::text = ${technicianId}
+        LIMIT 1
+      `;
+
+      if (!technicians.length) {
+        return NextResponse.json({ error: 'Técnico destinatário não encontrado.' }, { status: 404 });
+      }
+
+      targetTechnicianId = String(technicians[0].id);
+    }
+
+    await mkdir(uploadsDir, { recursive: true });
+
+    const safeName = sanitizeFileName(file.name || `documento-${id}.pdf`) || `documento-${id}.pdf`;
+    const fileName = `${id}-${safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`}`;
+    const filePath = path.join(uploadsDir, fileName);
+    const buffer = Buffer.from(await file.arrayBuffer());
+
+    await writeFile(filePath, buffer);
+
+    const url = `/uploads/library/${fileName}`;
+
+    const result = await sql`
+      INSERT INTO library_documents (
+        id, title, category, audience, technician_id, type, url, file_name, file_size, uploaded_by
+      )
+      VALUES (
+        ${id}, ${title}, ${category}, ${audience}, ${targetTechnicianId}, 'PDF', ${url}, ${fileName}, ${file.size}, ${auth.email}
+      )
+      RETURNING
+        id,
+        title,
+        category,
+        audience,
+        technician_id,
+        (
+          SELECT name
+          FROM technicians
+          WHERE technicians.id::text = library_documents.technician_id
+          LIMIT 1
+        ) AS "technician_name",
+        TO_CHAR(updated_at::date, 'YYYY-MM-DD') AS "updatedAt",
+        type,
+        url,
+        uploaded_by AS "uploadedBy"
+    `;
+
+    return NextResponse.json(result[0], { status: 201 });
+  } catch (error) {
+    console.error('[documents] Create document error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
-
-  if (auth.role !== 'admin') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
-  const formData = await request.formData();
-  const file = formData.get('file');
-
-  if (!(file instanceof File) || file.type !== 'application/pdf') {
-    return NextResponse.json({ error: 'PDF file is required' }, { status: 400 });
-  }
-
-  await mkdir(uploadsDir, { recursive: true });
-
-  const id = randomUUID();
-  const safeName = sanitizeFileName(file.name || `documento-${id}.pdf`) || `documento-${id}.pdf`;
-  const fileName = `${id}-${safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`}`;
-  const filePath = path.join(uploadsDir, fileName);
-  const buffer = Buffer.from(await file.arrayBuffer());
-
-  await writeFile(filePath, buffer);
-
-  const document: LibraryDocument = {
-    id,
-    title: String(formData.get('title') || file.name.replace(/\.pdf$/i, '') || 'Documento'),
-    category: String(formData.get('category') || 'Não classificado'),
-    audience: normalizeDocumentAudience(String(formData.get('audience') || 'Global')),
-    updatedAt: new Date().toISOString().slice(0, 10),
-    type: 'PDF',
-    url: `/uploads/library/${fileName}`,
-    uploadedBy: auth.email,
-  };
-
-  const documents = await readDocuments();
-  const nextDocuments = [document, ...documents.filter((item) => item.id !== document.id)];
-  await writeDocuments(nextDocuments);
-
-  return NextResponse.json(document, { status: 201 });
 }

@@ -1,0 +1,9 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^pnpm exec next telemetry disable$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "Get-Command": true
+    }
+}

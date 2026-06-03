@@ -1,4 +1,5 @@
 import { neon } from '@neondatabase/serverless';
+import { STANDARD_HOURS_PER_MONTH } from './hour-bank';
 
 const sql = neon(process.env.DATABASE_URL!);
 const DEFAULT_BASE_SALARY = 2664.53;
@@ -233,15 +234,13 @@ export async function calculateTotalHours(
 
 /**
  * Calculate extra hours and hour bank balance
- * Standard is 8 hours/day * 22 working days = 176 hours/month
+ * Standard month target used by payroll and hour bank
  */
 export async function calculateHourBank(
   technicianId: string,
   competenceMonth: string,
   totalHours: number
 ): Promise<{ extra_hours: number; bank_balance: number }> {
-  const STANDARD_HOURS_PER_MONTH = 176;
-
   const extraHours = Math.max(0, totalHours - STANDARD_HOURS_PER_MONTH);
 
   // Get current bank balance
@@ -324,9 +323,7 @@ export async function calculateExtraHoursValue(
   extraHours: number,
   baseSalary: number
 ): Promise<number> {
-  // Assume 22 working days * 8 hours = 176 hours per month
-  const HOURS_PER_MONTH = 176;
-  const hourlyRate = baseSalary / HOURS_PER_MONTH;
+  const hourlyRate = baseSalary / STANDARD_HOURS_PER_MONTH;
   const OVERTIME_MULTIPLIER = 1.5;
 
   return roundCurrency(extraHours * hourlyRate * OVERTIME_MULTIPLIER);

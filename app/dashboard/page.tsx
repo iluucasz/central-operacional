@@ -12,6 +12,7 @@ import { PageHeader } from '@/components/page-header';
 import { ProgressGauge } from '@/components/progress-gauge';
 import { StatusBadge } from '@/components/status-badge';
 import { formatCurrency, formatDate, formatHours, formatNumber, formatTime, formatTimeRange, monthKeyFromDate, resolveCompetenceMonth } from '@/lib/formatters';
+import { STANDARD_HOURS_PER_MONTH } from '@/lib/hour-bank';
 import type { Payroll, Schedule, Service, ServiceFortnight, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
@@ -270,7 +271,16 @@ export default function TechnicianDashboard() {
   const payrollClosed = Boolean(currentPayroll);
   const netTotal = roundCurrency(currentPayroll?.net_total);
   const periodHours = periodWorkHours.reduce((total, item) => total + moneyValue(item.hours_worked), 0);
-  const monthlyHourBalance = currentPayroll ? moneyValue(currentPayroll.hour_bank_balance) : monthlyWorkHours.reduce((total, item) => total + moneyValue(item.hours_worked), 0);
+  const monthlyHoursTotal = monthlyWorkHours.reduce((total, item) => total + moneyValue(item.hours_worked), 0);
+  const monthlyHoursDebt = Math.max(0, STANDARD_HOURS_PER_MONTH - monthlyHoursTotal);
+  const monthlyHoursExtra = Math.max(0, monthlyHoursTotal - STANDARD_HOURS_PER_MONTH);
+  const monthlyHoursHint = periodFilter === 'monthly'
+    ? monthlyHoursDebt > 0
+      ? `Fez ${formatHours(monthlyHoursTotal)} • Devendo ${formatHours(monthlyHoursDebt)} • Meta ${formatHours(STANDARD_HOURS_PER_MONTH)}`
+      : monthlyHoursExtra > 0
+        ? `Fez ${formatHours(monthlyHoursTotal)} • ${formatHours(monthlyHoursExtra)} acima da meta de ${formatHours(STANDARD_HOURS_PER_MONTH)}`
+        : `Fez ${formatHours(monthlyHoursTotal)} • Meta mensal de ${formatHours(STANDARD_HOURS_PER_MONTH)} concluída`
+    : 'Horas lançadas no recorte';
   const selectedPeriodLabel = getPeriodLabel(periodFilter);
   const nextScheduleTime = nextSchedule?.start_time ? formatTime(nextSchedule.start_time) : 'Sem escala';
   const nextScheduleHint = nextSchedule
@@ -299,9 +309,10 @@ export default function TechnicianDashboard() {
         />
         <MetricCard title="Ordens" value={formatNumber(filteredServices.length)} hint={`${selectedPeriodLabel} no recorte atual`} icon={Wrench} />
         <MetricCard
-          title="Banco de horas"
-          value={formatHours(periodFilter === 'monthly' ? monthlyHourBalance : periodHours)}
-          hint={periodFilter === 'monthly' && payrollClosed ? 'Saldo da folha fechada' : 'Horas lançadas no recorte'}
+          title="Horas realizadas"
+          value={formatHours(periodFilter === 'monthly' ? monthlyHoursTotal : periodHours)}
+          hint={monthlyHoursHint}
+          hintTone={periodFilter === 'monthly' && monthlyHoursDebt > 0 ? 'danger' : 'warning'}
           icon={Clock3}
           tone="warning"
           accentText

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Clock3, Search } from 'lucide-react';
+import { CalendarDays, Clock3, Search } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
@@ -9,12 +9,44 @@ import { LoadingState } from '@/components/loading-state';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
-import { formatDate, formatHours, formatTime, formatTimeRange, normalizeText } from '@/lib/formatters';
+import { formatDate, formatHours, formatTime, formatTimeRange, monthKeyFromDate, normalizeText, resolveCompetenceMonth } from '@/lib/formatters';
+import { STANDARD_HOURS_PER_MONTH } from '@/lib/hour-bank';
 import type { Payroll, Schedule, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
-const MONTHLY_HOURS_TARGET = 220;
+const defaultCompetenceMonth = new Date().toISOString().slice(0, 7);
+const MONTHLY_HOURS_TARGET = STANDARD_HOURS_PER_MONTH;
 const MONTHLY_HOURS_WARNING_FLOOR = 200;
+const monthNames = [
+  'Janeiro',
+  'Fevereiro',
+  'Março',
+  'Abril',
+  'Maio',
+  'Junho',
+  'Julho',
+  'Agosto',
+  'Setembro',
+  'Outubro',
+  'Novembro',
+  'Dezembro',
+];
+
+function formatCompetenceLabel(value: string) {
+  const [year, month] = value.split('-');
+  const monthNumber = Number(month);
+
+  if (!year || !month || !monthNames[monthNumber - 1]) {
+    return value || 'Sem competência';
+  }
+
+  return `${month.padStart(2, '0')}/${year} - ${monthNames[monthNumber - 1]}`;
+}
+
+function moneyValue(value: number | string | null | undefined) {
+  const numericValue = Number(value ?? 0);
+  return Number.isFinite(numericValue) ? numericValue : 0;
+}
 
 export default function TechnicianHoursPage() {
   const { user, loading } = useAppSession();
@@ -23,6 +55,7 @@ export default function TechnicianHoursPage() {
   const [schedule, setSchedule] = useState<Schedule[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [dataError, setDataError] = useState('');
+  const [competenceMonth, setCompetenceMonth] = useState(defaultCompetenceMonth);
   const [query, setQuery] = useState('');
 
   useEffect(() => {
@@ -79,63 +112,129 @@ export default function TechnicianHoursPage() {
     };
   }, [user]);
 
-  const filteredWorkHours = useMemo(() => {
-    return workHours.filter((item) => {
+  const competenceOptions = useMemo(() => {
+    const values = new Set<string>([defaultCompetenceMonth]);
+
+    workHours.forEach((item) => {
+      const competence = monthKeyFromDate(item.date);
+      if (competence) values.add(competence);
+    });
+
+    payroll.forEach((item) => {
+      const competence = resolveCompetenceMonth(item.competence_month);
+      if (competence) values.add(competence);
+    });
+
+    schedule.forEach((item) => {
+      const competence = monthKeyFromDate(item.date);
+      if (competence) values.add(competence);
+    });
+
+    return Array.from(values).sort((left, right) => right.localeCompare(left, 'pt-BR'));
+  }, [payroll, schedule, workHours]);
+
+  useEffect(() => {
+    if (!competenceOptions.length) return;
+    if (!competenceOptions.includes(competenceMonth)) {
+      setCompetenceMonth(competenceOptions[0]);
+    }
+  }, [competenceMonth, competenceOptions]);
+
+  const monthlyWorkHours = useMemo(
+    () => workHours.filter((item) => monthKeyFromDate(item.date) === competenceMonth),
+    [competenceMonth, workHours],
+  );
+
+  const visibleWorkHours = useMemo(() => {
+    return monthlyWorkHours.filter((item) => {
       const haystack = normalizeText(`${item.date} ${item.week_number} ${item.month}`);
       return !query || haystack.includes(normalizeText(query));
     });
-  }, [query, workHours]);
+  }, [monthlyWorkHours, query]);
+
+  const currentPayroll = payroll.find((item) => resolveCompetenceMonth(item.competence_month) === competenceMonth);
+  const payrollClosed = Boolean(currentPayroll);
+  const monthlySchedule = useMemo(() => {
+    return schedule
+      .filter((item) => item.status !== 'cancelled' && monthKeyFromDate(item.date) === competenceMonth)
+      .sort((left, right) => {
+        const dateComparison = String(left.date ?? '').localeCompare(String(right.date ?? ''));
+        if (dateComparison !== 0) return dateComparison;
+        return String(left.start_time ?? '').localeCompare(String(right.start_time ?? ''));
+      });
+  }, [competenceMonth, schedule]);
 
   if (loading || isDataLoading || !user) {
     return <LoadingState />;
   }
 
-  const totalHours = filteredWorkHours.reduce((total, item) => total + Number(item.hours_worked), 0);
+  const totalHours = monthlyWorkHours.reduce((total, item) => total + Number(item.hours_worked), 0);
   const balance = totalHours - MONTHLY_HOURS_TARGET;
   const hoursTone = totalHours >= MONTHLY_HOURS_TARGET ? 'success' : totalHours >= MONTHLY_HOURS_WARNING_FLOOR ? 'warning' : 'danger';
   const balanceHint =
     balance >= 0
       ? `${formatHours(MONTHLY_HOURS_TARGET)} no total • ${formatHours(balance)} acima`
       : `${formatHours(MONTHLY_HOURS_TARGET)} no total • faltam ${formatHours(Math.abs(balance))}`;
-  const latestPayroll = payroll[0];
-  const payrollBalance = latestPayroll?.hour_bank_balance ?? balance;
-  const payrollBalanceHint = latestPayroll ? 'Conforme fechamento mais recente' : 'Sem fechamento encontrado';
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const nextScheduledShift =
-    schedule.find((item) => item.status !== 'cancelled' && String(item.date ?? '').slice(0, 10) >= todayKey) ??
-    schedule.find((item) => item.status !== 'cancelled');
+  const payrollBalance = currentPayroll ? moneyValue(currentPayroll.hour_bank_balance) : balance;
+  const payrollBalanceHint = payrollClosed ? `Saldo salvo na folha ${formatCompetenceLabel(competenceMonth)}` : 'Estimativa pela meta mensal enquanto a folha não fecha';
+  const nextScheduledShift = monthlySchedule[0];
   const hasPlannedSchedule = Boolean(nextScheduledShift);
 
   return (
     <AppShell role="technician" userName={user.name || user.email}>
-      <PageHeader eyebrow="Horas" title="Banco de horas" description="Horas realizadas, saldo diário e consolidado. Escala planejada e horas trabalhadas ficam separadas." />
+      <PageHeader eyebrow="Horas" title="Banco de horas" description="Horas realizadas, saldo diário e consolidado por competência. Escala planejada e horas trabalhadas ficam separadas.">
+        <StatusBadge tone={payrollClosed ? 'success' : 'info'}>{formatCompetenceLabel(competenceMonth)}</StatusBadge>
+      </PageHeader>
 
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
-      {!filteredWorkHours.length && hasPlannedSchedule ? (
+
+      <div className="mb-5">
+        <DataPanel title="Competência" description="Selecione o mês para ver o banco de horas real salvo no sistema.">
+          <label className="block max-w-sm text-sm">
+            <span className="mb-1.5 block font-medium">Mês</span>
+            <span className="flex min-h-10 items-center gap-2 rounded-lg border border-input bg-background px-3">
+              <CalendarDays className="h-4 w-4 text-primary" />
+              <select value={competenceMonth} onChange={(event) => setCompetenceMonth(event.target.value)} className="w-full bg-transparent text-sm outline-none">
+                {competenceOptions.length ? (
+                  competenceOptions.map((item) => (
+                    <option key={item} value={item}>
+                      {formatCompetenceLabel(item)}
+                    </option>
+                  ))
+                ) : (
+                  <option value={competenceMonth}>{formatCompetenceLabel(competenceMonth)}</option>
+                )}
+              </select>
+            </span>
+          </label>
+        </DataPanel>
+      </div>
+
+      {!monthlyWorkHours.length && hasPlannedSchedule ? (
         <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          Há escala planejada para {formatDate(nextScheduledShift?.date)}{nextScheduledShift?.start_time ? ` • ${formatTimeRange(nextScheduledShift.start_time, nextScheduledShift.end_time)}` : ''}, mas ainda não existem horas lançadas em banco para este técnico.
+          Existe escala planejada em {formatDate(nextScheduledShift?.date)}{nextScheduledShift?.start_time ? ` • ${formatTimeRange(nextScheduledShift.start_time, nextScheduledShift.end_time)}` : ''}, mas ainda não existem horas lançadas em banco para este técnico nesta competência.
         </div>
       ) : null}
 
       <div className="grid gap-3 md:grid-cols-4">
-        <MetricCard title="Horas realizadas" value={formatHours(totalHours)} hint={`${filteredWorkHours.length} dia(s) no recorte`} icon={Clock3} tone={hoursTone} accentText />
+        <MetricCard title="Horas realizadas" value={formatHours(totalHours)} hint={`${monthlyWorkHours.length} dia(s) na competência`} icon={Clock3} tone={hoursTone} accentText />
         <MetricCard title="Horas totais" value={formatHours(MONTHLY_HOURS_TARGET)} hint="Meta fixa do mês" icon={Clock3} />
-        <MetricCard title="Saldo do recorte" value={formatHours(balance)} hint={balanceHint} icon={Clock3} tone={hoursTone} accentText />
-        <MetricCard title="Saldo acumulado" value={formatHours(payrollBalance)} hint={payrollBalanceHint} icon={Clock3} tone={payrollBalance < 0 ? 'danger' : 'warning'} />
+        <MetricCard title="Saldo do mês" value={formatHours(balance)} hint={balanceHint} icon={Clock3} tone={hoursTone} accentText />
+        <MetricCard title="Banco de horas" value={formatHours(payrollBalance)} hint={payrollBalanceHint} icon={Clock3} tone={payrollBalance < 0 ? 'danger' : 'warning'} />
       </div>
 
       <div className="mt-5">
         <DataPanel
           title="Registro de horas"
-          description="Importado da planilha de horas ou lançado no sistema. Escala planejada não gera horas automaticamente."
+          description="Apontamentos reais da competência selecionada. A busca abaixo filtra apenas a lista."
           action={
             <div className="flex min-h-10 items-center gap-2 rounded-md border border-border bg-background px-3">
               <Search className="h-4 w-4 text-muted-foreground" />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar semana" className="w-48 bg-transparent text-sm outline-none" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar data ou semana" className="w-48 bg-transparent text-sm outline-none" />
             </div>
           }
         >
-          {filteredWorkHours.length ? (
+          {visibleWorkHours.length ? (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -149,7 +248,7 @@ export default function TechnicianHoursPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredWorkHours.map((item) => {
+                  {visibleWorkHours.map((item) => {
                     const dailyBalance = Number(item.hours_worked) - 8;
 
                     return (
@@ -174,7 +273,7 @@ export default function TechnicianHoursPage() {
             <EmptyState
               icon={Clock3}
               title="Nenhum registro de horas"
-              description={query ? 'Ajuste a busca para encontrar registros reais.' : hasPlannedSchedule ? 'Existe escala planejada, mas ainda não há apontamentos reais em banco de horas para este técnico.' : 'Ainda não há horas lançadas para este técnico. Escala e banco de horas são controles separados.'}
+              description={query ? 'Ajuste a busca para encontrar registros desta competência.' : hasPlannedSchedule ? 'Existe escala planejada, mas ainda não há apontamentos reais em banco de horas para este técnico nesta competência.' : 'Ainda não há horas lançadas para este técnico nesta competência.'}
             />
           )}
         </DataPanel>

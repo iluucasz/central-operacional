@@ -30,9 +30,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { demoDocuments } from '@/lib/demo-data';
 import { formatDate, normalizeText } from '@/lib/formatters';
-import type { LibraryDocument } from '@/lib/types';
+import type { LibraryDocument, Technician } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
 type AudienceBucket = 'Global' | 'Administrativo' | 'Individual';
@@ -41,6 +40,7 @@ const initialUploadForm = {
   title: '',
   category: 'Operação',
   audience: 'Global' as AudienceBucket,
+  technician_id: '',
 };
 
 const categorySuggestions = ['Operação', 'Cobertura', 'RH', 'Financeiro', 'Compliance', 'Treinamento', 'Comunicados'];
@@ -105,7 +105,10 @@ function getSectionConfig(bucket: AudienceBucket) {
 export default function AdminLibraryPage() {
   const { user, loading } = useAppSession();
   const [query, setQuery] = useState('');
-  const [documents, setDocuments] = useState<LibraryDocument[]>(demoDocuments);
+  const [documents, setDocuments] = useState<LibraryDocument[]>([]);
+  const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const [isDataLoading, setIsDataLoading] = useState(true);
+  const [dataError, setDataError] = useState('');
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   const [activeAudience, setActiveAudience] = useState<'all' | AudienceBucket>('all');
   const [uploadForm, setUploadForm] = useState(initialUploadForm);
@@ -114,16 +117,51 @@ export default function AdminLibraryPage() {
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
-    async function loadDocuments() {
+    let mounted = true;
+
+    async function loadLibraryData() {
       if (!user) return;
-      const response = await fetch('/api/documents');
-      if (response.ok) {
-        const data = await response.json();
-        setDocuments(data.documents ?? demoDocuments);
+
+      setIsDataLoading(true);
+      setDataError('');
+
+      try {
+        const [documentsResponse, techniciansResponse] = await Promise.all([
+          fetch('/api/documents'),
+          fetch('/api/technicians'),
+        ]);
+
+        if (!documentsResponse.ok || !techniciansResponse.ok) {
+          throw new Error('library_fetch_failed');
+        }
+
+        const [documentsData, techniciansData] = await Promise.all([
+          documentsResponse.json(),
+          techniciansResponse.json(),
+        ]);
+
+        if (mounted) {
+          setDocuments(Array.isArray(documentsData.documents) ? documentsData.documents : []);
+          setTechnicians(Array.isArray(techniciansData.technicians) ? techniciansData.technicians : []);
+        }
+      } catch {
+        if (mounted) {
+          setDocuments([]);
+          setTechnicians([]);
+          setDataError('Não foi possível carregar a biblioteca e a lista real de técnicos.');
+        }
+      } finally {
+        if (mounted) {
+          setIsDataLoading(false);
+        }
       }
     }
 
-    loadDocuments();
+    loadLibraryData();
+
+    return () => {
+      mounted = false;
+    };
   }, [user]);
 
   function resetUploadState() {
@@ -146,6 +184,11 @@ export default function AdminLibraryPage() {
       return;
     }
 
+    if (uploadForm.audience === 'Individual' && !uploadForm.technician_id) {
+      setUploadError('Selecione o técnico que receberá este documento individual.');
+      return;
+    }
+
     setUploading(true);
     setUploadError('');
 
@@ -155,6 +198,9 @@ export default function AdminLibraryPage() {
       formData.append('title', uploadForm.title.trim() || selectedFile.name.replace(/\.pdf$/i, ''));
       formData.append('category', uploadForm.category.trim() || 'Não classificado');
       formData.append('audience', uploadForm.audience);
+      if (uploadForm.audience === 'Individual') {
+        formData.append('technician_id', uploadForm.technician_id);
+      }
 
       const response = await fetch('/api/documents', {
         method: 'POST',
@@ -167,19 +213,22 @@ export default function AdminLibraryPage() {
         setIsUploadDialogOpen(false);
         resetUploadState();
       } else {
-        setUploadError('Não foi possível enviar o documento. Revise os dados e tente novamente.');
+        const errorData = await response.json().catch(() => null);
+        setUploadError(errorData?.error || 'Não foi possível enviar o documento. Revise os dados e tente novamente.');
       }
     } finally {
       setUploading(false);
     }
   }
 
-  if (loading || !user) {
+  if (loading || isDataLoading || !user) {
     return <LoadingState />;
   }
 
+  const sortedTechnicians = [...technicians].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'));
+
   const filteredDocuments = documents.filter((document) => {
-    const haystack = normalizeText(`${document.title} ${document.category} ${document.audience}`);
+    const haystack = normalizeText(`${document.title} ${document.category} ${document.audience} ${document.technician_name ?? ''}`);
     const matchesQuery = !query || haystack.includes(normalizeText(query));
     const matchesAudience = activeAudience === 'all' || normalizeDocumentAudience(document.audience) === activeAudience;
 
@@ -253,7 +302,13 @@ export default function AdminLibraryPage() {
               <span className="text-xs font-medium uppercase text-muted-foreground">Público do documento</span>
               <select
                 value={uploadForm.audience}
-                onChange={(event) => setUploadForm((current) => ({ ...current, audience: event.target.value as AudienceBucket }))}
+                onChange={(event) =>
+                  setUploadForm((current) => ({
+                    ...current,
+                    audience: event.target.value as AudienceBucket,
+                    technician_id: event.target.value === 'Individual' ? current.technician_id : '',
+                  }))
+                }
                 className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
               >
                 <option value="Global">Global</option>
@@ -261,6 +316,28 @@ export default function AdminLibraryPage() {
                 <option value="Administrativo">Administrativo</option>
               </select>
             </label>
+
+            {uploadForm.audience === 'Individual' ? (
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium uppercase text-muted-foreground">Técnico destinatário</span>
+                <select
+                  value={uploadForm.technician_id}
+                  onChange={(event) => setUploadForm((current) => ({ ...current, technician_id: event.target.value }))}
+                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  disabled={uploading || sortedTechnicians.length === 0}
+                >
+                  <option value="">Selecione o técnico</option>
+                  {sortedTechnicians.map((technician) => (
+                    <option key={technician.id} value={technician.id}>
+                      {technician.name}{technician.qra ? ` - ${technician.qra}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <span className="block text-xs text-muted-foreground">
+                  O documento individual ficará visível apenas para o técnico selecionado.
+                </span>
+              </label>
+            ) : null}
 
             <label className="flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-border bg-secondary/40 p-8 text-center transition-colors hover:border-primary">
               <UploadCloud className="mb-3 h-9 w-9 text-primary" />
@@ -292,7 +369,7 @@ export default function AdminLibraryPage() {
               <Button type="button" variant="secondary" onClick={() => handleUploadDialogChange(false)} disabled={uploading}>
                 Cancelar
               </Button>
-              <Button type="button" onClick={() => void handleUpload()} disabled={uploading || !selectedFile}>
+              <Button type="button" onClick={() => void handleUpload()} disabled={uploading || !selectedFile || (uploadForm.audience === 'Individual' && !uploadForm.technician_id)}>
                 <UploadCloud className="h-4 w-4" />
                 {uploading ? 'Enviando documento' : 'Adicionar à galeria'}
               </Button>
@@ -300,6 +377,8 @@ export default function AdminLibraryPage() {
           </DialogContent>
         </Dialog>
       </PageHeader>
+
+      {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
 
       <div className="grid gap-3 xl:grid-cols-4">
         <MetricCard title="Documentos" value={documents.length} hint="Arquivos catalogados" icon={BookOpen} />
@@ -423,6 +502,12 @@ export default function AdminLibraryPage() {
                                     <FileText className="h-4 w-4" />
                                     {document.uploadedBy ? `Enviado por ${document.uploadedBy}` : 'Catálogo interno sem remetente informado'}
                                   </div>
+                                  {bucket === 'Individual' ? (
+                                    <div className="flex items-center gap-2">
+                                      <UserRound className="h-4 w-4" />
+                                      {document.technician_name ? `Destinatário: ${document.technician_name}` : 'Destinatário não informado'}
+                                    </div>
+                                  ) : null}
                                 </div>
 
                                 {document.url ? (

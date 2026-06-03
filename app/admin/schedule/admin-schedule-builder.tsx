@@ -691,6 +691,10 @@ export function AdminScheduleBuilderPage() {
     () => [...activeTechnicians].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR')),
     [activeTechnicians],
   );
+  const technicianNameById = useMemo(
+    () => new Map(technicians.map((technician) => [technician.id, technician.name])),
+    [technicians],
+  );
   const inputClassName = 'min-h-10 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring';
   const scheduleByDate = useMemo(() => {
     const grouped = new Map<string, Schedule[]>();
@@ -963,6 +967,11 @@ export function AdminScheduleBuilderPage() {
       .filter((year) => Number.isFinite(year))
       .sort((left, right) => left - right);
   }, [visibleSchedule]);
+  const calendarMonthKey = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
+  const calendarScheduledEntries = useMemo(
+    () => visibleSchedule.filter((item) => normalizeDateKey(item.date).startsWith(calendarMonthKey) && item.status !== 'cancelled'),
+    [calendarMonthKey, visibleSchedule],
+  );
   const weekDates = useMemo(() => getNextDateKeys(7), []);
 
   useEffect(() => {
@@ -1608,27 +1617,35 @@ export function AdminScheduleBuilderPage() {
   function getCalendarDayScheduled(day: number) {
     const dateKey = createDateKey(calendarYear, calendarMonth, day);
     const dayEntries = scheduleByDate.get(dateKey) ?? [];
+    const entriesByTechnician = new Map<string, Schedule[]>();
 
-    return sortedTechnicians.reduce(
-      (scheduled, technician) => {
-        const entry = getBestScheduleEntry(dayEntries.filter((item) => item.technician_id === technician.id));
+    dayEntries.forEach((entry) => {
+      entriesByTechnician.set(entry.technician_id, [...(entriesByTechnician.get(entry.technician_id) ?? []), entry]);
+    });
+
+    return Array.from(entriesByTechnician.entries()).reduce(
+      (scheduled, [technicianId, entries]) => {
+        const entry = getBestScheduleEntry(entries);
 
         if (!entry || entry.status === 'cancelled') {
           return scheduled;
         }
 
-        scheduled.push({ name: technician.name, entry });
+        scheduled.push({
+          name: entry.technician_name || technicianNameById.get(technicianId) || technicianId,
+          entry,
+        });
         return scheduled;
       },
       [] as Array<{ name: string; entry: Schedule }>,
-    );
+    ).sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'));
   }
 
   if (loading || isDataLoading || !user) {
     return <LoadingState />;
   }
 
-  const todayKey = normalizeDateKey(new Date().toISOString());
+  const todayKey = createDateInputValue(new Date());
   const todayEntries = scheduleByDate.get(todayKey) ?? [];
   const workingToday = sortedTechnicians.filter((technician) => {
     const entry = getBestScheduleEntry(todayEntries.filter((item) => item.technician_id === technician.id));
@@ -3082,8 +3099,8 @@ export function AdminScheduleBuilderPage() {
 
                 <div className="flex items-end">
                   <div className="w-full rounded-xl border border-border bg-secondary/50 px-4 py-2.5 text-sm">
-                    <p className="font-semibold text-foreground">{formatCount(sortedTechnicians.length, 'técnico', 'técnicos')}</p>
-                    <p className="text-xs text-muted-foreground">na leitura do calendário</p>
+                    <p className="font-semibold text-foreground">{formatCount(calendarScheduledEntries.length, 'registro escalado', 'registros escalados')}</p>
+                    <p className="text-xs text-muted-foreground">no mês selecionado</p>
                   </div>
                 </div>
               </div>
@@ -3105,16 +3122,32 @@ export function AdminScheduleBuilderPage() {
                           return <div key={`empty-${weekIndex}-${dayIndex}`} className="min-h-64 border-b border-r border-border bg-muted/20 last:border-r-0" />;
                         }
 
+                        const dateKey = createDateKey(calendarYear, calendarMonth, day);
+                        const isToday = dateKey === todayKey;
                         const scheduledForDay = getCalendarDayScheduled(day);
 
                         return (
-                          <div key={`${calendarYear}-${calendarMonth}-${day}`} className="min-h-64 border-b border-r border-border bg-card p-3 last:border-r-0">
+                          <div
+                            key={`${calendarYear}-${calendarMonth}-${day}`}
+                            className={`min-h-64 border-b border-r p-3 last:border-r-0 ${
+                              isToday
+                                ? 'border-primary bg-primary/5 ring-2 ring-inset ring-primary'
+                                : 'border-border bg-card'
+                            }`}
+                          >
                             <div className="mb-3 flex items-start justify-between gap-2">
                               <div>
-                                <p className="text-lg font-black text-foreground">{day}</p>
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{scheduledForDay.length} escalado(s)</p>
+                                <div className="flex items-center gap-2">
+                                  <p className="text-lg font-black text-foreground">{day}</p>
+                                  {isToday ? <StatusBadge tone="info">Hoje</StatusBadge> : null}
+                                </div>
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                                  {formatCount(scheduledForDay.length, 'escalado', 'escalados')}
+                                </p>
                               </div>
-                              <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-black text-emerald-700">{scheduledForDay.length}</span>
+                              <span className={`rounded-full px-2 py-1 text-[11px] font-black ${isToday ? 'bg-primary text-primary-foreground' : 'bg-emerald-50 text-emerald-700'}`}>
+                                {scheduledForDay.length}
+                              </span>
                             </div>
 
                             <div className="max-h-52 overflow-y-auto pr-1">
@@ -3122,8 +3155,11 @@ export function AdminScheduleBuilderPage() {
                                 <div className="space-y-1">
                                   {scheduledForDay.map(({ name, entry }) => (
                                     <div key={entry.id} className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1">
-                                      <p className="text-xs font-semibold text-emerald-950">{name}</p>
-                                      <p className="text-[11px] text-emerald-700">{formatTimeRange(entry.start_time, entry.end_time)}</p>
+                                      <div className="flex items-start justify-between gap-2">
+                                        <p className="min-w-0 truncate text-xs font-semibold text-emerald-950">{name}</p>
+                                        <StatusBadge tone={getStatusTone(entry.status)}>{getStatusLabel(entry.status)}</StatusBadge>
+                                      </div>
+                                      <p className="mt-1 text-[11px] text-emerald-700">{formatTimeRange(entry.start_time, entry.end_time)}</p>
                                     </div>
                                   ))}
                                 </div>

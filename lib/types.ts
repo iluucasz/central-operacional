@@ -3,6 +3,8 @@ export type TechnicianStatus = 'active' | 'inactive'
 export type DiscountType = 'discount' | 'advance' | 'other'
 export type ScheduleStatus = 'scheduled' | 'completed' | 'cancelled'
 export type ServiceFortnight = 'Q1' | 'Q2'
+export type FinancialEntryType = 'payable' | 'receivable'
+export type FinancialEntryStatus = 'pending' | 'paid'
 
 export interface User {
   id: string
@@ -98,11 +100,33 @@ export interface Payroll {
   technician_name?: string
 }
 
+export interface FinancialEntry {
+  id: string
+  type: FinancialEntryType
+  description: string
+  category: string
+  amount: number
+  due_date: string
+  competence_month: string
+  status: FinancialEntryStatus
+  paid_amount?: number
+  paid_at?: string | null
+  series_id?: string | null
+  installment_number?: number
+  installment_total?: number
+  is_recurring?: boolean
+  notes?: string | null
+  created_at: string
+  updated_at?: string
+}
+
 export interface LibraryDocument {
   id: string
   title: string
   category: string
   audience: string
+  technician_id?: string | null
+  technician_name?: string | null
   updatedAt: string
   type: 'PDF'
   url?: string

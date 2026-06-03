@@ -14,11 +14,18 @@ import { enumerateDateKeys, normalizeDateKey } from '@/lib/schedule-planner';
 import type { Schedule } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
-type PeriodMode = 'week' | 'month' | 'year';
+type PeriodMode = 'week' | 'month';
 
 interface ScheduleViewEntry {
   date: string;
   entry?: Schedule;
+}
+
+interface MonthCalendarCell {
+  key: string;
+  date?: string;
+  entry?: Schedule;
+  isEmpty?: boolean;
 }
 
 interface ScheduleFilterActionProps {
@@ -26,17 +33,16 @@ interface ScheduleFilterActionProps {
   onPeriodModeChange: (value: PeriodMode) => void;
   selectedMonth: string;
   onSelectedMonthChange: (value: string) => void;
-  selectedYear: string;
-  onSelectedYearChange: (value: string) => void;
   monthOptions: string[];
-  yearOptions: string[];
 }
 
 const periodLabels: Record<PeriodMode, string> = {
   week: 'semanal',
   month: 'mensal',
-  year: 'anual',
 };
+
+const weekdayShortLabels = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
+const weekdayLongLabels = ['Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado', 'Domingo'];
 
 function getStatusLabel(status: Schedule['status']) {
   if (status === 'cancelled') return 'Folga';
@@ -80,10 +86,6 @@ function getMonthValue(value: string) {
   return normalizeDateKey(value).slice(0, 7);
 }
 
-function getYearValue(value: string) {
-  return normalizeDateKey(value).slice(0, 4);
-}
-
 function formatMonthLabel(monthValue: string) {
   const [year, month] = monthValue.split('-').map(Number);
   const date = new Date(Date.UTC(year, (month || 1) - 1, 1));
@@ -91,6 +93,7 @@ function formatMonthLabel(monthValue: string) {
   return date.toLocaleDateString('pt-BR', {
     month: 'long',
     year: 'numeric',
+    timeZone: 'UTC',
   });
 }
 
@@ -112,6 +115,40 @@ function getWeekRange(dateValue: string) {
   };
 }
 
+function getWeekdayColumnIndex(dateValue: string) {
+  const date = new Date(`${normalizeDateKey(dateValue)}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return 0;
+  return (date.getUTCDay() + 6) % 7;
+}
+
+function formatWeekdayLabel(dateValue: string, variant: 'short' | 'long' = 'short') {
+  const labels = variant === 'long' ? weekdayLongLabels : weekdayShortLabels;
+  return labels[getWeekdayColumnIndex(dateValue)] ?? 'Dia';
+}
+
+function buildMonthCalendarCells(entries: ScheduleViewEntry[], monthValue: string) {
+  const monthRange = getMonthRange(monthValue);
+  const leadingCells: MonthCalendarCell[] = Array.from({ length: getWeekdayColumnIndex(monthRange.start) }, (_, index) => ({
+    key: `leading-${monthValue}-${index}`,
+    isEmpty: true,
+  }));
+
+  const filledCells: MonthCalendarCell[] = entries.map((item) => ({
+    key: item.date,
+    date: item.date,
+    entry: item.entry,
+  }));
+
+  const allCells: MonthCalendarCell[] = [...leadingCells, ...filledCells];
+  const trailingCount = allCells.length % 7 === 0 ? 0 : 7 - (allCells.length % 7);
+  const trailingCells: MonthCalendarCell[] = Array.from({ length: trailingCount }, (_, index) => ({
+    key: `trailing-${monthValue}-${index}`,
+    isEmpty: true,
+  }));
+
+  return [...allCells, ...trailingCells];
+}
+
 function getMonthRange(monthValue: string) {
   const [year, month] = monthValue.split('-').map(Number);
   const safeYear = Number.isFinite(year) ? year : new Date().getFullYear();
@@ -126,29 +163,16 @@ function getMonthRange(monthValue: string) {
   };
 }
 
-function getYearRange(yearValue: string) {
-  const safeYear = Number.parseInt(yearValue, 10) || new Date().getFullYear();
-
-  return {
-    start: `${safeYear}-01-01`,
-    end: `${safeYear}-12-31`,
-  };
-}
-
-function getPeriodRange(periodMode: PeriodMode, referenceDate: string, selectedMonth: string, selectedYear: string) {
+function getPeriodRange(periodMode: PeriodMode, referenceDate: string, selectedMonth: string) {
   if (periodMode === 'week') {
     return getWeekRange(referenceDate);
   }
 
-  if (periodMode === 'month') {
-    return getMonthRange(selectedMonth || getMonthValue(referenceDate));
-  }
-
-  return getYearRange(selectedYear || getYearValue(referenceDate));
+  return getMonthRange(selectedMonth || getMonthValue(referenceDate));
 }
 
-function buildScheduleViewEntries(schedule: Schedule[], periodMode: PeriodMode, referenceDate: string, selectedMonth: string, selectedYear: string) {
-  const range = getPeriodRange(periodMode, referenceDate, selectedMonth, selectedYear);
+function buildScheduleViewEntries(schedule: Schedule[], periodMode: PeriodMode, referenceDate: string, selectedMonth: string) {
+  const range = getPeriodRange(periodMode, referenceDate, selectedMonth);
   if (!range) return [] as ScheduleViewEntry[];
 
   const scheduleByDate = new Map<string, Schedule[]>();
@@ -171,10 +195,7 @@ function ScheduleFilterAction({
   onPeriodModeChange,
   selectedMonth,
   onSelectedMonthChange,
-  selectedYear,
-  onSelectedYearChange,
   monthOptions,
-  yearOptions,
 }: ScheduleFilterActionProps) {
   return (
     <div className="flex flex-col gap-2 sm:items-end">
@@ -192,13 +213,6 @@ function ScheduleFilterAction({
           className={`rounded-md border px-3 py-1.5 text-sm ${periodMode === 'month' ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background'}`}
         >
           Mensal
-        </button>
-        <button
-          type="button"
-          onClick={() => onPeriodModeChange('year')}
-          className={`rounded-md border px-3 py-1.5 text-sm ${periodMode === 'year' ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background'}`}
-        >
-          Anual
         </button>
       </div>
 
@@ -218,23 +232,6 @@ function ScheduleFilterAction({
           </select>
         </label>
       ) : null}
-
-      {periodMode === 'year' ? (
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-xs font-semibold uppercase text-muted-foreground">Ano</span>
-          <select
-            value={selectedYear}
-            onChange={(event) => onSelectedYearChange(event.target.value)}
-            className="min-h-10 rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
-          >
-            {yearOptions.map((yearValue) => (
-              <option key={yearValue} value={yearValue}>
-                {yearValue}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
     </div>
   );
 }
@@ -244,12 +241,10 @@ export function TechnicianScheduleViewPage() {
   const [schedule, setSchedule] = useState<Schedule[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [dataError, setDataError] = useState('');
-  const [calendarPeriodMode, setCalendarPeriodMode] = useState<PeriodMode>('week');
+  const [calendarPeriodMode, setCalendarPeriodMode] = useState<PeriodMode>('month');
   const [calendarSelectedMonth, setCalendarSelectedMonth] = useState(() => getMonthValue(new Date().toISOString()));
-  const [calendarSelectedYear, setCalendarSelectedYear] = useState(() => getYearValue(new Date().toISOString()));
-  const [listPeriodMode, setListPeriodMode] = useState<PeriodMode>('week');
+  const [listPeriodMode, setListPeriodMode] = useState<PeriodMode>('month');
   const [listSelectedMonth, setListSelectedMonth] = useState(() => getMonthValue(new Date().toISOString()));
-  const [listSelectedYear, setListSelectedYear] = useState(() => getYearValue(new Date().toISOString()));
 
   useEffect(() => {
     let mounted = true;
@@ -296,6 +291,7 @@ export function TechnicianScheduleViewPage() {
   }, [schedule]);
 
   const todayKey = normalizeDateKey(new Date().toISOString());
+  const currentMonthValue = getMonthValue(todayKey);
   const referenceDateKey = useMemo(() => {
     const upcoming = sortedSchedule.find((item) => normalizeDateKey(item.date) >= todayKey && item.status !== 'cancelled');
     if (upcoming) return normalizeDateKey(upcoming.date);
@@ -304,14 +300,14 @@ export function TechnicianScheduleViewPage() {
   }, [sortedSchedule, todayKey]);
 
   const monthOptions = useMemo(() => {
-    const values = Array.from(new Set(sortedSchedule.map((item) => getMonthValue(item.date))));
-    return values.length ? values.reverse() : [getMonthValue(referenceDateKey)];
-  }, [referenceDateKey, sortedSchedule]);
+    const values = new Set<string>([currentMonthValue]);
 
-  const yearOptions = useMemo(() => {
-    const values = Array.from(new Set(sortedSchedule.map((item) => getYearValue(item.date))));
-    return values.length ? values.reverse() : [getYearValue(referenceDateKey)];
-  }, [referenceDateKey, sortedSchedule]);
+    sortedSchedule.forEach((item) => {
+      values.add(getMonthValue(item.date));
+    });
+
+    return Array.from(values).sort((left, right) => right.localeCompare(left, 'pt-BR'));
+  }, [currentMonthValue, sortedSchedule]);
 
   useEffect(() => {
     if (!monthOptions.includes(calendarSelectedMonth)) {
@@ -322,27 +318,22 @@ export function TechnicianScheduleViewPage() {
     }
   }, [calendarSelectedMonth, listSelectedMonth, monthOptions]);
 
-  useEffect(() => {
-    if (!yearOptions.includes(calendarSelectedYear)) {
-      setCalendarSelectedYear(yearOptions[0]);
-    }
-    if (!yearOptions.includes(listSelectedYear)) {
-      setListSelectedYear(yearOptions[0]);
-    }
-  }, [calendarSelectedYear, listSelectedYear, yearOptions]);
-
   const calendarSchedule = useMemo(
-    () => (dataError ? [] : buildScheduleViewEntries(sortedSchedule, calendarPeriodMode, referenceDateKey, calendarSelectedMonth, calendarSelectedYear)),
-    [calendarPeriodMode, calendarSelectedMonth, calendarSelectedYear, dataError, referenceDateKey, sortedSchedule],
+    () => (dataError ? [] : buildScheduleViewEntries(sortedSchedule, calendarPeriodMode, referenceDateKey, calendarSelectedMonth)),
+    [calendarPeriodMode, calendarSelectedMonth, dataError, referenceDateKey, sortedSchedule],
+  );
+  const monthlyCalendarCells = useMemo(
+    () => (calendarPeriodMode === 'month' ? buildMonthCalendarCells(calendarSchedule, calendarSelectedMonth) : []),
+    [calendarPeriodMode, calendarSchedule, calendarSelectedMonth],
   );
 
   const listSchedule = useMemo(
-    () => (dataError ? [] : buildScheduleViewEntries(sortedSchedule, listPeriodMode, referenceDateKey, listSelectedMonth, listSelectedYear)),
-    [dataError, listPeriodMode, listSelectedMonth, listSelectedYear, referenceDateKey, sortedSchedule],
+    () => (dataError ? [] : buildScheduleViewEntries(sortedSchedule, listPeriodMode, referenceDateKey, listSelectedMonth)),
+    [dataError, listPeriodMode, listSelectedMonth, referenceDateKey, sortedSchedule],
   );
 
   const summarySchedule = useMemo(
-    () => (dataError ? [] : buildScheduleViewEntries(sortedSchedule, 'week', referenceDateKey, getMonthValue(referenceDateKey), getYearValue(referenceDateKey))),
+    () => (dataError ? [] : buildScheduleViewEntries(sortedSchedule, 'week', referenceDateKey, getMonthValue(referenceDateKey))),
     [dataError, referenceDateKey, sortedSchedule],
   );
 
@@ -361,15 +352,11 @@ export function TechnicianScheduleViewPage() {
   const calendarDescription =
     calendarPeriodMode === 'week'
       ? 'Escala persistida da semana.'
-      : calendarPeriodMode === 'month'
-        ? 'Escala persistida do mes.'
-        : 'Escala persistida do ano.';
+      : 'Escala persistida do mes.';
   const listDescription =
     listPeriodMode === 'week'
       ? 'Lista da semana usando apenas os registros gravados no banco.'
-      : listPeriodMode === 'month'
-        ? 'Lista do mes usando apenas os registros gravados no banco.'
-        : 'Lista do ano usando apenas os registros gravados no banco.';
+      : 'Lista do mes usando apenas os registros gravados no banco.';
 
   return (
     <AppShell role="technician" userName={user.name || user.email}>
@@ -398,29 +385,87 @@ export function TechnicianScheduleViewPage() {
               onPeriodModeChange={setCalendarPeriodMode}
               selectedMonth={calendarSelectedMonth}
               onSelectedMonthChange={setCalendarSelectedMonth}
-              selectedYear={calendarSelectedYear}
-              onSelectedYearChange={setCalendarSelectedYear}
               monthOptions={monthOptions}
-              yearOptions={yearOptions}
             />
           }
         >
           {hasCalendarEntries ? (
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-              {calendarSchedule.map((item) => (
-                <div key={item.date} className="rounded-md border border-border bg-background p-3">
-                  <p className="text-sm font-semibold">{formatDate(item.date)}</p>
-                  <div className="mt-3">
-                    <StatusBadge tone={item.entry ? getStatusTone(item.entry.status) : 'neutral'}>
-                      {item.entry ? getStatusLabel(item.entry.status) : 'Sem escala'}
-                    </StatusBadge>
+            calendarPeriodMode === 'month' ? (
+              <div className="overflow-x-auto">
+                <div className="min-w-232">
+                  <div className="grid grid-cols-7 gap-2">
+                    {weekdayShortLabels.map((label) => (
+                      <div key={label} className="rounded-md border border-border/70 bg-muted/40 px-3 py-2 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        {label}
+                      </div>
+                    ))}
                   </div>
-                  <p className="mt-3 text-sm">
-                    {item.entry ? item.entry.status === 'cancelled' ? item.entry.notes || 'Folga planejada' : formatTimeRange(item.entry.start_time, item.entry.end_time) : 'Sem registro persistido para esta data.'}
-                  </p>
+
+                  <div className="mt-2 grid grid-cols-7 gap-2">
+                    {monthlyCalendarCells.map((item) => {
+                      if (item.isEmpty || !item.date) {
+                        return <div key={item.key} className="min-h-40 rounded-xl border border-dashed border-border/60 bg-muted/20" />;
+                      }
+
+                      const weekdayLabel = formatWeekdayLabel(item.date);
+                      const isToday = item.date === todayKey;
+
+                      return (
+                        <div
+                          key={item.key}
+                          className={`min-h-40 rounded-xl border p-3 ${isToday ? 'border-primary bg-primary/5 shadow-sm' : 'border-border bg-background'}`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{weekdayLabel}</p>
+                              <p className="text-sm font-semibold">{formatDate(item.date)}</p>
+                            </div>
+                            {isToday ? <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-primary">Hoje</span> : null}
+                          </div>
+
+                          <div className="mt-3">
+                            <StatusBadge tone={item.entry ? getStatusTone(item.entry.status) : 'neutral'}>
+                              {item.entry ? getStatusLabel(item.entry.status) : 'Sem escala'}
+                            </StatusBadge>
+                          </div>
+
+                          <p className="mt-3 text-sm font-medium">
+                            {item.entry
+                              ? item.entry.status === 'cancelled'
+                                ? item.entry.notes || 'Folga planejada'
+                                : formatTimeRange(item.entry.start_time, item.entry.end_time)
+                              : 'Sem registro persistido'}
+                          </p>
+
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            {item.entry?.status === 'cancelled'
+                              ? 'Dia sem expediente.'
+                              : item.entry?.notes || (item.entry ? 'Turno persistido no banco.' : 'Nenhuma escala gravada para esta data.')}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+                {calendarSchedule.map((item) => (
+                  <div key={item.date} className="rounded-md border border-border bg-background p-3">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{formatWeekdayLabel(item.date, 'long')}</p>
+                    <p className="mt-1 text-sm font-semibold">{formatDate(item.date)}</p>
+                    <div className="mt-3">
+                      <StatusBadge tone={item.entry ? getStatusTone(item.entry.status) : 'neutral'}>
+                        {item.entry ? getStatusLabel(item.entry.status) : 'Sem escala'}
+                      </StatusBadge>
+                    </div>
+                    <p className="mt-3 text-sm">
+                      {item.entry ? item.entry.status === 'cancelled' ? item.entry.notes || 'Folga planejada' : formatTimeRange(item.entry.start_time, item.entry.end_time) : 'Sem registro persistido para esta data.'}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )
           ) : (
             <EmptyState icon={CalendarDays} title="Sem escala persistida no periodo" description="Nao existem registros gravados no banco para o periodo selecionado." />
           )}
@@ -437,10 +482,7 @@ export function TechnicianScheduleViewPage() {
               onPeriodModeChange={setListPeriodMode}
               selectedMonth={listSelectedMonth}
               onSelectedMonthChange={setListSelectedMonth}
-              selectedYear={listSelectedYear}
-              onSelectedYearChange={setListSelectedYear}
               monthOptions={monthOptions}
-              yearOptions={yearOptions}
             />
           }
         >
@@ -458,7 +500,12 @@ export function TechnicianScheduleViewPage() {
                 <tbody>
                   {listSchedule.map((item) => (
                     <tr key={item.date} className="border-b border-border last:border-0">
-                      <td className="py-3 pr-4">{formatDate(item.date)}</td>
+                      <td className="py-3 pr-4">
+                        <div>
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{formatWeekdayLabel(item.date, 'long')}</p>
+                          <p className="mt-1">{formatDate(item.date)}</p>
+                        </div>
+                      </td>
                       <td className="py-3 pr-4">{item.entry ? item.entry.status === 'cancelled' ? item.entry.notes || 'Folga planejada' : formatTimeRange(item.entry.start_time, item.entry.end_time) : 'Sem registro'}</td>
                       <td className="py-3 pr-4">
                         <StatusBadge tone={item.entry ? getStatusTone(item.entry.status) : 'neutral'}>
