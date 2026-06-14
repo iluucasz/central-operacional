@@ -12,6 +12,17 @@ import {
 const sql = neon(process.env.DATABASE_URL!);
 const DAY_RULE_KEYS: ScheduleDayRuleKey[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
+async function isActiveTechnician(technicianId: string) {
+  const technicians = await sql`
+    SELECT status
+    FROM technicians
+    WHERE id = ${technicianId}
+    LIMIT 1
+  `;
+
+  return technicians[0]?.status === 'active';
+}
+
 function isValidTime(value: unknown) {
   return typeof value === 'string' && /^\d{2}:\d{2}$/.test(value);
 }
@@ -288,6 +299,8 @@ export async function GET(request: NextRequest) {
       params.push(technicianId || auth.technicianId || auth.userId);
     }
 
+    conditions.push(`t.status = 'active'`);
+
     if (startDate) {
       conditions.push(`s.date >= $${params.length + 1}`);
       params.push(startDate);
@@ -333,6 +346,13 @@ export async function POST(request: NextRequest) {
       status = 'scheduled',
       notes,
     } = await request.json();
+
+    if (!(await isActiveTechnician(technician_id))) {
+      return NextResponse.json(
+        { error: 'Selecione um tecnico ativo para lancar escala.' },
+        { status: 409 }
+      );
+    }
 
     const result = await sql`
       INSERT INTO schedule (

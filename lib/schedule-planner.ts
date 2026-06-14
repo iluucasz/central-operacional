@@ -329,6 +329,33 @@ function getDayRules(input: ScheduleGenerationInput): Record<DayKind, WeekendCov
   };
 }
 
+function applyRotationGroupDayOverrides(
+  dayRules: Record<DayKind, WeekendCoverageRule>,
+  rotationGroups: ScheduleRotationGroupInput[],
+) {
+  const nextRules = { ...dayRules };
+  const rotationDays = new Set<DayKind>();
+
+  rotationGroups.forEach((group) => {
+    if (!normalizeTechnicianIds(group.technician_ids).length) {
+      return;
+    }
+
+    group.day_keys.forEach((dayKey) => rotationDays.add(dayKey));
+  });
+
+  rotationDays.forEach((dayKind) => {
+    nextRules[dayKind] = {
+      ...nextRules[dayKind],
+      mode: 'all',
+      technician_ids: [],
+      rotation_cadence: 'weekly',
+    };
+  });
+
+  return nextRules;
+}
+
 function createRotationState(): Record<DayKind, number> {
   return {
     monday: 0,
@@ -559,8 +586,8 @@ export function buildPersistedSchedule(input: ScheduleGenerationInput, targetTec
   const rowMap = new Map<string, ScheduleSeedRow>();
   const rotationState = createRotationState();
   const rotationGroupState = new Map<string, number>();
-  const dayRules = getDayRules(input);
   const rotationGroups = normalizeRotationGroups(input.rotation_groups);
+  const dayRules = applyRotationGroupDayOverrides(getDayRules(input), rotationGroups);
   const recurringRules = normalizeRecurringRules(input.recurring_rules);
 
   for (const dateKey of dateKeys) {

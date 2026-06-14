@@ -279,20 +279,33 @@ export default function AdminFaturamentoPage() {
     };
   }, [user]);
 
+  const activeTechnicianIds = useMemo(
+    () => new Set(technicians.filter((technician) => technician.status === 'active').map((technician) => technician.id)),
+    [technicians],
+  );
+  const activeServices = useMemo(
+    () => services.filter((service) => activeTechnicianIds.has(service.technician_id)),
+    [activeTechnicianIds, services],
+  );
+  const activePayroll = useMemo(
+    () => payroll.filter((item) => activeTechnicianIds.has(item.technician_id)),
+    [activeTechnicianIds, payroll],
+  );
+
   const yearOptions = useMemo(() => {
     const values = new Set<string>([currentYear]);
 
-    services.forEach((service) => {
+    activeServices.forEach((service) => {
       const competence = getServiceCompetence(service);
       if (/^\d{4}-\d{2}$/.test(competence)) values.add(competence.slice(0, 4));
     });
 
-    payroll.forEach((item) => {
+    activePayroll.forEach((item) => {
       if (/^\d{4}-\d{2}$/.test(item.competence_month)) values.add(item.competence_month.slice(0, 4));
     });
 
     return Array.from(values).sort((left, right) => right.localeCompare(left, 'pt-BR'));
-  }, [payroll, services]);
+  }, [activePayroll, activeServices]);
 
   useEffect(() => {
     if (!yearOptions.includes(selectedYear)) {
@@ -313,7 +326,7 @@ export default function AdminFaturamentoPage() {
   const monthlyData = useMemo(() => {
     const months = new Map(getMonthKeys(selectedYear).map((monthKey) => [monthKey, createRawMonthSummary(monthKey)]));
 
-    services.forEach((service) => {
+    activeServices.forEach((service) => {
       const competence = getServiceCompetence(service);
       const summary = months.get(competence);
       if (!summary) return;
@@ -323,7 +336,7 @@ export default function AdminFaturamentoPage() {
       if (service.technician_id) summary.employeeIds.add(service.technician_id);
     });
 
-    payroll.forEach((item) => {
+    activePayroll.forEach((item) => {
       const summary = months.get(item.competence_month);
       if (!summary) return;
 
@@ -333,19 +346,19 @@ export default function AdminFaturamentoPage() {
     });
 
     return Array.from(months.values()).map(finalizeMonthSummary);
-  }, [payroll, selectedYear, services]);
+  }, [activePayroll, activeServices, selectedYear]);
 
   const selectedMonthData = monthlyData.find((row) => row.monthKey === selectedMonth) ?? createEmptyMonth(selectedMonth);
   const annualData = useMemo(() => sumMonthlyData(monthlyData), [monthlyData]);
 
   const servicesInMonth = useMemo(
-    () => services.filter((service) => getServiceCompetence(service) === selectedMonth),
-    [selectedMonth, services],
+    () => activeServices.filter((service) => getServiceCompetence(service) === selectedMonth),
+    [activeServices, selectedMonth],
   );
 
   const payrollInMonth = useMemo(
-    () => payroll.filter((item) => item.competence_month === selectedMonth),
-    [payroll, selectedMonth],
+    () => activePayroll.filter((item) => item.competence_month === selectedMonth),
+    [activePayroll, selectedMonth],
   );
 
   const typeRevenueData = useMemo<TypeRevenueSummary[]>(() => {
@@ -425,7 +438,7 @@ export default function AdminFaturamentoPage() {
   const expenseShare = selectedMonthData.revenue > 0 ? (selectedMonthData.expenses / selectedMonthData.revenue) * 100 : 0;
   const monthlyAverageTicket = selectedMonthData.services > 0 ? selectedMonthData.serviceRevenue / selectedMonthData.services : 0;
   const annualAverageTicket = annualData.services > 0 ? annualData.serviceRevenue / annualData.services : 0;
-  const hasAnyData = services.length || payroll.length;
+  const hasAnyData = activeServices.length || activePayroll.length;
 
   if (loading || isDataLoading || !user) {
     return <LoadingState />;

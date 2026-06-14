@@ -43,7 +43,7 @@ export function MetricCard({ title, value, hint, icon: Icon, tone = 'default', h
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-medium uppercase text-muted-foreground">{title}</p>
-          <p className={`mt-1 truncate text-xl font-semibold ${accentText ? toneTextClasses[tone] : 'text-foreground'}`}>{value}</p>
+          <p className={`mt-1 break-words text-xl font-semibold leading-tight tabular-nums ${accentText ? toneTextClasses[tone] : 'text-foreground'}`}>{value}</p>
         </div>
         <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${toneClasses[tone]}`}>
           <Icon className="h-5 w-5" />

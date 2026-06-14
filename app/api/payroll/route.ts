@@ -36,6 +36,17 @@ function normalizePayrollRow<T extends Record<string, unknown>>(row: T) {
   );
 }
 
+async function isActiveTechnician(technicianId: string) {
+  const technicians = await sql`
+    SELECT status
+    FROM technicians
+    WHERE id = ${technicianId}
+    LIMIT 1
+  `;
+
+  return technicians[0]?.status === 'active';
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await verifyAuth(request);
@@ -51,28 +62,27 @@ export async function GET(request: NextRequest) {
     const technicianId = searchParams.get('technicianId');
 
     let query = `
-      SELECT *
-      FROM payroll
+      SELECT p.*
+      FROM payroll p
+      INNER JOIN technicians t ON t.id = p.technician_id
     `;
 
     const params = [];
-    const conditions = [];
+    const conditions = [`t.status = 'active'`];
 
     if (auth.role === 'technician' || technicianId) {
-      conditions.push(`technician_id = $${params.length + 1}`);
+      conditions.push(`p.technician_id = $${params.length + 1}`);
       params.push(technicianId || auth.technicianId || auth.userId);
     }
 
     if (competenceMonth) {
-      conditions.push(`competence_month = $${params.length + 1}`);
+      conditions.push(`p.competence_month = $${params.length + 1}`);
       params.push(competenceMonth);
     }
 
-    if (conditions.length > 0) {
-      query += ` WHERE ${conditions.join(' AND ')}`;
-    }
+    query += ` WHERE ${conditions.join(' AND ')}`;
 
-    query += ` ORDER BY competence_month DESC`;
+    query += ` ORDER BY p.competence_month DESC`;
 
     const payrolls = await sql.query(query, params);
     return NextResponse.json({ payrolls: payrolls.map((row) => normalizePayrollRow(row as Record<string, unknown>)) });
@@ -112,6 +122,13 @@ export async function POST(request: NextRequest) {
     } = await request.json();
 
     await ensurePayrollSchema();
+
+    if (!(await isActiveTechnician(technician_id))) {
+      return NextResponse.json(
+        { error: 'Selecione um tecnico ativo para fechar folha.' },
+        { status: 409 }
+      );
+    }
 
     const values = {
       total_services_value: roundCurrency(total_services_value),

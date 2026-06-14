@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
 
     const technicianIds = Array.from(new Set(incomingRows.map((row) => getText(row.technician_id)).filter(Boolean)));
     const technicianRows = technicianIds.length
-      ? await sql.query('SELECT id, name FROM technicians WHERE id = ANY($1)', [technicianIds])
+      ? await sql.query("SELECT id, name FROM technicians WHERE status = 'active' AND id = ANY($1)", [technicianIds])
       : [];
     const technicianNameById = new Map(technicianRows.map((row) => [String(row.id), String(row.name)]));
     const imported: Record<string, unknown>[] = [];
@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
       const errors: string[] = [];
 
       if (!orderCode) errors.push('Codigo da OS ausente');
-      if (!technicianId || !technicianNameById.has(technicianId)) errors.push('Tecnico nao localizado');
+      if (!technicianId || !technicianNameById.has(technicianId)) errors.push('Tecnico nao localizado ou inativo');
       if (!serviceType) errors.push('Especialidade ausente');
       if (!Number.isFinite(value) || value <= 0) errors.push('Valor invalido');
       if (!isDateKey(datePerformed)) errors.push('Data de atendimento invalida');

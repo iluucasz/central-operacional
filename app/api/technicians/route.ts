@@ -14,9 +14,51 @@ function getErrorCode(error: unknown) {
 
 function technicianConflictResponse() {
   return NextResponse.json(
-    { error: 'Ja existe um tecnico ou usuario com esse email ou QRA.' },
+    { error: 'Ja existe um tecnico ou usuario com esse email.' },
     { status: 409 }
   );
+}
+
+function positiveNumberOrDefault(value: unknown, fallback: number) {
+  const numericValue = Number(value);
+  return numericValue > 0 ? numericValue : fallback;
+}
+
+async function insertTechnicianRecord({
+  userId,
+  qra,
+  name,
+  email,
+  commissionPercentage,
+  baseSalary,
+  vaAllowance,
+  vrAllowance,
+}: {
+  userId: string | null;
+  qra: string | null;
+  name: string;
+  email: string;
+  commissionPercentage: unknown;
+  baseSalary: unknown;
+  vaAllowance: unknown;
+  vrAllowance: unknown;
+}) {
+  const result = await sql`
+    INSERT INTO technicians (
+      user_id, qra, name, email, commission_percentage,
+      base_salary, va_allowance, vr_allowance
+    )
+    VALUES (
+      ${userId}, ${qra || null}, ${name}, ${email},
+      ${positiveNumberOrDefault(commissionPercentage, 25)},
+      ${positiveNumberOrDefault(baseSalary, 2664.53)},
+      ${positiveNumberOrDefault(vaAllowance, 249)},
+      ${positiveNumberOrDefault(vrAllowance, 783)}
+    )
+    RETURNING *
+  `;
+
+  return result[0];
 }
 
 export async function GET(request: NextRequest) {
@@ -76,12 +118,42 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const existingUser = await sql`
-      SELECT id FROM neon_auth."user" WHERE email = ${email}
+    const existingUsers = await sql`
+      SELECT u.id, u.role, t.id AS technician_id
+      FROM neon_auth."user" u
+      LEFT JOIN technicians t ON t.user_id = u.id
+      WHERE u.email = ${email}
+      LIMIT 1
     `;
 
-    if (existingUser.length > 0) {
-      return technicianConflictResponse();
+    if (existingUsers.length > 0) {
+      const existingUser = existingUsers[0] as { id: string; role: string; technician_id: string | null };
+
+      if (existingUser.role !== 'technician' || existingUser.technician_id) {
+        return technicianConflictResponse();
+      }
+
+      const passwordHash = await hashPassword(password);
+      await sql`
+        UPDATE neon_auth."user"
+        SET name = ${name},
+            password_hash = ${passwordHash},
+            role = 'technician'
+        WHERE id = ${existingUser.id}
+      `;
+
+      const technician = await insertTechnicianRecord({
+        userId: existingUser.id,
+        qra,
+        name,
+        email,
+        commissionPercentage: commission_percentage,
+        baseSalary: base_salary,
+        vaAllowance: va_allowance,
+        vrAllowance: vr_allowance,
+      });
+
+      return NextResponse.json(technician, { status: 201 });
     }
 
     const passwordHash = await hashPassword(password);
@@ -94,19 +166,18 @@ export async function POST(request: NextRequest) {
 
     createdUserId = createdUsers[0]?.id ?? null;
 
-    const result = await sql`
-      INSERT INTO technicians (
-        user_id, qra, name, email, commission_percentage, 
-        base_salary, va_allowance, vr_allowance
-      )
-      VALUES (
-        ${createdUserId}, ${qra || null}, ${name}, ${email}, ${Number(commission_percentage) > 0 ? commission_percentage : 25}, 
-        ${Number(base_salary) > 0 ? base_salary : 2664.53}, ${Number(va_allowance) > 0 ? va_allowance : 249}, ${Number(vr_allowance) > 0 ? vr_allowance : 783}
-      )
-      RETURNING *
-    `;
+    const technician = await insertTechnicianRecord({
+      userId: createdUserId,
+      qra,
+      name,
+      email,
+      commissionPercentage: commission_percentage,
+      baseSalary: base_salary,
+      vaAllowance: va_allowance,
+      vrAllowance: vr_allowance,
+    });
 
-    return NextResponse.json(result[0], { status: 201 });
+    return NextResponse.json(technician, { status: 201 });
   } catch (error) {
     if (getErrorCode(error) === '23505') {
       return technicianConflictResponse();
@@ -205,23 +276,43 @@ export async function PATCH(request: NextRequest) {
         `;
       }
     } else if (password) {
-      const existingUser = await sql`
-        SELECT id FROM neon_auth."user" WHERE email = ${email}
+      const existingUsers = await sql`
+        SELECT u.id, u.role, t.id AS technician_id
+        FROM neon_auth."user" u
+        LEFT JOIN technicians t ON t.user_id = u.id
+        WHERE u.email = ${email}
+        LIMIT 1
       `;
 
-      if (existingUser.length > 0) {
-        return technicianConflictResponse();
+      if (existingUsers.length > 0) {
+        const existingUser = existingUsers[0] as { id: string; role: string; technician_id: string | null };
+
+        if (existingUser.role !== 'technician' || (existingUser.technician_id && existingUser.technician_id !== technicianId)) {
+          return technicianConflictResponse();
+        }
+
+        const passwordHash = await hashPassword(password);
+        await sql`
+          UPDATE neon_auth."user"
+          SET email = ${email},
+              name = ${name},
+              password_hash = ${passwordHash},
+              role = 'technician'
+          WHERE id = ${existingUser.id}
+        `;
+
+        userId = existingUser.id;
+      } else {
+        const passwordHash = await hashPassword(password);
+        const createdUsers = await sql`
+          INSERT INTO neon_auth."user" (email, name, "emailVerified", password_hash, role)
+          VALUES (${email}, ${name}, false, ${passwordHash}, 'technician')
+          RETURNING id
+        `;
+
+        createdUserId = createdUsers[0]?.id ?? null;
+        userId = createdUserId;
       }
-
-      const passwordHash = await hashPassword(password);
-      const createdUsers = await sql`
-        INSERT INTO neon_auth."user" (email, name, "emailVerified", password_hash, role)
-        VALUES (${email}, ${name}, false, ${passwordHash}, 'technician')
-        RETURNING id
-      `;
-
-      createdUserId = createdUsers[0]?.id ?? null;
-      userId = createdUserId;
     }
 
     const result = await sql`
@@ -299,25 +390,22 @@ export async function DELETE(request: NextRequest) {
     }
 
     const userId = linkedUsers[0].user_id as string | null;
-
     const result = await sql`
-      DELETE FROM technicians
-      WHERE id = ${technicianId}
-      RETURNING id
+      WITH deleted_technician AS (
+        DELETE FROM technicians
+        WHERE id = ${technicianId}
+        RETURNING id, user_id
+      ),
+      deleted_user AS (
+        DELETE FROM neon_auth."user" u
+        USING deleted_technician d
+        WHERE u.id = d.user_id
+        RETURNING u.id
+      )
+      SELECT id FROM deleted_technician
     `;
 
-    if (userId) {
-      try {
-        await sql`
-          DELETE FROM neon_auth."user"
-          WHERE id = ${userId}
-        `;
-      } catch (deleteUserError) {
-        console.error('[v0] Delete linked user error:', deleteUserError);
-      }
-    }
-
-    return NextResponse.json({ success: true, id: result[0].id });
+    return NextResponse.json({ success: true, id: result[0].id, deletedUser: Boolean(userId) });
   } catch (error) {
     if (getErrorCode(error) === '23503') {
       return NextResponse.json(

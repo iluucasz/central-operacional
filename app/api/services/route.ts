@@ -3,6 +3,24 @@ import { verifyAuth } from '@/lib/auth';
 import { sql } from '@/lib/db';
 import { ensureServicesSchema } from '@/lib/services-schema';
 
+async function isActiveTechnician(technicianId: string) {
+  const technicians = await sql`
+    SELECT status
+    FROM technicians
+    WHERE id = ${technicianId}
+    LIMIT 1
+  `;
+
+  return technicians[0]?.status === 'active';
+}
+
+function inactiveTechnicianResponse() {
+  return NextResponse.json(
+    { error: 'Selecione um tecnico ativo para lancar OS.' },
+    { status: 409 }
+  );
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await verifyAuth(request);
@@ -35,6 +53,8 @@ export async function GET(request: NextRequest) {
       params.push(scopedTechnicianId);
       conditions.push(`s.technician_id = $${params.length}`);
     }
+
+    conditions.push(`t.status = 'active'`);
 
     if (competenceMonth) {
       params.push(competenceMonth);
@@ -87,6 +107,10 @@ export async function POST(request: NextRequest) {
     } = await request.json();
 
     await ensureServicesSchema();
+
+    if (!(await isActiveTechnician(technician_id))) {
+      return inactiveTechnicianResponse();
+    }
 
     const result = await sql`
       INSERT INTO services (
@@ -142,6 +166,24 @@ export async function PUT(request: NextRequest) {
 
     await ensureServicesSchema();
 
+    const currentService = await sql`
+      SELECT technician_id
+      FROM services
+      WHERE id = ${id}
+      LIMIT 1
+    `;
+
+    if (!currentService.length) {
+      return NextResponse.json(
+        { error: 'Service not found' },
+        { status: 404 }
+      );
+    }
+
+    if (!(await isActiveTechnician(technician_id))) {
+      return inactiveTechnicianResponse();
+    }
+
     const result = await sql`
       UPDATE services
       SET order_code = ${order_code},
@@ -156,13 +198,6 @@ export async function PUT(request: NextRequest) {
       WHERE id = ${id}
       RETURNING *
     `;
-
-    if (!result.length) {
-      return NextResponse.json(
-        { error: 'Service not found' },
-        { status: 404 }
-      );
-    }
 
     return NextResponse.json(result[0]);
   } catch (error) {

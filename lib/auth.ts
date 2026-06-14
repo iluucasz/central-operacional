@@ -73,7 +73,8 @@ export async function getCurrentUser(): Promise<User | null> {
           ELSE u.name
         END as name,
         u.role,
-        t.id as technician_id
+        t.id as technician_id,
+        t.status as technician_status
       FROM neon_auth."user" u
       LEFT JOIN technicians t ON t.user_id = u.id
       WHERE u.id = ${payload.userId}
@@ -81,6 +82,9 @@ export async function getCurrentUser(): Promise<User | null> {
     `
 
     if (users.length === 0) return null
+    if (users[0].role === 'technician' && (!users[0].technician_id || users[0].technician_status !== 'active')) {
+      return null
+    }
 
     return {
       id: users[0].id,
@@ -124,20 +128,21 @@ export async function verifyAuth(
 
   try {
     const technicians = await sql`
-      SELECT id
+      SELECT id, status
       FROM technicians
       WHERE user_id = ${payload.userId}
       LIMIT 1
     `
 
+    if (!technicians.length || technicians[0].status !== 'active') {
+      return null
+    }
+
     return {
       ...payload,
-      technicianId: technicians[0]?.id ?? payload.userId,
+      technicianId: technicians[0].id,
     }
   } catch {
-    return {
-      ...payload,
-      technicianId: payload.userId,
-    }
+    return null
   }
 }

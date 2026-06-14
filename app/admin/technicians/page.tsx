@@ -226,11 +226,12 @@ export default function TechniciansPage() {
     return <LoadingState />;
   }
 
-  const activeCount = technicians.filter((technician) => technician.status === 'active').length;
+  const activeTechnicians = technicians.filter((technician) => technician.status === 'active');
+  const activeCount = activeTechnicians.length;
   const averageCommission =
-    technicians.reduce((total, technician) => total + Number(technician.commission_percentage), 0) /
-    Math.max(technicians.length, 1);
-  const totalBaseSalary = technicians.reduce((total, technician) => total + Number(technician.base_salary), 0);
+    activeTechnicians.reduce((total, technician) => total + Number(technician.commission_percentage), 0) /
+    Math.max(activeTechnicians.length, 1);
+  const totalBaseSalary = activeTechnicians.reduce((total, technician) => total + Number(technician.base_salary), 0);
   const isEditing = Boolean(editingTechnician);
   const modalTitle = isEditing ? 'Editar técnico' : 'Novo técnico';
   const passwordHint = isEditing
@@ -253,8 +254,8 @@ export default function TechniciansPage() {
 
       <div className="grid gap-3 md:grid-cols-3">
         <MetricCard title="Ativos" value={`${activeCount}/${technicians.length}`} hint="Técnicos em operação" icon={Users} />
-        <MetricCard title="Comissão média" value={formatPercent(averageCommission)} hint="Base por técnico" icon={WalletCards} />
-        <MetricCard title="Salários base" value={formatCurrency(totalBaseSalary)} hint="Somatório cadastral" icon={WalletCards} tone="warning" />
+        <MetricCard title="Comissão média" value={formatPercent(averageCommission)} hint="Base dos ativos" icon={WalletCards} />
+        <MetricCard title="Salários base" value={formatCurrency(totalBaseSalary)} hint="Somatório dos ativos" icon={WalletCards} tone="warning" />
       </div>
 
       <Dialog open={isFormDialogOpen} onOpenChange={handleFormDialogChange}>
@@ -476,8 +477,8 @@ export default function TechniciansPage() {
             <AlertDialogTitle>Excluir técnico</AlertDialogTitle>
             <AlertDialogDescription>
               {deletingTechnician
-                ? `Essa ação remove ${deletingTechnician.name} do cadastro de técnicos.`
-                : 'Essa ação remove o técnico do cadastro.'}
+                ? `Essa ação exclui ${deletingTechnician.name}, o usuário de acesso e os registros vinculados. Para manter o histórico, altere o status para inativo.`
+                : 'Essa ação exclui o técnico, o usuário de acesso e os registros vinculados. Para manter o histórico, altere o status para inativo.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -536,7 +537,7 @@ export default function TechniciansPage() {
                       <td className="py-3 pr-4">{formatCurrency(technician.va_allowance)}</td>
                       <td className="py-3 pr-4">{formatCurrency(technician.vr_allowance)}</td>
                       <td className="py-3 pr-4">
-                        <StatusBadge tone={technician.status === 'active' ? 'success' : 'neutral'}>
+                        <StatusBadge tone={technician.status === 'active' ? 'success' : 'danger'}>
                           {technician.status === 'active' ? 'Ativo' : 'Inativo'}
                         </StatusBadge>
                       </td>

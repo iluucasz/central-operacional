@@ -182,29 +182,33 @@ export default function AdminDashboard() {
 
   const competenceOptions = useMemo(() => {
     const values = new Set<string>();
+    const activeIds = new Set(technicians.filter((technician) => technician.status === 'active').map((technician) => technician.id));
 
     services.forEach((service) => {
+      if (!activeIds.has(service.technician_id)) return;
       const competence = getServiceCompetence(service);
       if (competence) values.add(competence);
     });
 
     payroll.forEach((item) => {
+      if (!activeIds.has(item.technician_id)) return;
       const competence = String(item.competence_month ?? '').trim();
       if (/^\d{4}-\d{2}$/.test(competence)) values.add(competence);
     });
 
     return Array.from(values).sort((left, right) => right.localeCompare(left, 'pt-BR'));
-  }, [payroll, services]);
-
-  useEffect(() => {
-    if (!competenceOptions.length) return;
-    if (!competenceOptions.includes(competenceMonth)) {
-      setCompetenceMonth(competenceOptions[0]);
-    }
-  }, [competenceMonth, competenceOptions]);
+  }, [payroll, services, technicians]);
 
   const selectedCompetenceYear = Number(competenceMonth.slice(0, 4)) || new Date().getFullYear();
   const selectedCompetenceMonth = Number(competenceMonth.slice(5, 7)) || new Date().getMonth() + 1;
+  const activeTechnicians = useMemo(
+    () => technicians.filter((technician) => technician.status === 'active'),
+    [technicians],
+  );
+  const activeTechnicianIds = useMemo(
+    () => new Set(activeTechnicians.map((technician) => technician.id)),
+    [activeTechnicians],
+  );
   const competenceYearOptions = useMemo(() => {
     const years = competenceOptions
       .map((value) => Number(value.slice(0, 4)))
@@ -214,17 +218,17 @@ export default function AdminDashboard() {
   }, [competenceOptions, selectedCompetenceYear]);
 
   const servicesInCompetence = useMemo(
-    () => services.filter((service) => getServiceCompetence(service) === competenceMonth),
-    [competenceMonth, services],
+    () => services.filter((service) => activeTechnicianIds.has(service.technician_id) && getServiceCompetence(service) === competenceMonth),
+    [activeTechnicianIds, competenceMonth, services],
   );
 
   const payrollInCompetence = useMemo(
-    () => payroll.filter((item) => item.competence_month === competenceMonth),
-    [competenceMonth, payroll],
+    () => payroll.filter((item) => activeTechnicianIds.has(item.technician_id) && item.competence_month === competenceMonth),
+    [activeTechnicianIds, competenceMonth, payroll],
   );
 
   const summaries = useMemo<TechnicianSummary[]>(() => {
-    return technicians
+    return activeTechnicians
       .map((technician) => {
         const technicianServices = servicesInCompetence.filter((service) => serviceBelongsToTechnician(service, technician));
         const payrollItem = payrollInCompetence.find((item) => item.technician_id === technician.id);
@@ -242,7 +246,6 @@ export default function AdminDashboard() {
           hasActivity,
         };
       })
-      .filter((row) => row.hasActivity || row.technician.status === 'active')
       .sort((left, right) => {
         if (right.grossValue !== left.grossValue) return right.grossValue - left.grossValue;
         if (Number(Boolean(right.payrollItem)) !== Number(Boolean(left.payrollItem))) {
@@ -250,15 +253,14 @@ export default function AdminDashboard() {
         }
         return left.technician.name.localeCompare(right.technician.name, 'pt-BR');
       });
-  }, [payrollInCompetence, servicesInCompetence, technicians]);
+  }, [activeTechnicians, payrollInCompetence, servicesInCompetence]);
 
   if (loading || isDataLoading || !user) {
     return <LoadingState />;
   }
 
-  const activeTechnicians = technicians.filter((technician) => technician.status === 'active');
   const rowsWithServices = summaries.filter((row) => row.serviceCount > 0);
-  const rowsWithPayrollObligation = summaries.filter((row) => row.hasActivity || row.technician.status === 'active');
+  const rowsWithPayrollObligation = summaries;
   const pendingPayrollRows = rowsWithPayrollObligation.filter((row) => !row.payrollItem);
   const negativeResultRows = summaries.filter((row) => typeof row.result === 'number' && row.result < 0);
   const activeWithoutServicesRows = summaries.filter((row) => row.technician.status === 'active' && row.serviceCount === 0);

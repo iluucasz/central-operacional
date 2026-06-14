@@ -498,7 +498,7 @@ export default function PayrollPage() {
   }, [competenceMonth, user]);
 
   const rows = useMemo<PayrollRow[]>(() => {
-    return technicians.map((technician) => {
+    return technicians.filter((technician) => technician.status === 'active').map((technician) => {
       const payrollItem = payroll.find(
         (item) => item.technician_id === technician.id && item.competence_month === competenceMonth,
       );
@@ -509,7 +509,7 @@ export default function PayrollPage() {
         (discount) => discount.technician_id === technician.id && discount.competence_month === competenceMonth,
       );
       const hasMonthlyActivity = Boolean(payrollItem || technicianServices.length > 0 || technicianDiscounts.length > 0);
-      const hasMonthlyObligation = Boolean(hasMonthlyActivity || technician.status === 'active');
+      const hasMonthlyObligation = true;
       const serviceFortnightSummary = createServiceFortnightSummary(technicianServices);
       const servicesTotal = roundMoney(technicianServices.reduce((total, service) => total + moneyValue(service.value), 0));
       const serviceCount = technicianServices.length;
@@ -842,7 +842,7 @@ export default function PayrollPage() {
 
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
 
-      <div className="mb-4 grid gap-3 xl:grid-cols-7">
+      <div className="mb-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-3">
         <MetricCard title="Em conta" value={formatCurrency(totalCashNet)} hint="Valor já devido em conta" icon={WalletCards} tone="success" />
         <MetricCard title="Cartões" value={formatCurrency(totalBenefits)} hint="VR + VA já devidos" icon={CreditCard} />
         <MetricCard title="Líquido da folha" value={formatCurrency(totalPayrollNet)} hint="Custo total já devido" icon={Calculator} tone="success" />
@@ -915,14 +915,14 @@ export default function PayrollPage() {
         title="Fechamento por técnico"
         description="A tabela mostra o resumo do mês com o breakdown de Q1 e Q2. Abra a folha para revisar e fechar. Depois de fechada, a ação disponível passa a ser o PDF do técnico."
         action={
-          <div className="flex min-h-10 items-center gap-2 rounded-md border border-border bg-background px-3">
+          <div className="flex min-h-10 w-full items-center gap-2 rounded-md border border-border bg-background px-3 sm:w-auto">
             <Search className="h-4 w-4 text-muted-foreground" />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar técnico" className="w-56 bg-transparent text-sm outline-none" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar técnico" className="w-full bg-transparent text-sm outline-none sm:w-56" />
           </div>
         }
       >
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[1050px] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
                 <th className="py-3 pr-4 font-medium">Técnico</th>
@@ -956,11 +956,11 @@ export default function PayrollPage() {
                       {row.hasMonthlyActivity ? formatServiceFortnightValueSummary(row.serviceFortnightSummary) : row.hasMonthlyObligation ? 'Somente custo fixo' : 'Sem valor lançado'}
                     </div>
                   </td>
-                  <td className="py-3 pr-4">{row.hasMonthlyObligation ? formatCurrency(row.commission) : '-'}</td>
-                  <td className="py-3 pr-4">{row.hasMonthlyObligation ? formatCurrency(row.totalDeductions) : '-'}</td>
-                  <td className="py-3 pr-4 font-semibold">{row.hasMonthlyObligation ? formatCurrency(row.cashNetTotal) : '-'}</td>
-                  <td className="py-3 pr-4 font-semibold">{row.hasMonthlyObligation ? formatCurrency(row.payrollNetTotal) : '-'}</td>
-                  <td className={`py-3 pr-4 font-semibold ${row.profitValue >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                  <td className="whitespace-nowrap py-3 pr-4">{row.hasMonthlyObligation ? formatCurrency(row.commission) : '-'}</td>
+                  <td className="whitespace-nowrap py-3 pr-4">{row.hasMonthlyObligation ? formatCurrency(row.totalDeductions) : '-'}</td>
+                  <td className="whitespace-nowrap py-3 pr-4 font-semibold">{row.hasMonthlyObligation ? formatCurrency(row.cashNetTotal) : '-'}</td>
+                  <td className="whitespace-nowrap py-3 pr-4 font-semibold">{row.hasMonthlyObligation ? formatCurrency(row.payrollNetTotal) : '-'}</td>
+                  <td className={`whitespace-nowrap py-3 pr-4 font-semibold ${row.profitValue >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                     {row.hasMonthlyObligation ? formatCurrency(row.profitValue) : '-'}
                   </td>
                   <td className="py-3 pr-4">

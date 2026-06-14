@@ -15,6 +15,35 @@ function roundCurrency(value: number | string | null | undefined): number {
   return Math.round((numericValue + Number.EPSILON) * 100) / 100;
 }
 
+async function isTechnicianActive(technicianId: string) {
+  const result = await sql`
+    SELECT status
+    FROM technicians
+    WHERE id = ${technicianId}
+    LIMIT 1
+  `;
+
+  return result[0]?.status === 'active';
+}
+
+function createEmptyPayrollResult(technicianId: string, competenceMonth: string): PayrollCalculationResult {
+  return {
+    technician_id: technicianId,
+    competence_month: competenceMonth,
+    total_services_value: 0,
+    commission_value: 0,
+    base_salary: 0,
+    va_deduction: 0,
+    vr_deduction: 0,
+    discounts_total: 0,
+    advances_total: 0,
+    extra_hours_value: 0,
+    extraordinary_award_value: 0,
+    hour_bank_balance: 0,
+    net_total: 0,
+  };
+}
+
 export interface PayrollCalculationInput {
   technicianId: string;
   competenceMonth: string; // Format: YYYY-MM
@@ -65,6 +94,7 @@ export async function calculateTotalServices(
     SELECT COALESCE(SUM(value), 0) as total
     FROM services
     WHERE technician_id = ${technicianId}
+    AND EXISTS (SELECT 1 FROM technicians t WHERE t.id = services.technician_id AND t.status = 'active')
     AND COALESCE(NULLIF(competence_month, ''), TO_CHAR(date_performed::date, 'YYYY-MM')) = ${competenceMonth}
   `;
 
@@ -79,6 +109,7 @@ export async function calculateServiceCount(
     SELECT COUNT(*) as total
     FROM services
     WHERE technician_id = ${technicianId}
+    AND EXISTS (SELECT 1 FROM technicians t WHERE t.id = services.technician_id AND t.status = 'active')
     AND COALESCE(NULLIF(competence_month, ''), TO_CHAR(date_performed::date, 'YYYY-MM')) = ${competenceMonth}
   `;
 
@@ -138,13 +169,8 @@ async function getPayrollReference(
       net_total
     FROM payroll
     WHERE technician_id = ${technicianId}
-    ORDER BY
-      CASE
-        WHEN competence_month = ${competenceMonth} THEN 0
-        ELSE 1
-      END,
-      updated_at DESC,
-      created_at DESC
+    AND competence_month = ${competenceMonth}
+    ORDER BY updated_at DESC, created_at DESC
     LIMIT 1
   `;
 
@@ -195,6 +221,7 @@ export async function calculateCommission(
     SELECT commission_percentage, base_salary, va_allowance, vr_allowance
     FROM technicians
     WHERE id = ${technicianId}
+      AND status = 'active'
   `;
 
   if (!technician || technician.length === 0) {
@@ -296,6 +323,7 @@ export async function getTechnicianAllowances(
     SELECT base_salary, va_allowance, vr_allowance, commission_percentage
     FROM technicians
     WHERE id = ${technicianId}
+      AND status = 'active'
   `;
 
   if (!result || result.length === 0) {
@@ -336,6 +364,10 @@ export async function calculatePayroll(
   input: PayrollCalculationInput
 ): Promise<PayrollCalculationResult> {
   const { technicianId, competenceMonth } = input;
+
+  if (!(await isTechnicianActive(technicianId))) {
+    return createEmptyPayrollResult(technicianId, competenceMonth);
+  }
 
   // Get base info
   const allowances = await getTechnicianAllowances(technicianId);

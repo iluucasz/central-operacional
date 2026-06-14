@@ -4,6 +4,17 @@ import { verifyAuth } from '@/lib/auth';
 
 const sql = neon(process.env.DATABASE_URL!);
 
+type WorkHourEntry = {
+  technician_id: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  hours_worked: number;
+  week_number: number;
+  month: number;
+  year: number;
+};
+
 function isValidTime(value: unknown) {
   return typeof value === 'string' && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(value);
 }
@@ -32,6 +43,15 @@ function parseHours(value: unknown) {
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 24 ? Number(parsed.toFixed(2)) : null;
 }
 
+async function getActiveTechnicianIds(technicianIds: string[]) {
+  if (!technicianIds.length) {
+    return new Set<string>();
+  }
+
+  const rows = await sql.query("SELECT id FROM technicians WHERE status = 'active' AND id = ANY($1)", [technicianIds]);
+  return new Set(rows.map((row) => String(row.id)));
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await verifyAuth(request);
@@ -53,17 +73,21 @@ export async function GET(request: NextRequest) {
     `;
 
     const params = [];
+    const conditions = [
+      `EXISTS (SELECT 1 FROM technicians t WHERE t.id = work_hours.technician_id AND t.status = 'active')`,
+    ];
 
     if (auth.role === 'technician' || technicianId) {
-      query += ` WHERE technician_id = $${params.length + 1}`;
+      conditions.push(`technician_id = $${params.length + 1}`);
       params.push(technicianId || auth.technicianId || auth.userId);
     }
 
     if (month) {
-      query += params.length > 0 ? ` AND TO_CHAR(date::date, 'YYYY-MM') = $${params.length + 1}` : ` WHERE TO_CHAR(date::date, 'YYYY-MM') = $1`;
+      conditions.push(`TO_CHAR(date::date, 'YYYY-MM') = $${params.length + 1}`);
       params.push(month);
     }
 
+    query += ` WHERE ${conditions.join(' AND ')}`;
     query += ` ORDER BY date DESC`;
 
     const workHours = await sql.query(query, params);
@@ -90,7 +114,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
 
     if (auth.role === 'admin' && Array.isArray(body?.entries)) {
-      const parsedEntries = body.entries
+      const parsedEntries: WorkHourEntry[] = (body.entries as unknown[])
         .map((entry: unknown) => {
           if (typeof entry !== 'object' || entry === null) {
             return null;
@@ -118,24 +142,22 @@ export async function POST(request: NextRequest) {
             year: Number.isInteger(Number(raw.year)) ? Number(raw.year) : Number(date.slice(0, 4)),
           };
         })
-        .filter((entry: unknown): entry is {
-          technician_id: string;
-          date: string;
-          start_time: string;
-          end_time: string;
-          hours_worked: number;
-          week_number: number;
-          month: number;
-          year: number;
-        } => Boolean(entry));
+        .filter((entry: WorkHourEntry | null): entry is WorkHourEntry => Boolean(entry));
 
       if (!parsedEntries.length) {
         return NextResponse.json({ error: 'Nenhum apontamento válido informado.' }, { status: 400 });
       }
 
+      const activeTechnicianIds = await getActiveTechnicianIds(Array.from(new Set(parsedEntries.map((entry) => entry.technician_id))));
+      const entriesForActiveTechnicians = parsedEntries.filter((entry) => activeTechnicianIds.has(entry.technician_id));
+
+      if (!entriesForActiveTechnicians.length) {
+        return NextResponse.json({ error: 'Nenhum apontamento para tecnico ativo foi informado.' }, { status: 400 });
+      }
+
       const saved = [];
 
-      for (const entry of parsedEntries) {
+      for (const entry of entriesForActiveTechnicians) {
         await sql`
           DELETE FROM work_hours
           WHERE technician_id = ${entry.technician_id}
@@ -165,7 +187,7 @@ export async function POST(request: NextRequest) {
         saved.push(inserted[0]);
       }
 
-      return NextResponse.json({ workHours: saved, count: saved.length }, { status: 201 });
+      return NextResponse.json({ workHours: saved, count: saved.length, skippedInactive: parsedEntries.length - entriesForActiveTechnicians.length }, { status: 201 });
     }
 
     const {
@@ -181,6 +203,10 @@ export async function POST(request: NextRequest) {
     const technicianId = auth.role === 'admin' 
       ? request.headers.get('x-technician-id') 
       : auth.technicianId || auth.userId;
+
+    if (!technicianId || !(await getActiveTechnicianIds([technicianId])).has(technicianId)) {
+      return NextResponse.json({ error: 'Selecione um tecnico ativo para lancar horas.' }, { status: 409 });
+    }
 
     const result = await sql`
       INSERT INTO work_hours (

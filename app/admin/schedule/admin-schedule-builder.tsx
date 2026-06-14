@@ -679,13 +679,19 @@ export function AdminScheduleBuilderPage() {
     };
   }, [user]);
 
-  const visibleSchedule = useMemo(
-    () => [...schedule].sort((left, right) => normalizeDateKey(left.date).localeCompare(normalizeDateKey(right.date))),
-    [schedule],
-  );
   const activeTechnicians = useMemo(
     () => technicians.filter((technician) => technician.status === 'active'),
     [technicians],
+  );
+  const activeTechnicianIds = useMemo(
+    () => new Set(activeTechnicians.map((technician) => technician.id)),
+    [activeTechnicians],
+  );
+  const visibleSchedule = useMemo(
+    () => schedule
+      .filter((item) => activeTechnicianIds.has(item.technician_id))
+      .sort((left, right) => normalizeDateKey(left.date).localeCompare(normalizeDateKey(right.date))),
+    [activeTechnicianIds, schedule],
   );
   const sortedTechnicians = useMemo(
     () => [...activeTechnicians].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR')),
@@ -782,8 +788,8 @@ export function AdminScheduleBuilderPage() {
 
       nextRules[dayKey] = {
         ...nextRules[dayKey],
-        mode: 'selected',
-        technician_ids: technicianIds,
+        mode: 'all',
+        technician_ids: [],
         rotation_cadence: 'weekly',
       };
     });
@@ -808,11 +814,11 @@ export function AdminScheduleBuilderPage() {
       saturday_rule: dayRules.saturday,
       sunday_rule: dayRules.sunday,
       day_rules: dayRules,
-      rotation_groups: formData.rotation_groups.map(({ label, day_keys, technician_ids }) => ({
+      rotation_groups: formData.rotation_groups.map(({ label, day_keys, technician_ids, rotation_cadence }) => ({
         label,
         day_keys,
         technician_ids,
-        rotation_cadence: 'weekly',
+        rotation_cadence: rotation_cadence ?? 'weekly',
       })),
       recurring_rules: formData.recurring_rules.map(({ technician_id, day_keys, status, start_time, end_time, notes }) => ({
         technician_id,

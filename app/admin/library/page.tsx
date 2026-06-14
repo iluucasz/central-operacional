@@ -225,7 +225,9 @@ export default function AdminLibraryPage() {
     return <LoadingState />;
   }
 
-  const sortedTechnicians = [...technicians].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'));
+  const sortedTechnicians = technicians
+    .filter((technician) => technician.status === 'active')
+    .sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'));
 
   const filteredDocuments = documents.filter((document) => {
     const haystack = normalizeText(`${document.title} ${document.category} ${document.audience} ${document.technician_name ?? ''}`);

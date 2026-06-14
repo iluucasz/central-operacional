@@ -54,6 +54,8 @@ async function listDocuments(scope: DocumentAuthScope) {
     conditions.push(`(d.audience <> 'Individual' OR d.technician_id = $${params.length})`);
   }
 
+  conditions.push(`(d.audience <> 'Individual' OR t.status = 'active')`);
+
   const query = `
     SELECT
       d.id,
@@ -128,11 +130,12 @@ export async function POST(request: NextRequest) {
         SELECT id
         FROM technicians
         WHERE id::text = ${technicianId}
+          AND status = 'active'
         LIMIT 1
       `;
 
       if (!technicians.length) {
-        return NextResponse.json({ error: 'Técnico destinatário não encontrado.' }, { status: 404 });
+        return NextResponse.json({ error: 'Técnico destinatário não encontrado ou inativo.' }, { status: 404 });
       }
 
       targetTechnicianId = String(technicians[0].id);

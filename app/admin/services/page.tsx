@@ -378,13 +378,29 @@ export default function AdminServicesPage() {
     };
   }, [user]);
 
-  const visibleServices = services;
   const visibleTechnicians = technicians;
   const inputClassName = 'min-h-11 w-full rounded-xl border border-input bg-background px-3.5 text-sm outline-none transition focus:ring-2 focus:ring-ring';
+
+  const activeTechnicians = useMemo(
+    () => technicians.filter((technician) => technician.status === 'active'),
+    [technicians],
+  );
+  const activeTechnicianIds = useMemo(
+    () => new Set(activeTechnicians.map((technician) => technician.id)),
+    [activeTechnicians],
+  );
+  const visibleServices = useMemo(
+    () => services.filter((service) => activeTechnicianIds.has(service.technician_id)),
+    [activeTechnicianIds, services],
+  );
 
   const sortedTechnicians = useMemo(() => {
     return [...visibleTechnicians].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'));
   }, [visibleTechnicians]);
+
+  const sortedActiveTechnicians = useMemo(() => {
+    return [...activeTechnicians].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'));
+  }, [activeTechnicians]);
 
   const servicesWithDetails = useMemo(() => {
     const technicianNameMap = new Map(sortedTechnicians.map((technician) => [technician.id, technician.name]));
@@ -507,7 +523,7 @@ export default function AdminServicesPage() {
       }
 
       setImportSheetName(bestSheetName);
-      setImportRows(parseServiceImportRows(bestRows, sortedTechnicians));
+      setImportRows(parseServiceImportRows(bestRows, sortedActiveTechnicians));
     } catch (error) {
       console.error('[admin/services] import read error:', error);
       setImportRows([]);
@@ -686,6 +702,10 @@ export default function AdminServicesPage() {
   const totalValue = filteredServices.reduce((total, service) => total + Number(service.value), 0);
   const uniquePeriods = new Set(filteredServices.map((service) => getServicePeriodKey(service))).size;
   const collaboratorCount = new Set(filteredServices.map((service) => service.technician_id)).size;
+  const selectedFormTechnician = sortedTechnicians.find((technician) => technician.id === formData.technician_id);
+  const serviceFormTechnicians = selectedFormTechnician && selectedFormTechnician.status !== 'active'
+    ? [selectedFormTechnician, ...sortedActiveTechnicians]
+    : sortedActiveTechnicians;
   const collaboratorSummaries = Array.from(
     filteredServices.reduce((summaryMap, service) => {
       const current = summaryMap.get(service.technician_id);
@@ -729,7 +749,7 @@ export default function AdminServicesPage() {
             <UploadCloud className="h-4 w-4" />
             Importar
           </Button>
-          <Button type="button" onClick={openCreateDialog}>
+          <Button type="button" onClick={openCreateDialog} disabled={!sortedActiveTechnicians.length}>
             <Plus className="h-4 w-4" />
             Cadastrar OS
           </Button>
@@ -1083,9 +1103,9 @@ export default function AdminServicesPage() {
                         required
                       >
                         <option value="">Selecione</option>
-                        {sortedTechnicians.map((technician) => (
+                        {serviceFormTechnicians.map((technician) => (
                           <option key={technician.id} value={technician.id}>
-                            {technician.name}
+                            {technician.name}{technician.status !== 'active' ? ' (inativo)' : ''}
                           </option>
                         ))}
                       </select>
@@ -1216,7 +1236,7 @@ export default function AdminServicesPage() {
               <span className="mb-1.5 block font-medium">Colaborador</span>
               <select value={technicianFilter} onChange={(event) => setTechnicianFilter(event.target.value)} className={inputClassName}>
                 <option value="all">Todos</option>
-                {sortedTechnicians.map((technician) => (
+                {sortedActiveTechnicians.map((technician) => (
                   <option key={technician.id} value={technician.id}>
                     {technician.name}
                   </option>

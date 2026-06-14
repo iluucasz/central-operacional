@@ -18,7 +18,11 @@ export async function POST(request: NextRequest) {
 
     // Find user
     const users = await sql`
-      SELECT id, email, password_hash, role FROM neon_auth."user" WHERE email = ${email}
+      SELECT u.id, u.email, u.password_hash, u.role, t.id AS technician_id, t.status AS technician_status
+      FROM neon_auth."user" u
+      LEFT JOIN technicians t ON t.user_id = u.id
+      WHERE u.email = ${email}
+      LIMIT 1
     `;
 
     if (users.length === 0) {
@@ -37,6 +41,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Invalid credentials' },
         { status: 401 }
+      );
+    }
+
+    if (user.role === 'technician' && (!user.technician_id || user.technician_status !== 'active')) {
+      return NextResponse.json(
+        { error: 'Acesso inativo. Fale com o administrador.' },
+        { status: 403 }
       );
     }
 

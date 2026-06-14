@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { calculatePayroll, ensurePayrollSchema } from '@/lib/payroll-utils';
+import { sql } from '@/lib/db';
+
+async function isActiveTechnician(technicianId: string) {
+  const technicians = await sql`
+    SELECT status
+    FROM technicians
+    WHERE id = ${technicianId}
+    LIMIT 1
+  `;
+
+  return technicians[0]?.status === 'active';
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,6 +25,10 @@ export async function POST(request: NextRequest) {
 
     if (!technicianId || !competenceMonth) {
       return NextResponse.json({ error: 'technicianId and competenceMonth are required' }, { status: 400 });
+    }
+
+    if (!(await isActiveTechnician(technicianId))) {
+      return NextResponse.json({ error: 'Selecione um tecnico ativo para fechar folha.' }, { status: 409 });
     }
 
     await ensurePayrollSchema();
