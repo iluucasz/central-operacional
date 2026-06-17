@@ -21,6 +21,14 @@ function inactiveTechnicianResponse() {
   );
 }
 
+function isMonthKey(value: string) {
+  return /^\d{4}-\d{2}$/.test(value);
+}
+
+function isFortnightPeriod(value: string) {
+  return value === 'Q1' || value === 'Q2';
+}
+
 export async function GET(request: NextRequest) {
   try {
     const auth = await verifyAuth(request);
@@ -223,6 +231,56 @@ export async function DELETE(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
+    const mode = searchParams.get('mode');
+
+    if (mode === 'bulk') {
+      const competenceMonth = String(searchParams.get('competenceMonth') ?? '').trim();
+      const rawPeriod = String(searchParams.get('period') ?? '').trim();
+      const normalizedPeriod = rawPeriod.toUpperCase();
+      const isMonthly = rawPeriod.toLowerCase() === 'monthly';
+      const confirmation = String(searchParams.get('confirmation') ?? '').trim().toUpperCase();
+
+      if (confirmation !== 'DELETAR OS') {
+        return NextResponse.json(
+          { error: 'Confirme a delecao digitando DELETAR OS.' },
+          { status: 400 }
+        );
+      }
+
+      if (!isMonthKey(competenceMonth)) {
+        return NextResponse.json(
+          { error: 'Selecione uma competencia valida para deletar as OS.' },
+          { status: 400 }
+        );
+      }
+
+      if (!isMonthly && !isFortnightPeriod(normalizedPeriod)) {
+        return NextResponse.json(
+          { error: 'Selecione Mensal, Q1 ou Q2 para deletar as OS.' },
+          { status: 400 }
+        );
+      }
+
+      const params = isMonthly ? [competenceMonth] : [competenceMonth, normalizedPeriod];
+      const periodCondition = isMonthly ? '' : ' AND fortnight_period = $2';
+      const result = await sql.query(
+        `
+          DELETE FROM services
+          WHERE COALESCE(NULLIF(competence_month, ''), TO_CHAR(date_performed::date, 'YYYY-MM')) = $1
+          ${periodCondition}
+          RETURNING id
+        `,
+        params
+      );
+
+      return NextResponse.json({
+        success: true,
+        deleted: result.length,
+        ids: result.map((service) => service.id),
+        competenceMonth,
+        period: isMonthly ? 'monthly' : normalizedPeriod,
+      });
+    }
 
     if (!id) {
       return NextResponse.json(
