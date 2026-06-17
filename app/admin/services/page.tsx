@@ -37,6 +37,7 @@ const importStageOrder = ['prepare', 'upload', 'process', 'finalize'] as const;
 const defaultCompetenceMonth = new Date().toISOString().slice(0, 7);
 
 type ImportStageKey = (typeof importStageOrder)[number];
+type BulkDeletePeriod = 'monthly' | ServiceFortnight;
 
 const importStageLabels: Record<ImportStageKey, string> = {
   prepare: 'Preparando lote',
@@ -308,6 +309,13 @@ export default function AdminServicesPage() {
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deletingServiceId, setDeletingServiceId] = useState<string | null>(null);
+  const [isBulkDeleteDialogOpen, setIsBulkDeleteDialogOpen] = useState(false);
+  const [bulkDeleteCompetenceMonth, setBulkDeleteCompetenceMonth] = useState(defaultCompetenceMonth);
+  const [bulkDeletePeriod, setBulkDeletePeriod] = useState<BulkDeletePeriod>('monthly');
+  const [bulkDeleteConfirmation, setBulkDeleteConfirmation] = useState('');
+  const [bulkDeleteError, setBulkDeleteError] = useState('');
+  const [bulkDeleteResult, setBulkDeleteResult] = useState('');
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [importRows, setImportRows] = useState<ParsedServiceImportRow[]>([]);
   const [importFileName, setImportFileName] = useState('');
@@ -454,6 +462,16 @@ export default function AdminServicesPage() {
 
   const validImportRows = useMemo(() => importRows.filter((row) => row.status === 'valid'), [importRows]);
 
+  const bulkDeletePreviewServices = useMemo(() => {
+    return servicesWithDetails.filter((service) => {
+      const competence = getServiceCompetenceMonth(service);
+      if (competence !== bulkDeleteCompetenceMonth) return false;
+      if (bulkDeletePeriod !== 'monthly' && service.fortnight_period !== bulkDeletePeriod) return false;
+
+      return true;
+    });
+  }, [bulkDeleteCompetenceMonth, bulkDeletePeriod, servicesWithDetails]);
+
   function resetForm() {
     setFormData(createInitialFormData());
     setEditingServiceId(null);
@@ -488,6 +506,24 @@ export default function AdminServicesPage() {
 
     if (!open) {
       resetImport();
+    }
+  }
+
+  function resetBulkDelete() {
+    setBulkDeleteConfirmation('');
+    setBulkDeleteError('');
+    setBulkDeleteResult('');
+  }
+
+  function handleBulkDeleteDialogChange(open: boolean) {
+    if (isBulkDeleting && !open) {
+      return;
+    }
+
+    setIsBulkDeleteDialogOpen(open);
+
+    if (!open) {
+      resetBulkDelete();
     }
   }
 
@@ -695,6 +731,70 @@ export default function AdminServicesPage() {
     }
   }
 
+  async function handleBulkDeleteServices() {
+    const confirmation = bulkDeleteConfirmation.trim().toUpperCase();
+
+    if (!bulkDeleteCompetenceMonth) {
+      setBulkDeleteError('Selecione o ano e o mês das OS que serão excluídas.');
+      return;
+    }
+
+    if (confirmation !== 'DELETAR OS') {
+      setBulkDeleteError('Digite DELETAR OS para confirmar a exclusão.');
+      return;
+    }
+
+    setIsBulkDeleting(true);
+    setBulkDeleteError('');
+    setBulkDeleteResult('');
+
+    try {
+      const params = new URLSearchParams({
+        mode: 'bulk',
+        competenceMonth: bulkDeleteCompetenceMonth,
+        period: bulkDeletePeriod,
+        confirmation: 'DELETAR OS',
+      });
+
+      const response = await fetch(`/api/services?${params.toString()}`, {
+        method: 'DELETE',
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        setBulkDeleteError(data?.error || 'Não foi possível deletar as OS selecionadas.');
+        return;
+      }
+
+      const deletedIdsFromApi = Array.isArray(data?.ids) ? data.ids.map((id: unknown) => String(id)) : null;
+      const deletedIds = new Set(deletedIdsFromApi ?? []);
+      const deletedCount = Number(data?.deleted ?? deletedIds.size);
+
+      setServices((current) => {
+        if (deletedIdsFromApi) {
+          return current.filter((service) => !deletedIds.has(service.id));
+        }
+
+        return current.filter((service) => {
+          const competence = getServiceCompetenceMonth(service);
+          if (competence !== bulkDeleteCompetenceMonth) return true;
+          if (bulkDeletePeriod !== 'monthly' && service.fortnight_period !== bulkDeletePeriod) return true;
+
+          return false;
+        });
+      });
+      setBulkDeleteConfirmation('');
+      setBulkDeleteResult(
+        `${deletedCount} OS deletada(s) em ${bulkDeletePeriod === 'monthly' ? 'todo o mês' : bulkDeletePeriod} de ${formatCompetenceLabel(bulkDeleteCompetenceMonth)}.`,
+      );
+    } catch (error) {
+      console.error('[admin/services] bulk delete services error:', error);
+      setBulkDeleteError('Não foi possível deletar as OS selecionadas.');
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }
+
   if (loading || !user || isDataLoading) {
     return <LoadingState />;
   }
@@ -702,6 +802,7 @@ export default function AdminServicesPage() {
   const totalValue = filteredServices.reduce((total, service) => total + Number(service.value), 0);
   const uniquePeriods = new Set(filteredServices.map((service) => getServicePeriodKey(service))).size;
   const collaboratorCount = new Set(filteredServices.map((service) => service.technician_id)).size;
+  const bulkDeletePeriodLabel = bulkDeletePeriod === 'monthly' ? 'Mensal' : bulkDeletePeriod;
   const selectedFormTechnician = sortedTechnicians.find((technician) => technician.id === formData.technician_id);
   const serviceFormTechnicians = selectedFormTechnician && selectedFormTechnician.status !== 'active'
     ? [selectedFormTechnician, ...sortedActiveTechnicians]
@@ -752,6 +853,10 @@ export default function AdminServicesPage() {
           <Button type="button" onClick={openCreateDialog} disabled={!sortedActiveTechnicians.length}>
             <Plus className="h-4 w-4" />
             Cadastrar OS
+          </Button>
+          <Button type="button" variant="destructive" onClick={() => setIsBulkDeleteDialogOpen(true)}>
+            <Trash2 className="h-4 w-4" />
+            Deletar OS
           </Button>
         </div>
       </PageHeader>
@@ -804,6 +909,121 @@ export default function AdminServicesPage() {
       </div>
 
       {dataError ? <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
+
+      <Dialog open={isBulkDeleteDialogOpen} onOpenChange={handleBulkDeleteDialogChange}>
+        <DialogContent
+          className="max-h-[88vh] overflow-hidden p-0 sm:max-w-xl"
+          showCloseButton={!isBulkDeleting}
+          onEscapeKeyDown={(event) => {
+            if (isBulkDeleting) {
+              event.preventDefault();
+            }
+          }}
+          onPointerDownOutside={(event) => {
+            if (isBulkDeleting) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            if (isBulkDeleting) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <div className="flex max-h-[88vh] min-h-0 flex-col">
+            <DialogHeader className="border-b border-border/70 px-6 py-5 sm:px-7">
+              <DialogTitle className="text-xl">Deletar OS</DialogTitle>
+              <DialogDescription className="max-w-2xl text-sm leading-6 text-muted-foreground">
+                Selecione o ano, o mês e o recorte que será excluído. Essa ação apaga as ordens de serviço definitivamente.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-6 sm:px-7">
+              {bulkDeleteError ? <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{bulkDeleteError}</div> : null}
+              {bulkDeleteResult ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{bulkDeleteResult}</div> : null}
+
+              <label className="text-sm">
+                <span className="mb-1.5 block font-medium">Ano e mês</span>
+                <input
+                  type="month"
+                  value={bulkDeleteCompetenceMonth}
+                  onChange={(event) => {
+                    setBulkDeleteCompetenceMonth(event.target.value);
+                    setBulkDeleteResult('');
+                  }}
+                  className={inputClassName}
+                  disabled={isBulkDeleting}
+                />
+              </label>
+
+              <div>
+                <p className="mb-2 text-sm font-medium">Tipo de deleção</p>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {[
+                    { value: 'monthly' as const, label: 'Mensal' },
+                    { value: 'Q1' as const, label: 'Q1' },
+                    { value: 'Q2' as const, label: 'Q2' },
+                  ].map((option) => (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      variant={bulkDeletePeriod === option.value ? 'default' : 'outline'}
+                      onClick={() => {
+                        setBulkDeletePeriod(option.value);
+                        setBulkDeleteResult('');
+                      }}
+                      disabled={isBulkDeleting}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border bg-secondary/40 p-4 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-foreground">{formatCompetenceLabel(bulkDeleteCompetenceMonth)}</p>
+                    <p className="mt-1 text-muted-foreground">{bulkDeletePeriodLabel} selecionado para exclusão.</p>
+                  </div>
+                  <StatusBadge tone={bulkDeletePreviewServices.length ? 'danger' : 'neutral'}>
+                    {bulkDeletePreviewServices.length} OS na tela
+                  </StatusBadge>
+                </div>
+              </div>
+
+              <label className="text-sm">
+                <span className="mb-1.5 block font-medium">Confirmação</span>
+                <input
+                  value={bulkDeleteConfirmation}
+                  onChange={(event) => {
+                    setBulkDeleteConfirmation(event.target.value);
+                    setBulkDeleteError('');
+                  }}
+                  placeholder="Digite DELETAR OS"
+                  className={inputClassName}
+                  disabled={isBulkDeleting}
+                />
+              </label>
+            </div>
+
+            <DialogFooter className="border-t border-border/70 bg-background/95 px-6 py-4 sm:px-7">
+              <Button type="button" variant="outline" onClick={() => handleBulkDeleteDialogChange(false)} disabled={isBulkDeleting}>
+                Fechar
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={handleBulkDeleteServices}
+                disabled={!bulkDeleteCompetenceMonth || bulkDeleteConfirmation.trim().toUpperCase() !== 'DELETAR OS' || isBulkDeleting}
+                className="min-w-36"
+              >
+                {isBulkDeleting ? 'Deletando...' : 'Confirmar deleção'}
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isImportDialogOpen} onOpenChange={handleImportDialogChange}>
         <DialogContent
