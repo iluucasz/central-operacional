@@ -438,8 +438,8 @@ export default function AdminLibraryPage() {
             <AlertDialogTitle>Excluir arquivo</AlertDialogTitle>
             <AlertDialogDescription>
               {documentPendingDeletion
-                ? `Essa ação remove "${documentPendingDeletion.title}" da galeria e apaga o arquivo do storage quando ele estiver no Vercel Blob.`
-                : 'Essa ação remove o arquivo da galeria e do storage.'}
+                ? `Tem certeza que deseja excluir "${documentPendingDeletion.title}"? Depois de excluído, esse arquivo não ficará mais disponível na biblioteca.`
+                : 'Tem certeza que deseja excluir este arquivo? Depois de excluído, ele não ficará mais disponível na biblioteca.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
 
