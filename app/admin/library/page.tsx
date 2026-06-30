@@ -11,6 +11,7 @@ import {
   Globe2,
   Search,
   Shield,
+  Trash2,
   UploadCloud,
   UserRound,
 } from 'lucide-react';
@@ -21,6 +22,16 @@ import { LoadingState } from '@/components/loading-state';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -119,6 +130,9 @@ export default function AdminLibraryPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [documentPendingDeletion, setDocumentPendingDeletion] = useState<LibraryDocument | null>(null);
+  const [deletingDocumentId, setDeletingDocumentId] = useState('');
+  const [deleteError, setDeleteError] = useState('');
 
   useEffect(() => {
     let mounted = true;
@@ -222,6 +236,33 @@ export default function AdminLibraryPage() {
       }
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function handleDeleteDocument() {
+    if (!documentPendingDeletion) return;
+
+    const documentId = documentPendingDeletion.id;
+    setDeletingDocumentId(documentId);
+    setDeleteError('');
+
+    try {
+      const response = await fetch(`/api/documents?id=${encodeURIComponent(documentId)}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        setDeleteError(errorData?.error || 'Não foi possível excluir o arquivo. Tente novamente.');
+        return;
+      }
+
+      setDocuments((current) => current.filter((document) => document.id !== documentId));
+      setDocumentPendingDeletion(null);
+    } catch {
+      setDeleteError('Não foi possível excluir o arquivo. Tente novamente.');
+    } finally {
+      setDeletingDocumentId('');
     }
   }
 
@@ -383,6 +424,45 @@ export default function AdminLibraryPage() {
         </Dialog>
       </PageHeader>
 
+      <AlertDialog
+        open={Boolean(documentPendingDeletion)}
+        onOpenChange={(open) => {
+          if (!open && !deletingDocumentId) {
+            setDocumentPendingDeletion(null);
+            setDeleteError('');
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir arquivo</AlertDialogTitle>
+            <AlertDialogDescription>
+              {documentPendingDeletion
+                ? `Essa ação remove "${documentPendingDeletion.title}" da galeria e apaga o arquivo do storage quando ele estiver no Vercel Blob.`
+                : 'Essa ação remove o arquivo da galeria e do storage.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          {deleteError ? <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{deleteError}</div> : null}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setDeleteError('')} disabled={Boolean(deletingDocumentId)}>
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              disabled={Boolean(deletingDocumentId)}
+              onClick={async (event) => {
+                event.preventDefault();
+                await handleDeleteDocument();
+              }}
+            >
+              {deletingDocumentId ? 'Excluindo...' : 'Excluir arquivo'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
 
       <div className="grid gap-3 xl:grid-cols-4">
@@ -515,18 +595,33 @@ export default function AdminLibraryPage() {
                                   ) : null}
                                 </div>
 
-                                {document.url ? (
-                                  <Button asChild className="w-full">
-                                    <a href={document.url} target="_blank" rel="noreferrer">
-                                      <ExternalLink className="h-4 w-4" />
-                                      Abrir arquivo
-                                    </a>
+                                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                                  {document.url ? (
+                                    <Button asChild className="w-full">
+                                      <a href={document.url} target="_blank" rel="noreferrer">
+                                        <ExternalLink className="h-4 w-4" />
+                                        Abrir arquivo
+                                      </a>
+                                    </Button>
+                                  ) : (
+                                    <Button type="button" variant="secondary" className="w-full" disabled>
+                                      Arquivo ainda não enviado
+                                    </Button>
+                                  )}
+                                  <Button
+                                    type="button"
+                                    variant="destructive"
+                                    size="icon"
+                                    aria-label={`Excluir ${document.title}`}
+                                    disabled={deletingDocumentId === document.id}
+                                    onClick={() => {
+                                      setDocumentPendingDeletion(document);
+                                      setDeleteError('');
+                                    }}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
                                   </Button>
-                                ) : (
-                                  <Button type="button" variant="secondary" className="w-full" disabled>
-                                    Arquivo ainda não enviado
-                                  </Button>
-                                )}
+                                </div>
                               </div>
                             </article>
                           );

@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { put } from '@vercel/blob';
+import { BlobNotFoundError, del, put } from '@vercel/blob';
 import { verifyAuth } from '@/lib/auth';
 import { sql } from '@/lib/db';
 import { ensureLibrarySchema } from '@/lib/library-schema';
@@ -47,6 +47,16 @@ function getDocumentType(fileName: string, mimeType: string) {
   }
 
   return mimeType || 'Arquivo';
+}
+
+function isVercelBlobUrl(value: string | null | undefined) {
+  if (!value) return false;
+
+  try {
+    return new URL(value).hostname.endsWith('.blob.vercel-storage.com');
+  } catch {
+    return false;
+  }
 }
 
 type DocumentAuthScope = {
@@ -192,6 +202,62 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result[0], { status: 201 });
   } catch (error) {
     console.error('[documents] Create document error:', error);
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const auth = await verifyAuth(request);
+    if (!auth) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (auth.role !== 'admin') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    await ensureLibrarySchema();
+
+    const { searchParams } = new URL(request.url);
+    const id = String(searchParams.get('id') || '').trim();
+
+    if (!id) {
+      return NextResponse.json({ error: 'Informe o documento que será excluído.' }, { status: 400 });
+    }
+
+    const documents = await sql`
+      SELECT id, title, url
+      FROM library_documents
+      WHERE id = ${id}
+      LIMIT 1
+    `;
+
+    if (!documents.length) {
+      return NextResponse.json({ error: 'Documento não encontrado.' }, { status: 404 });
+    }
+
+    const document = documents[0];
+    const url = String(document.url || '');
+
+    if (isVercelBlobUrl(url)) {
+      try {
+        await del(url);
+      } catch (blobError) {
+        if (!(blobError instanceof BlobNotFoundError)) {
+          throw blobError;
+        }
+      }
+    }
+
+    await sql`
+      DELETE FROM library_documents
+      WHERE id = ${id}
+    `;
+
+    return NextResponse.json({ success: true, id, title: document.title });
+  } catch (error) {
+    console.error('[documents] Delete document error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
