@@ -290,7 +290,7 @@ export default function TechnicianLibraryPage() {
                                   <Button asChild className="w-full">
                                     <a href={document.url} target="_blank" rel="noreferrer">
                                       <ExternalLink className="h-4 w-4" />
-                                      Abrir PDF
+                                      Abrir arquivo
                                     </a>
                                   </Button>
                                 ) : (

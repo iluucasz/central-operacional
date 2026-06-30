@@ -128,7 +128,7 @@ export interface LibraryDocument {
   technician_id?: string | null
   technician_name?: string | null
   updatedAt: string
-  type: 'PDF'
+  type: string
   url?: string
   uploadedBy?: string
 }

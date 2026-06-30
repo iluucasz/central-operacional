@@ -36,6 +36,19 @@ function sanitizeFileName(value: string) {
     .toLowerCase();
 }
 
+function getFileTitle(fileName: string) {
+  return fileName.replace(/\.[^/.]+$/, '');
+}
+
+function getDocumentType(fileName: string, mimeType: string) {
+  const extension = fileName.split('.').pop();
+  if (extension && extension !== fileName && extension.length <= 10) {
+    return extension.toUpperCase();
+  }
+
+  return mimeType || 'Arquivo';
+}
+
 type DocumentAuthScope = {
   role: 'admin' | 'technician';
   technicianId?: string;
@@ -107,12 +120,12 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const file = formData.get('file');
 
-    if (!(file instanceof File) || file.type !== 'application/pdf') {
-      return NextResponse.json({ error: 'Envie um arquivo PDF válido.' }, { status: 400 });
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: 'Envie um arquivo válido.' }, { status: 400 });
     }
 
     const id = randomUUID();
-    const title = String(formData.get('title') || file.name.replace(/\.pdf$/i, '') || 'Documento').trim();
+    const title = String(formData.get('title') || getFileTitle(file.name) || 'Documento').trim();
     const category = String(formData.get('category') || 'Não classificado').trim() || 'Não classificado';
     const audience = normalizeDocumentAudience(String(formData.get('audience') || 'Global'));
     const technicianId = String(formData.get('technician_id') || '').trim();
@@ -138,14 +151,15 @@ export async function POST(request: NextRequest) {
       targetTechnicianId = String(technicians[0].id);
     }
 
-    const safeName = sanitizeFileName(file.name || `documento-${id}.pdf`) || `documento-${id}.pdf`;
-    const fileName = `${id}-${safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`}`;
+    const safeName = sanitizeFileName(file.name || `documento-${id}`) || `documento-${id}`;
+    const fileName = `${id}-${safeName}`;
     const pathname = `library/${fileName}`;
+    const documentType = getDocumentType(file.name || fileName, file.type);
     const buffer = Buffer.from(await file.arrayBuffer());
 
     const blob = await put(pathname, buffer, {
       access: 'public',
-      contentType: 'application/pdf',
+      contentType: file.type || 'application/octet-stream',
     });
 
     const url = blob.url;
@@ -155,7 +169,7 @@ export async function POST(request: NextRequest) {
         id, title, category, audience, technician_id, type, url, file_name, file_size, uploaded_by
       )
       VALUES (
-        ${id}, ${title}, ${category}, ${audience}, ${targetTechnicianId}, 'PDF', ${url}, ${fileName}, ${file.size}, ${auth.email}
+        ${id}, ${title}, ${category}, ${audience}, ${targetTechnicianId}, ${documentType}, ${url}, ${fileName}, ${file.size}, ${auth.email}
       )
       RETURNING
         id,

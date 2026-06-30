@@ -102,6 +102,10 @@ function getSectionConfig(bucket: AudienceBucket) {
   return audienceSections.find((section) => section.id === bucket) ?? audienceSections[0];
 }
 
+function getFileTitle(fileName: string) {
+  return fileName.replace(/\.[^/.]+$/, '');
+}
+
 export default function AdminLibraryPage() {
   const { user, loading } = useAppSession();
   const [query, setQuery] = useState('');
@@ -180,7 +184,7 @@ export default function AdminLibraryPage() {
 
   async function handleUpload() {
     if (!selectedFile) {
-      setUploadError('Selecione um PDF antes de enviar.');
+      setUploadError('Selecione um arquivo antes de enviar.');
       return;
     }
 
@@ -195,7 +199,7 @@ export default function AdminLibraryPage() {
     try {
       const formData = new FormData();
       formData.append('file', selectedFile);
-      formData.append('title', uploadForm.title.trim() || selectedFile.name.replace(/\.pdf$/i, ''));
+      formData.append('title', uploadForm.title.trim() || getFileTitle(selectedFile.name));
       formData.append('category', uploadForm.category.trim() || 'Não classificado');
       formData.append('audience', uploadForm.audience);
       if (uploadForm.audience === 'Individual') {
@@ -262,7 +266,7 @@ export default function AdminLibraryPage() {
           <DialogTrigger asChild>
             <Button>
               <UploadCloud className="h-4 w-4" />
-              Enviar PDF
+              Enviar Arquivo
             </Button>
           </DialogTrigger>
           <DialogContent className="sm:max-w-2xl">
@@ -343,11 +347,10 @@ export default function AdminLibraryPage() {
 
             <label className="flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-border bg-secondary/40 p-8 text-center transition-colors hover:border-primary">
               <UploadCloud className="mb-3 h-9 w-9 text-primary" />
-              <span className="font-semibold">{selectedFile ? selectedFile.name : 'Selecionar PDF'}</span>
-              <span className="mt-1 text-sm text-muted-foreground">Coberturas, manuais, documentos internos e materiais de apoio</span>
+              <span className="font-semibold">{selectedFile ? selectedFile.name : 'Selecionar arquivo'}</span>
+              <span className="mt-1 text-sm text-muted-foreground">Coberturas, manuais, imagens, planilhas, documentos internos e materiais de apoio</span>
               <input
                 type="file"
-                accept=".pdf"
                 className="sr-only"
                 disabled={uploading}
                 onChange={(event) => {
@@ -358,7 +361,7 @@ export default function AdminLibraryPage() {
                   setUploadError('');
                   setUploadForm((current) => ({
                     ...current,
-                    title: current.title.trim() ? current.title : file.name.replace(/\.pdf$/i, ''),
+                    title: current.title.trim() ? current.title : getFileTitle(file.name),
                   }));
                   event.target.value = '';
                 }}
@@ -392,7 +395,7 @@ export default function AdminLibraryPage() {
       <div className="mt-5">
         <DataPanel
           title="Galeria de documentos"
-          description="Busque, filtre por público e navegue a biblioteca como coleções visuais de PDF."
+          description="Busque, filtre por público e navegue a biblioteca como coleções visuais de arquivos."
           action={
             <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
               <div className="flex min-h-10 items-center gap-2 rounded-md border border-border bg-background px-3">
@@ -516,7 +519,7 @@ export default function AdminLibraryPage() {
                                   <Button asChild className="w-full">
                                     <a href={document.url} target="_blank" rel="noreferrer">
                                       <ExternalLink className="h-4 w-4" />
-                                      Abrir PDF
+                                      Abrir arquivo
                                     </a>
                                   </Button>
                                 ) : (
