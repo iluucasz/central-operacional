@@ -1,14 +1,11 @@
 import { randomUUID } from 'crypto';
-import { mkdir, writeFile } from 'fs/promises';
-import path from 'path';
 import { NextRequest, NextResponse } from 'next/server';
+import { put } from '@vercel/blob';
 import { verifyAuth } from '@/lib/auth';
 import { sql } from '@/lib/db';
 import { ensureLibrarySchema } from '@/lib/library-schema';
 
 export const runtime = 'nodejs';
-
-const uploadsDir = path.join(process.cwd(), 'public', 'uploads', 'library');
 
 function normalizeDocumentAudience(value: string | null | undefined) {
   const normalized = String(value ?? '')
@@ -141,16 +138,17 @@ export async function POST(request: NextRequest) {
       targetTechnicianId = String(technicians[0].id);
     }
 
-    await mkdir(uploadsDir, { recursive: true });
-
     const safeName = sanitizeFileName(file.name || `documento-${id}.pdf`) || `documento-${id}.pdf`;
     const fileName = `${id}-${safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`}`;
-    const filePath = path.join(uploadsDir, fileName);
+    const pathname = `library/${fileName}`;
     const buffer = Buffer.from(await file.arrayBuffer());
 
-    await writeFile(filePath, buffer);
+    const blob = await put(pathname, buffer, {
+      access: 'public',
+      contentType: 'application/pdf',
+    });
 
-    const url = `/uploads/library/${fileName}`;
+    const url = blob.url;
 
     const result = await sql`
       INSERT INTO library_documents (
