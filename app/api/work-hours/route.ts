@@ -9,11 +9,17 @@ type WorkHourEntry = {
   date: string;
   start_time: string;
   end_time: string;
+  planned_start_time: string;
+  planned_end_time: string;
   hours_worked: number;
   week_number: number;
   month: number;
   year: number;
+  attendance_status: AttendanceStatus;
+  notes: string;
 };
+
+type AttendanceStatus = 'worked' | 'day_off' | 'missed' | 'justified';
 
 function isValidTime(value: unknown) {
   return typeof value === 'string' && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(value);
@@ -41,6 +47,28 @@ function getIsoWeekNumber(dateKey: string) {
 function parseHours(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 24 ? Number(parsed.toFixed(2)) : null;
+}
+
+function isAttendanceStatus(value: unknown): value is AttendanceStatus {
+  return value === 'worked' || value === 'day_off' || value === 'missed' || value === 'justified';
+}
+
+function getScheduleStatusForAttendance(status: AttendanceStatus) {
+  return status === 'worked' ? 'completed' : 'cancelled';
+}
+
+function getAttendanceLabel(status: AttendanceStatus) {
+  if (status === 'day_off') return 'folga';
+  if (status === 'missed') return 'falta';
+  if (status === 'justified') return 'justificado';
+  return 'trabalhou';
+}
+
+function buildAttendanceNote(entry: WorkHourEntry) {
+  const cleanNotes = entry.notes.trim();
+  const base = `Apontamento manual: ${getAttendanceLabel(entry.attendance_status)}; previsto=${entry.planned_start_time}-${entry.planned_end_time}`;
+
+  return cleanNotes ? `${base}; obs=${cleanNotes}` : base;
 }
 
 async function getActiveTechnicianIds(technicianIds: string[]) {
@@ -123,23 +151,36 @@ export async function POST(request: NextRequest) {
           const raw = entry as Record<string, unknown>;
           const date = String(raw.date ?? '');
           const technicianId = String(raw.technician_id ?? '');
+          const attendanceStatus = isAttendanceStatus(raw.attendance_status) ? raw.attendance_status : 'worked';
           const startTime = normalizeTime(raw.start_time);
           const endTime = normalizeTime(raw.end_time);
-          const hoursWorked = parseHours(raw.hours_worked);
+          const plannedStartTime = normalizeTime(raw.planned_start_time) || startTime;
+          const plannedEndTime = normalizeTime(raw.planned_end_time) || endTime;
+          const parsedHoursWorked = attendanceStatus === 'worked' ? parseHours(raw.hours_worked) : 0;
 
-          if (!technicianId || !isValidDateKey(date) || !isValidTime(startTime) || !isValidTime(endTime) || hoursWorked === null) {
+          if (
+            !technicianId ||
+            !isValidDateKey(date) ||
+            !isValidTime(plannedStartTime) ||
+            !isValidTime(plannedEndTime) ||
+            (attendanceStatus === 'worked' && (!isValidTime(startTime) || !isValidTime(endTime) || parsedHoursWorked === null))
+          ) {
             return null;
           }
 
           return {
             technician_id: technicianId,
             date,
-            start_time: startTime,
-            end_time: endTime,
-            hours_worked: hoursWorked,
+            start_time: attendanceStatus === 'worked' ? startTime : plannedStartTime,
+            end_time: attendanceStatus === 'worked' ? endTime : plannedEndTime,
+            planned_start_time: plannedStartTime,
+            planned_end_time: plannedEndTime,
+            hours_worked: parsedHoursWorked ?? 0,
             week_number: Number.isInteger(Number(raw.week_number)) ? Number(raw.week_number) : getIsoWeekNumber(date),
             month: Number.isInteger(Number(raw.month)) ? Number(raw.month) : Number(date.slice(5, 7)),
             year: Number.isInteger(Number(raw.year)) ? Number(raw.year) : Number(date.slice(0, 4)),
+            attendance_status: attendanceStatus,
+            notes: typeof raw.notes === 'string' ? raw.notes : '',
           };
         })
         .filter((entry: WorkHourEntry | null): entry is WorkHourEntry => Boolean(entry));
@@ -156,6 +197,7 @@ export async function POST(request: NextRequest) {
       }
 
       const saved = [];
+      const schedules = [];
 
       for (const entry of entriesForActiveTechnicians) {
         await sql`
@@ -164,30 +206,44 @@ export async function POST(request: NextRequest) {
             AND date = ${entry.date}
         `;
 
-        const inserted = await sql`
-          INSERT INTO work_hours (
-            technician_id, date, start_time, end_time, hours_worked,
-            week_number, month, year
+        if (entry.attendance_status === 'worked') {
+          const inserted = await sql`
+            INSERT INTO work_hours (
+              technician_id, date, start_time, end_time, hours_worked,
+              week_number, month, year
+            )
+            VALUES (
+              ${entry.technician_id}, ${entry.date}, ${entry.start_time}, ${entry.end_time}, ${entry.hours_worked},
+              ${entry.week_number}, ${entry.month}, ${entry.year}
+            )
+            RETURNING *
+          `;
+
+          saved.push(inserted[0]);
+        }
+
+        await sql`
+          DELETE FROM schedule
+          WHERE technician_id = ${entry.technician_id}
+            AND date = ${entry.date}
+        `;
+
+        const scheduleStatus = getScheduleStatusForAttendance(entry.attendance_status);
+        const scheduleNote = buildAttendanceNote(entry);
+        const scheduleRow = await sql`
+          INSERT INTO schedule (
+            technician_id, date, start_time, end_time, status, notes
           )
           VALUES (
-            ${entry.technician_id}, ${entry.date}, ${entry.start_time}, ${entry.end_time}, ${entry.hours_worked},
-            ${entry.week_number}, ${entry.month}, ${entry.year}
+            ${entry.technician_id}, ${entry.date}, ${entry.start_time}, ${entry.end_time}, ${scheduleStatus}, ${scheduleNote}
           )
           RETURNING *
         `;
 
-        await sql`
-          UPDATE schedule
-          SET status = 'completed'
-          WHERE technician_id = ${entry.technician_id}
-            AND date = ${entry.date}
-            AND status <> 'cancelled'
-        `;
-
-        saved.push(inserted[0]);
+        schedules.push(scheduleRow[0]);
       }
 
-      return NextResponse.json({ workHours: saved, count: saved.length, skippedInactive: parsedEntries.length - entriesForActiveTechnicians.length }, { status: 201 });
+      return NextResponse.json({ workHours: saved, schedules, count: entriesForActiveTechnicians.length, skippedInactive: parsedEntries.length - entriesForActiveTechnicians.length }, { status: 201 });
     }
 
     const {

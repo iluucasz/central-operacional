@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, Clock3, Plus, Search, Trash2, Users, WandSparkles } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import { CalendarDays, Clock3, Download, FileText, Plus, Search, Trash2, Users, WandSparkles } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
@@ -18,7 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { formatDate, formatHours, formatTimeRange, normalizeText } from '@/lib/formatters';
+import { formatDate, formatHours, formatTime, formatTimeRange, normalizeText } from '@/lib/formatters';
 import {
   createDateKey,
   enumerateDateKeys,
@@ -35,7 +36,7 @@ import {
   type WeekendCoverageRule,
   type WeekendRotationCadence,
 } from '@/lib/schedule-planner';
-import type { Schedule, Technician } from '@/lib/types';
+import type { Schedule, Technician, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
 interface DayOffDraft {
@@ -90,6 +91,7 @@ interface ScheduleBuilderForm {
 
 type AttendanceStatus = 'not_marked' | 'worked' | 'day_off' | 'missed' | 'justified';
 type AttendanceMode = 'day' | 'month';
+type HourBankPeriodMode = 'day' | 'week' | 'month';
 
 interface AttendanceDraft {
   key: string;
@@ -102,13 +104,44 @@ interface AttendanceDraft {
   planned_hours: number;
   actual_start_time: string;
   actual_end_time: string;
+  notes: string;
   schedule_status?: Schedule['status'];
 }
 
 interface SchedulePageData {
   schedule: Schedule[];
   technicians: Technician[];
+  workHours: WorkHours[];
   error: string;
+}
+
+interface HourBankRow {
+  technician_id: string;
+  technician_name: string;
+  planned_hours: number;
+  worked_hours: number;
+  balance: number;
+  worked_days: number;
+  day_off_days: number;
+  missed_days: number;
+  justified_days: number;
+  pending_days: number;
+}
+
+interface HourBankDetailRow {
+  key: string;
+  date: string;
+  technician_id: string;
+  technician_name: string;
+  status_label: string;
+  planned_start_time: string;
+  planned_end_time: string;
+  actual_start_time: string;
+  actual_end_time: string;
+  planned_hours: number;
+  worked_hours: number;
+  balance: number;
+  observation: string;
 }
 
 interface TechnicianChecklistProps {
@@ -161,6 +194,11 @@ const weekdayLabels = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
 const DEFAULT_START_TIME = '08:00';
 const DEFAULT_END_TIME = '17:00';
 const DAILY_BREAK_HOURS = 1;
+const hourBankPeriodOptions: Array<{ value: HourBankPeriodMode; label: string }> = [
+  { value: 'day', label: 'Dia' },
+  { value: 'week', label: 'Semana' },
+  { value: 'month', label: 'Mês' },
+];
 const dayRuleDefinitions: Array<{ key: ScheduleDayRuleKey; label: string; dayLabel: string }> = [
   { key: 'monday', label: 'Segunda', dayLabel: 'segunda-feira' },
   { key: 'tuesday', label: 'Terça', dayLabel: 'terça-feira' },
@@ -170,6 +208,47 @@ const dayRuleDefinitions: Array<{ key: ScheduleDayRuleKey; label: string; dayLab
   { key: 'saturday', label: 'Sábado', dayLabel: 'sábado' },
   { key: 'sunday', label: 'Domingo', dayLabel: 'domingo' },
 ];
+const MANUAL_ATTENDANCE_PREFIX = 'Apontamento manual:';
+
+function parseManualAttendanceNote(notes: string | null | undefined) {
+  const value = String(notes ?? '').trim();
+  if (!value.startsWith(MANUAL_ATTENDANCE_PREFIX)) {
+    return {
+      observation: '',
+    };
+  }
+
+  const statusMatch = value.match(/^Apontamento manual:\s*([^;]+)/i);
+  const normalizedStatus = normalizeText(statusMatch?.[1] ?? '');
+  const plannedMatch = value.match(/(?:^|;\s*)previsto=(\d{1,2}:\d{2})-(\d{1,2}:\d{2})/i);
+  const observationMatch = value.match(/(?:^|;\s*)obs=(.*)$/i);
+  let attendance_status: AttendanceStatus | undefined;
+
+  if (normalizedStatus.includes('folga')) {
+    attendance_status = 'day_off';
+  } else if (normalizedStatus.includes('falta')) {
+    attendance_status = 'missed';
+  } else if (normalizedStatus.includes('justificado')) {
+    attendance_status = 'justified';
+  } else if (normalizedStatus.includes('trabalhou')) {
+    attendance_status = 'worked';
+  }
+
+  return {
+    attendance_status,
+    planned_start_time: plannedMatch?.[1],
+    planned_end_time: plannedMatch?.[2],
+    observation: observationMatch?.[1]?.trim() ?? '',
+  };
+}
+
+function getAttendanceStatusLabel(status: AttendanceStatus | undefined) {
+  if (status === 'worked') return 'Trabalhou';
+  if (status === 'day_off') return 'Folgou';
+  if (status === 'missed') return 'Faltou';
+  if (status === 'justified') return 'Justificou';
+  return 'Sem apontamento';
+}
 
 function createCoverageRule(mode: WeekendCoverageMode): WeekendCoverageRule {
   return {
@@ -277,8 +356,8 @@ function isAttendanceSelected(draft: AttendanceDraft) {
 function getAttendanceWorkedHours(draft: AttendanceDraft) {
   if (draft.attendance_status === 'not_marked') return 0;
   if (draft.attendance_status === 'missed') return 0;
-  if (draft.attendance_status === 'day_off') return draft.planned_hours;
-  if (draft.attendance_status === 'justified') return draft.planned_hours;
+  if (draft.attendance_status === 'day_off') return 0;
+  if (draft.attendance_status === 'justified') return 0;
 
   return getHoursBetween(draft.actual_start_time, draft.actual_end_time);
 }
@@ -286,14 +365,15 @@ function getAttendanceWorkedHours(draft: AttendanceDraft) {
 function getAttendanceBalance(draft: AttendanceDraft) {
   if (!isAttendanceSelected(draft)) return 0;
   if (draft.attendance_status === 'day_off' || draft.attendance_status === 'justified') return 0;
+  if (draft.attendance_status === 'missed') return -draft.planned_hours;
 
   return getAttendanceWorkedHours(draft) - draft.planned_hours;
 }
 
 function getAttendanceResultLabel(draft: AttendanceDraft, hoursWorked: number) {
-  if (draft.attendance_status === 'day_off') return 'Folgou';
+  if (draft.attendance_status === 'day_off') return 'Folga registrada';
   if (draft.attendance_status === 'justified') return 'Justificado';
-  if (draft.attendance_status === 'missed') return 'Faltou';
+  if (draft.attendance_status === 'missed') return 'Falta registrada';
 
   return `Realizado: ${formatHours(hoursWorked)}`;
 }
@@ -301,6 +381,11 @@ function getAttendanceResultLabel(draft: AttendanceDraft, hoursWorked: number) {
 function getAttendanceStatusFromSchedule(entry?: Schedule): AttendanceStatus {
   if (!entry) {
     return 'not_marked';
+  }
+
+  const manual = parseManualAttendanceNote(entry.notes);
+  if (manual.attendance_status) {
+    return manual.attendance_status;
   }
 
   if (entry.status === 'cancelled') {
@@ -393,6 +478,132 @@ function getBestScheduleEntry(entries: Schedule[]) {
   }, undefined);
 }
 
+function createAttendanceKey(technicianId: string, dateKey: string) {
+  return `${technicianId}::${dateKey}`;
+}
+
+function getWorkHoursTimestamp(entry: WorkHours) {
+  const timestamp = Date.parse(entry.created_at);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getBestWorkHour(entries: WorkHours[]) {
+  return entries.reduce<WorkHours | undefined>((best, entry) => {
+    if (!best) {
+      return entry;
+    }
+
+    return getWorkHoursTimestamp(entry) >= getWorkHoursTimestamp(best) ? entry : best;
+  }, undefined);
+}
+
+function getScheduleDisplayLabel(entry: Schedule | undefined) {
+  const manualStatus = parseManualAttendanceNote(entry?.notes).attendance_status;
+  if (manualStatus) return getAttendanceStatusLabel(manualStatus);
+  if (!entry) return 'Sem escala';
+
+  return getStatusLabel(entry.status);
+}
+
+function getScheduleDisplayTone(entry: Schedule | undefined) {
+  const manualStatus = parseManualAttendanceNote(entry?.notes).attendance_status;
+  if (manualStatus === 'worked') return 'success' as const;
+  if (manualStatus === 'missed') return 'danger' as const;
+  if (manualStatus === 'day_off' || manualStatus === 'justified') return 'warning' as const;
+  if (!entry) return 'neutral' as const;
+
+  return getStatusTone(entry.status);
+}
+
+function getSchedulePlannedTimes(entry: Schedule | undefined, fallbackStartTime = DEFAULT_START_TIME, fallbackEndTime = DEFAULT_END_TIME) {
+  const manual = parseManualAttendanceNote(entry?.notes);
+
+  return {
+    startTime: normalizeTimeInput(manual.planned_start_time || entry?.start_time, fallbackStartTime),
+    endTime: normalizeTimeInput(manual.planned_end_time || entry?.end_time, fallbackEndTime),
+  };
+}
+
+function getSchedulePlannedHoursForDraft(entry: Schedule | undefined, startTime: string, endTime: string) {
+  if (!entry) return 0;
+
+  const manualStatus = parseManualAttendanceNote(entry.notes).attendance_status;
+  if (manualStatus) return getHoursBetween(startTime, endTime);
+  if (entry.status === 'cancelled') return 0;
+
+  return getHoursBetween(startTime, endTime);
+}
+
+function getSchedulePlannedHoursForBank(entry: Schedule | undefined) {
+  if (!entry) return 0;
+
+  const manualStatus = parseManualAttendanceNote(entry.notes).attendance_status;
+  const { startTime, endTime } = getSchedulePlannedTimes(entry);
+
+  if (manualStatus === 'day_off' || manualStatus === 'justified') return 0;
+  if (manualStatus === 'missed' || manualStatus === 'worked') return getHoursBetween(startTime, endTime);
+  if (entry.status === 'completed') return getHoursBetween(startTime, endTime);
+
+  return 0;
+}
+
+function getScheduleTimeLabel(entry: Schedule) {
+  const manualStatus = parseManualAttendanceNote(entry.notes).attendance_status;
+
+  if (manualStatus === 'worked') {
+    const plannedTimes = getSchedulePlannedTimes(entry);
+    return `${formatTimeRange(entry.start_time, entry.end_time)} (prev. ${formatTimeRange(plannedTimes.startTime, plannedTimes.endTime)})`;
+  }
+
+  if (manualStatus) {
+    const plannedTimes = getSchedulePlannedTimes(entry);
+    return formatTimeRange(plannedTimes.startTime, plannedTimes.endTime);
+  }
+
+  if (entry.status === 'cancelled') return entry.notes || 'Dia de folga';
+
+  return formatTimeRange(entry.start_time, entry.end_time);
+}
+
+function getScheduleObservation(entry: Schedule) {
+  const manual = parseManualAttendanceNote(entry.notes);
+  if (manual.attendance_status) return manual.observation || '-';
+
+  return entry.notes || '-';
+}
+
+function getMonthLabel(monthKey: string) {
+  const [year, month] = monthKey.split('-').map(Number);
+  const monthName = monthNames[month - 1];
+
+  return monthName && Number.isInteger(year) ? `${monthName} ${year}` : monthKey;
+}
+
+function getHourBankPeriodLabel(periodMode: HourBankPeriodMode, startDate: string, endDate: string, monthKey: string) {
+  if (periodMode === 'day') return formatDate(startDate);
+  if (periodMode === 'week') return `${formatDate(startDate)} a ${formatDate(endDate)}`;
+
+  return getMonthLabel(monthKey);
+}
+
+function getYearMonthParts(monthKey: string) {
+  const [year, month] = monthKey.split('-').map(Number);
+
+  return {
+    year: Number.isInteger(year) ? year : new Date().getFullYear(),
+    month: Number.isInteger(month) ? month : new Date().getMonth() + 1,
+  };
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function getMonthWeeks(year: number, monthIndex: number) {
   const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
   const firstDayOffset = (new Date(year, monthIndex, 1).getDay() + 6) % 7;
@@ -464,10 +675,18 @@ function buildSuccessMessage(summary: {
 }
 
 async function fetchSchedulePageData(): Promise<SchedulePageData> {
-  const [scheduleRes, techniciansRes] = await Promise.allSettled([fetch('/api/schedule'), fetch('/api/technicians')]);
+  const [scheduleRes, techniciansRes, workHoursRes] = await Promise.allSettled([fetch('/api/schedule'), fetch('/api/technicians'), fetch('/api/work-hours')]);
   const errors: string[] = [];
   let schedule: Schedule[] = [];
   let technicians: Technician[] = [];
+  let workHours: WorkHours[] = [];
+
+  if (workHoursRes.status === 'fulfilled' && workHoursRes.value.ok) {
+    const data = await workHoursRes.value.json();
+    workHours = Array.isArray(data.workHours) ? data.workHours : [];
+  } else {
+    errors.push('banco de horas');
+  }
 
   if (scheduleRes.status === 'fulfilled' && scheduleRes.value.ok) {
     const data = await scheduleRes.value.json();
@@ -486,6 +705,7 @@ async function fetchSchedulePageData(): Promise<SchedulePageData> {
   return {
     schedule,
     technicians,
+    workHours,
     error: errors.length ? `Não foi possível carregar dados reais de ${errors.join(', ')}.` : '',
   };
 }
@@ -629,6 +849,7 @@ export function AdminScheduleBuilderPage() {
   const { user, loading } = useAppSession();
   const [schedule, setSchedule] = useState<Schedule[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const [workHours, setWorkHours] = useState<WorkHours[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [dataError, setDataError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
@@ -636,6 +857,7 @@ export function AdminScheduleBuilderPage() {
   const [isFormDialogOpen, setIsFormDialogOpen] = useState(false);
   const [isCalendarDialogOpen, setIsCalendarDialogOpen] = useState(false);
   const [isAttendanceDialogOpen, setIsAttendanceDialogOpen] = useState(false);
+  const [isHourBankDetailDialogOpen, setIsHourBankDetailDialogOpen] = useState(false);
   const [attendanceMode, setAttendanceMode] = useState<AttendanceMode>('day');
   const [attendanceDate, setAttendanceDate] = useState(() => createDateInputValue(new Date()));
   const [attendanceMonth, setAttendanceMonth] = useState(() => createMonthInputValue(new Date()));
@@ -647,6 +869,9 @@ export function AdminScheduleBuilderPage() {
   const [calendarMonth, setCalendarMonth] = useState(() => new Date().getMonth());
   const [calendarYear, setCalendarYear] = useState(() => new Date().getFullYear());
   const [calendarWeek, setCalendarWeek] = useState('all');
+  const [hourBankPeriodMode, setHourBankPeriodMode] = useState<HourBankPeriodMode>('month');
+  const [hourBankDate, setHourBankDate] = useState(() => createDateInputValue(new Date()));
+  const [hourBankMonth, setHourBankMonth] = useState(() => createMonthInputValue(new Date()));
   const [builderDialog, setBuilderDialog] = useState<ScheduleBuilderDialog>(null);
   const [activeDayRuleKey, setActiveDayRuleKey] = useState<ScheduleDayRuleKey | null>(null);
   const [formData, setFormData] = useState<ScheduleBuilderForm>(createInitialBuilderForm);
@@ -668,6 +893,7 @@ export function AdminScheduleBuilderPage() {
 
       setSchedule(result.schedule);
       setTechnicians(result.technicians);
+      setWorkHours(result.workHours);
       setDataError(result.error);
       setIsDataLoading(false);
     }
@@ -693,6 +919,12 @@ export function AdminScheduleBuilderPage() {
       .sort((left, right) => normalizeDateKey(left.date).localeCompare(normalizeDateKey(right.date))),
     [activeTechnicianIds, schedule],
   );
+  const visibleWorkHours = useMemo(
+    () => workHours
+      .filter((item) => activeTechnicianIds.has(item.technician_id))
+      .sort((left, right) => normalizeDateKey(left.date).localeCompare(normalizeDateKey(right.date))),
+    [activeTechnicianIds, workHours],
+  );
   const sortedTechnicians = useMemo(
     () => [...activeTechnicians].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR')),
     [activeTechnicians],
@@ -712,6 +944,16 @@ export function AdminScheduleBuilderPage() {
 
     return grouped;
   }, [visibleSchedule]);
+  const workHoursByTechnicianDate = useMemo(() => {
+    const grouped = new Map<string, WorkHours[]>();
+
+    visibleWorkHours.forEach((item) => {
+      const key = createAttendanceKey(item.technician_id, normalizeDateKey(item.date));
+      grouped.set(key, [...(grouped.get(key) ?? []), item]);
+    });
+
+    return grouped;
+  }, [visibleWorkHours]);
   const selectedTechnicianIds = useMemo(
     () => (formData.technician_scope === 'all' ? sortedTechnicians.map((technician) => technician.id) : formData.technician_ids),
     [formData.technician_ids, formData.technician_scope, sortedTechnicians],
@@ -876,26 +1118,30 @@ export function AdminScheduleBuilderPage() {
 
     setAttendanceDrafts(sortedTechnicians.map((technician) => {
       const entry = getBestScheduleEntry(dayEntries.filter((item) => item.technician_id === technician.id));
-      const plannedStartTime = normalizeTimeInput(entry?.start_time, DEFAULT_START_TIME);
-      const plannedEndTime = normalizeTimeInput(entry?.end_time, DEFAULT_END_TIME);
-      const plannedHours = entry?.status === 'cancelled' ? 0 : getHoursBetween(plannedStartTime, plannedEndTime);
-      const included = Boolean(entry && entry.status !== 'cancelled');
+      const workHour = getBestWorkHour(workHoursByTechnicianDate.get(createAttendanceKey(technician.id, attendanceDate)) ?? []);
+      const manual = parseManualAttendanceNote(entry?.notes);
+      const plannedTimes = getSchedulePlannedTimes(entry);
+      const plannedStartTime = plannedTimes.startTime;
+      const plannedEndTime = plannedTimes.endTime;
+      const plannedHours = getSchedulePlannedHoursForDraft(entry, plannedStartTime, plannedEndTime);
+      const attendanceStatus: AttendanceStatus = workHour ? 'worked' : getAttendanceStatusFromSchedule(entry);
 
       return {
         key: technician.id,
         date: attendanceDate,
         technician_id: technician.id,
         technician_name: technician.name,
-        attendance_status: getAttendanceStatusFromSchedule(entry),
+        attendance_status: attendanceStatus,
         planned_start_time: plannedStartTime,
         planned_end_time: plannedEndTime,
         planned_hours: plannedHours,
-        actual_start_time: plannedStartTime,
-        actual_end_time: plannedEndTime,
+        actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, plannedStartTime) : attendanceStatus === 'worked' ? normalizeTimeInput(entry?.start_time, plannedStartTime) : plannedStartTime,
+        actual_end_time: workHour ? normalizeTimeInput(workHour.end_time, plannedEndTime) : attendanceStatus === 'worked' ? normalizeTimeInput(entry?.end_time, plannedEndTime) : plannedEndTime,
+        notes: manual.observation,
         schedule_status: entry?.status,
       };
     }));
-  }, [attendanceDate, isAttendanceDialogOpen, scheduleByDate, sortedTechnicians]);
+  }, [attendanceDate, isAttendanceDialogOpen, scheduleByDate, sortedTechnicians, workHoursByTechnicianDate]);
 
   useEffect(() => {
     if (!isAttendanceDialogOpen) {
@@ -922,42 +1168,62 @@ export function AdminScheduleBuilderPage() {
       grouped.set(key, [...(grouped.get(key) ?? []), item]);
     });
 
+    visibleWorkHours.forEach((item) => {
+      const dateKey = normalizeDateKey(item.date);
+      if (dateKey < startDate || dateKey > endDate) {
+        return;
+      }
+
+      const key = `${dateKey}::${item.technician_id}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+    });
+
     const nextDrafts = Array.from(grouped.entries()).reduce<AttendanceDraft[]>((entries, [key, dayEntries]) => {
+      const [dateFromKey, technicianIdFromKey] = key.split('::');
       const entry = getBestScheduleEntry(dayEntries);
-      if (!entry) {
+      const date = normalizeDateKey(entry?.date || dateFromKey);
+      const technicianId = entry?.technician_id || technicianIdFromKey;
+      const workHour = getBestWorkHour(workHoursByTechnicianDate.get(createAttendanceKey(technicianId, date)) ?? []);
+
+      if (!entry && !workHour) {
         return entries;
       }
 
-      const startTime = normalizeTimeInput(entry.start_time, DEFAULT_START_TIME);
-      const endTime = normalizeTimeInput(entry.end_time, DEFAULT_END_TIME);
-      const plannedHours = entry.status === 'cancelled' ? 0 : getHoursBetween(startTime, endTime);
+      const manual = parseManualAttendanceNote(entry?.notes);
+      const plannedTimes = getSchedulePlannedTimes(entry);
+      const startTime = plannedTimes.startTime;
+      const endTime = plannedTimes.endTime;
+      const plannedHours = getSchedulePlannedHoursForDraft(entry, startTime, endTime);
 
-      if (entry.status !== 'cancelled' && plannedHours <= 0) {
+      if (entry && entry.status !== 'cancelled' && plannedHours <= 0 && !workHour) {
         return entries;
       }
 
-      const date = normalizeDateKey(entry.date);
-      const technicianName = entry.technician_name || technicianNames.get(entry.technician_id) || entry.technician_id;
+      const technicianName = entry?.technician_name || technicianNames.get(technicianId) || technicianId;
+      const attendanceStatus: AttendanceStatus = workHour ? 'worked' : getAttendanceStatusFromSchedule(entry);
 
       entries.push({
         key,
         date,
-        technician_id: entry.technician_id,
+        technician_id: technicianId,
         technician_name: technicianName,
-        attendance_status: getAttendanceStatusFromSchedule(entry),
+        attendance_status: attendanceStatus,
         planned_start_time: startTime,
         planned_end_time: endTime,
         planned_hours: plannedHours,
-        actual_start_time: startTime,
-        actual_end_time: endTime,
-        schedule_status: entry.status,
+        actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, startTime) : attendanceStatus === 'worked' ? normalizeTimeInput(entry?.start_time, startTime) : startTime,
+        actual_end_time: workHour ? normalizeTimeInput(workHour.end_time, endTime) : attendanceStatus === 'worked' ? normalizeTimeInput(entry?.end_time, endTime) : endTime,
+        notes: manual.observation,
+        schedule_status: entry?.status,
       });
 
       return entries;
     }, []).sort((left, right) => left.date.localeCompare(right.date) || left.technician_name.localeCompare(right.technician_name, 'pt-BR'));
 
     setMonthlyAttendanceDrafts(nextDrafts);
-  }, [attendanceMonth, isAttendanceDialogOpen, sortedTechnicians, visibleSchedule]);
+  }, [attendanceMonth, isAttendanceDialogOpen, sortedTechnicians, visibleSchedule, visibleWorkHours, workHoursByTechnicianDate]);
 
   const filteredSchedule = useMemo(() => {
     return visibleSchedule.filter((item) => {
@@ -975,8 +1241,158 @@ export function AdminScheduleBuilderPage() {
   }, [visibleSchedule]);
   const calendarMonthKey = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
   const calendarScheduledEntries = useMemo(
-    () => visibleSchedule.filter((item) => normalizeDateKey(item.date).startsWith(calendarMonthKey) && item.status !== 'cancelled'),
+    () => visibleSchedule.filter((item) => normalizeDateKey(item.date).startsWith(calendarMonthKey) && (item.status !== 'cancelled' || Boolean(parseManualAttendanceNote(item.notes).attendance_status))),
     [calendarMonthKey, visibleSchedule],
+  );
+  const hourBankRange = useMemo(() => {
+    if (hourBankPeriodMode === 'month') {
+      const parts = getYearMonthParts(hourBankMonth);
+      return getScheduleRange('month', parts.year, parts.month);
+    }
+
+    const year = Number(hourBankDate.slice(0, 4)) || new Date().getFullYear();
+    return getScheduleRange(hourBankPeriodMode, year, undefined, hourBankDate);
+  }, [hourBankDate, hourBankMonth, hourBankPeriodMode]);
+  const hourBankPeriodLabel = useMemo(
+    () => getHourBankPeriodLabel(hourBankPeriodMode, hourBankRange.startDate, hourBankRange.endDate, hourBankMonth),
+    [hourBankMonth, hourBankPeriodMode, hourBankRange.endDate, hourBankRange.startDate],
+  );
+  const hourBankSchedule = useMemo(
+    () => visibleSchedule.filter((item) => {
+      const dateKey = normalizeDateKey(item.date);
+      return dateKey >= hourBankRange.startDate && dateKey <= hourBankRange.endDate;
+    }),
+    [hourBankRange.endDate, hourBankRange.startDate, visibleSchedule],
+  );
+  const hourBankWorkHours = useMemo(
+    () => visibleWorkHours.filter((item) => {
+      const dateKey = normalizeDateKey(item.date);
+      return dateKey >= hourBankRange.startDate && dateKey <= hourBankRange.endDate;
+    }),
+    [hourBankRange.endDate, hourBankRange.startDate, visibleWorkHours],
+  );
+  const hourBankDetailRows = useMemo<HourBankDetailRow[]>(() => {
+    const scheduleByTechnicianDate = new Map<string, Schedule[]>();
+    const workHoursByTechnicianDate = new Map<string, WorkHours[]>();
+
+    hourBankSchedule.forEach((item) => {
+      const dateKey = normalizeDateKey(item.date);
+      const key = createAttendanceKey(item.technician_id, dateKey);
+      scheduleByTechnicianDate.set(key, [...(scheduleByTechnicianDate.get(key) ?? []), item]);
+    });
+
+    hourBankWorkHours.forEach((item) => {
+      const dateKey = normalizeDateKey(item.date);
+      const key = createAttendanceKey(item.technician_id, dateKey);
+      workHoursByTechnicianDate.set(key, [...(workHoursByTechnicianDate.get(key) ?? []), item]);
+    });
+
+    const allKeys = Array.from(new Set([...scheduleByTechnicianDate.keys(), ...workHoursByTechnicianDate.keys()]));
+
+    return allKeys.map((key) => {
+      const [technicianId, dateKey] = key.split('::');
+      const entry = getBestScheduleEntry(scheduleByTechnicianDate.get(key) ?? []);
+      const workHour = getBestWorkHour(workHoursByTechnicianDate.get(key) ?? []);
+      const plannedTimes = getSchedulePlannedTimes(entry);
+      const plannedHours = getSchedulePlannedHoursForBank(entry);
+      const workedHours = Number(workHour?.hours_worked || 0);
+      const technicianName = entry?.technician_name || technicianNameById.get(technicianId) || technicianId;
+
+      return {
+        key,
+        date: dateKey,
+        technician_id: technicianId,
+        technician_name: technicianName,
+        status_label: workHour ? 'Trabalhou' : getScheduleDisplayLabel(entry),
+        planned_start_time: plannedTimes.startTime,
+        planned_end_time: plannedTimes.endTime,
+        actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, '') : '',
+        actual_end_time: workHour ? normalizeTimeInput(workHour.end_time, '') : '',
+        planned_hours: plannedHours,
+        worked_hours: Number(workedHours.toFixed(2)),
+        balance: Number((workedHours - plannedHours).toFixed(2)),
+        observation: entry ? getScheduleObservation(entry) : '-',
+      };
+    }).sort((left, right) => left.date.localeCompare(right.date) || left.technician_name.localeCompare(right.technician_name, 'pt-BR'));
+  }, [hourBankSchedule, hourBankWorkHours, technicianNameById]);
+  const hourBankRows = useMemo<HourBankRow[]>(() => {
+    const monthSchedule = hourBankSchedule;
+    const monthWorkHours = hourBankWorkHours;
+    const scheduleByTechnicianDate = new Map<string, Schedule[]>();
+    const workHoursByTechnician = new Map<string, WorkHours[]>();
+
+    monthSchedule.forEach((item) => {
+      const key = `${item.technician_id}::${normalizeDateKey(item.date)}`;
+      scheduleByTechnicianDate.set(key, [...(scheduleByTechnicianDate.get(key) ?? []), item]);
+    });
+
+    monthWorkHours.forEach((item) => {
+      workHoursByTechnician.set(item.technician_id, [...(workHoursByTechnician.get(item.technician_id) ?? []), item]);
+    });
+
+    return sortedTechnicians.map((technician) => {
+      const technicianWorkHours = workHoursByTechnician.get(technician.id) ?? [];
+      const technicianScheduleDates = monthSchedule
+        .filter((item) => item.technician_id === technician.id)
+        .map((item) => normalizeDateKey(item.date));
+      const technicianWorkDates = technicianWorkHours.map((item) => normalizeDateKey(item.date));
+      const dateKeys = Array.from(new Set([...technicianScheduleDates, ...technicianWorkDates]));
+      let plannedHours = 0;
+      let dayOffDays = 0;
+      let missedDays = 0;
+      let justifiedDays = 0;
+      let pendingDays = 0;
+
+      dateKeys.forEach((dateKey) => {
+        const entry = getBestScheduleEntry(scheduleByTechnicianDate.get(`${technician.id}::${dateKey}`) ?? []);
+        if (!entry) return;
+
+        const manualStatus = parseManualAttendanceNote(entry.notes).attendance_status;
+        plannedHours += getSchedulePlannedHoursForBank(entry);
+
+        if (manualStatus === 'missed') {
+          missedDays += 1;
+        } else if (manualStatus === 'justified') {
+          justifiedDays += 1;
+        } else if (manualStatus === 'day_off' || (entry.status === 'cancelled' && !manualStatus)) {
+          dayOffDays += 1;
+        } else if (entry.status === 'scheduled') {
+          pendingDays += 1;
+        }
+      });
+
+      const workedHours = technicianWorkHours.reduce((total, item) => total + Number(item.hours_worked || 0), 0);
+      const workedDays = new Set(technicianWorkHours.filter((item) => Number(item.hours_worked || 0) > 0).map((item) => normalizeDateKey(item.date))).size;
+
+      return {
+        technician_id: technician.id,
+        technician_name: technician.name,
+        planned_hours: Number(plannedHours.toFixed(2)),
+        worked_hours: Number(workedHours.toFixed(2)),
+        balance: Number((workedHours - plannedHours).toFixed(2)),
+        worked_days: workedDays,
+        day_off_days: dayOffDays,
+        missed_days: missedDays,
+        justified_days: justifiedDays,
+        pending_days: pendingDays,
+      };
+    });
+  }, [hourBankSchedule, hourBankWorkHours, sortedTechnicians]);
+  const hourBankTotals = useMemo(() => {
+    return hourBankRows.reduce(
+      (totals, row) => ({
+        planned: totals.planned + row.planned_hours,
+        worked: totals.worked + row.worked_hours,
+        balance: totals.balance + row.balance,
+        pending: totals.pending + row.pending_days,
+        missed: totals.missed + row.missed_days,
+      }),
+      { planned: 0, worked: 0, balance: 0, pending: 0, missed: 0 },
+    );
+  }, [hourBankRows]);
+  const hourBankVisibleRows = useMemo(
+    () => hourBankRows.filter((row) => row.planned_hours || row.worked_hours || row.day_off_days || row.missed_days || row.justified_days || row.pending_days),
+    [hourBankRows],
   );
   const weekDates = useMemo(() => getNextDateKeys(7), []);
 
@@ -1012,6 +1428,15 @@ export function AdminScheduleBuilderPage() {
       setAttendanceDate(createDateInputValue(now));
       setAttendanceMonth(createMonthInputValue(now));
     }
+  }
+
+  function openAttendanceForDate(dateKey: string) {
+    setAttendanceMode('day');
+    setAttendanceDate(dateKey);
+    setAttendanceMonth(dateKey.slice(0, 7));
+    setAttendanceError('');
+    setAttendanceMessage('');
+    setIsAttendanceDialogOpen(true);
   }
 
   function handleAttendanceModeChange(mode: AttendanceMode) {
@@ -1098,10 +1523,14 @@ export function AdminScheduleBuilderPage() {
         date: draft.date,
         start_time: startTime,
         end_time: endTime,
+        planned_start_time: normalizeTimeInput(draft.planned_start_time, DEFAULT_START_TIME),
+        planned_end_time: normalizeTimeInput(draft.planned_end_time, DEFAULT_END_TIME),
         hours_worked: hoursWorked,
         week_number: getIsoWeekNumber(draft.date),
         month: dateParts[1],
         year: dateParts[0],
+        attendance_status: draft.attendance_status,
+        notes: draft.notes,
       };
     });
 
@@ -1123,6 +1552,7 @@ export function AdminScheduleBuilderPage() {
       const refreshed = await fetchSchedulePageData();
       setSchedule(refreshed.schedule);
       setTechnicians(refreshed.technicians);
+      setWorkHours(refreshed.workHours);
       setDataError(refreshed.error);
       setSaveMessage(attendanceMode === 'month'
         ? `Banco de horas atualizado para ${attendanceMonth} com ${formatCount(entries.length, 'apontamento', 'apontamentos')}.`
@@ -1610,6 +2040,7 @@ export function AdminScheduleBuilderPage() {
       const refreshed = await fetchSchedulePageData();
       setSchedule(refreshed.schedule);
       setTechnicians(refreshed.technicians);
+      setWorkHours(refreshed.workHours);
       setDataError(refreshed.error);
       setSaveMessage(data?.summary ? buildSuccessMessage(data.summary) : 'Escala salva com sucesso.');
       handleFormDialogChange(false);
@@ -1618,6 +2049,135 @@ export function AdminScheduleBuilderPage() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function buildScheduleExportRows() {
+    return hourBankDetailRows.map((row) => ({
+      Data: formatDate(row.date),
+      Tecnico: row.technician_name,
+      Situacao: row.status_label,
+      Entrada_prevista: formatTime(row.planned_start_time),
+      Saida_prevista: formatTime(row.planned_end_time),
+      Entrada_real: row.actual_start_time ? formatTime(row.actual_start_time) : '-',
+      Saida_real: row.actual_end_time ? formatTime(row.actual_end_time) : '-',
+      Horas_previstas: row.planned_hours,
+      Horas_realizadas: row.worked_hours,
+      Saldo: row.balance,
+      Observacao: row.observation,
+    }));
+  }
+
+  function handleExportSpreadsheet() {
+    const bankRows = hourBankRows.map((row) => ({
+      Tecnico: row.technician_name,
+      Previsto: row.planned_hours,
+      Realizado: row.worked_hours,
+      Saldo: row.balance,
+      Dias_trabalhados: row.worked_days,
+      Folgas: row.day_off_days,
+      Faltas: row.missed_days,
+      Justificativas: row.justified_days,
+      Pendentes: row.pending_days,
+    }));
+    const scheduleRows = buildScheduleExportRows();
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(bankRows), 'Banco de horas');
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(scheduleRows), 'Escala');
+    XLSX.writeFile(workbook, `escala-banco-horas-${hourBankRange.startDate}-${hourBankRange.endDate}.xlsx`);
+    setSaveMessage(`Planilha de ${hourBankPeriodLabel} gerada com ${formatCount(scheduleRows.length, 'linha', 'linhas')}.`);
+  }
+
+  function handleExportPdf() {
+    if (typeof window === 'undefined') return;
+
+    const scheduleRows = buildScheduleExportRows();
+    const printWindow = window.open('', '_blank', 'width=1100,height=900');
+
+    if (!printWindow) {
+      setSaveMessage('Nao foi possivel abrir a janela de PDF. Verifique o bloqueador de pop-ups.');
+      return;
+    }
+
+    const bankRowsHtml = hourBankRows.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.technician_name)}</td>
+        <td>${escapeHtml(formatHours(row.planned_hours))}</td>
+        <td>${escapeHtml(formatHours(row.worked_hours))}</td>
+        <td>${escapeHtml(formatHours(row.balance))}</td>
+        <td>${escapeHtml(row.worked_days)}</td>
+        <td>${escapeHtml(row.day_off_days)}</td>
+        <td>${escapeHtml(row.missed_days)}</td>
+        <td>${escapeHtml(row.pending_days)}</td>
+      </tr>
+    `).join('');
+    const scheduleRowsHtml = scheduleRows.map((row) => `
+      <tr>
+        <td>${escapeHtml(row.Data)}</td>
+        <td>${escapeHtml(row.Tecnico)}</td>
+        <td>${escapeHtml(row.Situacao)}</td>
+          <td>${escapeHtml(row.Entrada_prevista)}</td>
+          <td>${escapeHtml(row.Saida_prevista)}</td>
+          <td>${escapeHtml(row.Entrada_real)}</td>
+          <td>${escapeHtml(row.Saida_real)}</td>
+          <td>${escapeHtml(formatHours(row.Horas_previstas))}</td>
+          <td>${escapeHtml(formatHours(row.Horas_realizadas))}</td>
+        <td>${escapeHtml(formatHours(row.Saldo))}</td>
+        <td>${escapeHtml(row.Observacao)}</td>
+      </tr>
+    `).join('');
+    const html = `
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Escala e banco de horas - ${escapeHtml(hourBankPeriodLabel)}</title>
+          <style>
+            body { font-family: Arial, sans-serif; color: #0f172a; margin: 24px; }
+            h1 { margin: 0 0 6px; font-size: 22px; }
+            h2 { margin: 24px 0 10px; font-size: 16px; }
+            .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 18px 0; }
+            .card { border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; }
+            .label { color: #64748b; font-size: 11px; text-transform: uppercase; }
+            .value { margin-top: 4px; font-size: 18px; font-weight: 700; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th, td { border: 1px solid #cbd5e1; padding: 6px; text-align: left; vertical-align: top; }
+            th { background: #f1f5f9; color: #475569; text-transform: uppercase; font-size: 10px; }
+            @media print { body { margin: 14mm; } .no-print { display: none; } }
+          </style>
+        </head>
+        <body>
+          <h1>Escala e banco de horas</h1>
+          <div>${escapeHtml(hourBankPeriodLabel)}</div>
+          <div class="summary">
+            <div class="card"><div class="label">Previsto</div><div class="value">${escapeHtml(formatHours(hourBankTotals.planned))}</div></div>
+            <div class="card"><div class="label">Realizado</div><div class="value">${escapeHtml(formatHours(hourBankTotals.worked))}</div></div>
+            <div class="card"><div class="label">Saldo</div><div class="value">${escapeHtml(formatHours(hourBankTotals.balance))}</div></div>
+            <div class="card"><div class="label">Pendencias</div><div class="value">${escapeHtml(hourBankTotals.pending)}</div></div>
+          </div>
+          <h2>Banco de horas por tecnico</h2>
+          <table>
+            <thead><tr><th>Tecnico</th><th>Previsto</th><th>Realizado</th><th>Saldo</th><th>Dias</th><th>Folgas</th><th>Faltas</th><th>Pendentes</th></tr></thead>
+            <tbody>${bankRowsHtml || '<tr><td colspan="8">Sem dados no periodo.</td></tr>'}</tbody>
+          </table>
+          <h2>Escala e apontamentos</h2>
+          <table>
+            <thead><tr><th>Data</th><th>Tecnico</th><th>Situacao</th><th>Entrada prev.</th><th>Saida prev.</th><th>Entrada real</th><th>Saida real</th><th>Horas prev.</th><th>Horas real.</th><th>Saldo</th><th>Obs.</th></tr></thead>
+            <tbody>${scheduleRowsHtml || '<tr><td colspan="11">Sem dados no periodo.</td></tr>'}</tbody>
+          </table>
+          <script>
+            window.onload = () => {
+              window.focus();
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
   }
 
   function getCalendarDayScheduled(day: number) {
@@ -1633,7 +2193,9 @@ export function AdminScheduleBuilderPage() {
       (scheduled, [technicianId, entries]) => {
         const entry = getBestScheduleEntry(entries);
 
-        if (!entry || entry.status === 'cancelled') {
+        const manualStatus = parseManualAttendanceNote(entry?.notes).attendance_status;
+
+        if (!entry || (entry.status === 'cancelled' && !manualStatus)) {
           return scheduled;
         }
 
@@ -2125,6 +2687,14 @@ export function AdminScheduleBuilderPage() {
             <Clock3 className="h-4 w-4" />
             Apontar horas
           </Button>
+          <Button type="button" variant="outline" onClick={handleExportSpreadsheet}>
+            <Download className="h-4 w-4" />
+            Planilha
+          </Button>
+          <Button type="button" variant="outline" onClick={handleExportPdf}>
+            <FileText className="h-4 w-4" />
+            PDF
+          </Button>
           <Button type="button" onClick={() => setIsFormDialogOpen(true)}>
             <WandSparkles className="h-4 w-4" />
             Montar escala
@@ -2141,6 +2711,348 @@ export function AdminScheduleBuilderPage() {
         <MetricCard title="Linhas salvas" value={visibleSchedule.length} hint="Registros reais no banco" icon={Clock3} tone="success" />
         <MetricCard title="Técnicos cobertos" value={coveredTechnicians} hint="Com algum período persistido" icon={Users} />
       </div>
+
+      <div className="mt-5">
+        <DataPanel
+          title="Banco de horas"
+          description={`Previsto, realizado e saldo em ${hourBankPeriodLabel}.`}
+          action={
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex h-11 items-center rounded-md border border-border bg-background p-1">
+                {hourBankPeriodOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setHourBankPeriodMode(option.value)}
+                    className={`h-8 rounded px-3 text-sm font-medium transition ${hourBankPeriodMode === option.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <label className="hidden">
+                <span className="mb-1 block">Filtro</span>
+                <select value={hourBankPeriodMode} onChange={(event) => setHourBankPeriodMode(event.target.value as HourBankPeriodMode)} className="min-h-9 rounded-md border border-input bg-background px-2 text-sm text-foreground outline-none">
+                  <option value="day">Diário</option>
+                  <option value="week">Semanal</option>
+                  <option value="month">Mensal</option>
+                </select>
+              </label>
+
+              {hourBankPeriodMode === 'month' ? (
+                <label className="flex h-11 items-center rounded-md border border-input bg-background px-3">
+                  <span className="sr-only">Mês</span>
+                  <input type="month" value={hourBankMonth} onChange={(event) => setHourBankMonth(event.target.value)} className="h-9 bg-transparent text-sm text-foreground outline-none" />
+                </label>
+              ) : (
+                <label className="flex h-11 items-center rounded-md border border-input bg-background px-3">
+                  <span className="sr-only">{hourBankPeriodMode === 'day' ? 'Data' : 'Semana de referência'}</span>
+                  <input type="date" value={hourBankDate} onChange={(event) => setHourBankDate(event.target.value)} className="h-9 bg-transparent text-sm text-foreground outline-none" />
+                </label>
+              )}
+            </div>
+          }
+        >
+          <div className="hidden">
+            <span className="rounded-md bg-secondary px-3 py-2">Período: {formatDate(hourBankRange.startDate)} a {formatDate(hourBankRange.endDate)}</span>
+            <span className="rounded-md bg-secondary px-3 py-2">Previsto: {formatHours(hourBankTotals.planned)}</span>
+            <span className="rounded-md bg-secondary px-3 py-2">Realizado: {formatHours(hourBankTotals.worked)}</span>
+            <span className="rounded-md bg-secondary px-3 py-2">Saldo: {formatHours(hourBankTotals.balance)}</span>
+            <span className="rounded-md bg-secondary px-3 py-2">Pendentes: {hourBankTotals.pending}</span>
+          </div>
+
+          <div className="grid overflow-hidden rounded-md border border-border md:grid-cols-5">
+            <div className="border-b border-border bg-secondary/30 px-3 py-3 md:border-b-0 md:border-r">
+              <p className="text-xs font-medium uppercase text-muted-foreground">Período</p>
+              <p className="mt-1 text-sm font-semibold text-foreground">{formatDate(hourBankRange.startDate)} a {formatDate(hourBankRange.endDate)}</p>
+            </div>
+            <div className="border-b border-border px-3 py-3 md:border-b-0 md:border-r">
+              <p className="text-xs font-medium uppercase text-muted-foreground">Previsto</p>
+              <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatHours(hourBankTotals.planned)}</p>
+            </div>
+            <div className="border-b border-border px-3 py-3 md:border-b-0 md:border-r">
+              <p className="text-xs font-medium uppercase text-muted-foreground">Realizado</p>
+              <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatHours(hourBankTotals.worked)}</p>
+            </div>
+            <div className="border-b border-border px-3 py-3 md:border-b-0 md:border-r">
+              <p className="text-xs font-medium uppercase text-muted-foreground">Saldo</p>
+              <p className={`mt-1 text-lg font-semibold tabular-nums ${hourBankTotals.balance < 0 ? 'text-rose-700' : hourBankTotals.balance > 0 ? 'text-emerald-700' : 'text-foreground'}`}>{formatHours(hourBankTotals.balance)}</p>
+            </div>
+            <div className="px-3 py-3">
+              <p className="text-xs font-medium uppercase text-muted-foreground">Pendências</p>
+              <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{hourBankTotals.pending}</p>
+            </div>
+          </div>
+
+          <div className="mt-3 flex justify-end">
+            <Button type="button" variant="outline" onClick={() => setIsHourBankDetailDialogOpen(true)}>
+              <Clock3 className="h-4 w-4" />
+              Ver banco de horas detalhado
+            </Button>
+          </div>
+
+          <div className="mt-4">
+            <section className="min-w-0">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-foreground">Resumo por técnico</h3>
+                <span className="text-xs text-muted-foreground">{formatCount(hourBankVisibleRows.length, 'técnico', 'técnicos')}</span>
+              </div>
+
+              <div className="overflow-hidden rounded-md border border-border">
+                <table className="w-full text-sm">
+                  <thead className="bg-secondary/40">
+                    <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
+                      <th className="px-3 py-2 font-medium">Técnico</th>
+                      <th className="px-3 py-2 font-medium">Horas</th>
+                      <th className="px-3 py-2 font-medium">Saldo</th>
+                      <th className="px-3 py-2 font-medium">Ocorr.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hourBankVisibleRows.length ? hourBankVisibleRows.map((row) => (
+                      <tr key={row.technician_id} className="border-b border-border last:border-0">
+                        <td className="px-3 py-3">
+                          <p className="font-medium text-foreground">{row.technician_name}</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">{row.worked_days} dia(s) trabalhado(s)</p>
+                        </td>
+                        <td className="px-3 py-3 tabular-nums">
+                          <p className="font-medium text-foreground">{formatHours(row.worked_hours)}</p>
+                          <p className="text-xs text-muted-foreground">de {formatHours(row.planned_hours)}</p>
+                        </td>
+                        <td className="px-3 py-3">
+                          <StatusBadge tone={row.balance < 0 ? 'danger' : row.balance > 0 ? 'success' : 'neutral'}>
+                            {formatHours(row.balance)}
+                          </StatusBadge>
+                        </td>
+                        <td className="px-3 py-3 text-xs text-muted-foreground">
+                          <span>{row.day_off_days} folga</span>
+                          <span className="mx-1">·</span>
+                          <span>{row.missed_days} falta</span>
+                          <span className="mx-1">·</span>
+                          <span>{row.pending_days} pend.</span>
+                        </td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan={4} className="px-3 py-8 text-center text-muted-foreground">Sem técnicos com movimento no período.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section className="hidden">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold text-foreground">Extrato do período</h3>
+                <span className="text-xs text-muted-foreground">{formatCount(hourBankDetailRows.length, 'linha', 'linhas')}</span>
+              </div>
+
+              <div className="overflow-x-auto rounded-md border border-border">
+                <table className="w-full min-w-[940px] text-sm">
+                  <thead className="bg-secondary/40">
+                    <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
+                      <th className="px-3 py-2 font-medium">Data</th>
+                      <th className="px-3 py-2 font-medium">Técnico</th>
+                      <th className="px-3 py-2 font-medium">Situação</th>
+                      <th className="px-3 py-2 font-medium">Previsto</th>
+                      <th className="px-3 py-2 font-medium">Real</th>
+                      <th className="px-3 py-2 font-medium">Horas</th>
+                      <th className="px-3 py-2 font-medium">Saldo</th>
+                      <th className="px-3 py-2 font-medium">Obs.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hourBankDetailRows.length ? hourBankDetailRows.map((row) => (
+                      <tr key={row.key} className="border-b border-border last:border-0">
+                        <td className="px-3 py-3 whitespace-nowrap">{formatDate(row.date)}</td>
+                        <td className="px-3 py-3 font-medium text-foreground">{row.technician_name}</td>
+                        <td className="px-3 py-3">{row.status_label}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{formatTimeRange(row.planned_start_time, row.planned_end_time)}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{row.actual_start_time ? formatTimeRange(row.actual_start_time, row.actual_end_time) : '-'}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{formatHours(row.worked_hours)} / {formatHours(row.planned_hours)}</td>
+                        <td className="px-3 py-3">
+                          <StatusBadge tone={row.balance < 0 ? 'danger' : row.balance > 0 ? 'success' : 'neutral'}>
+                            {formatHours(row.balance)}
+                          </StatusBadge>
+                        </td>
+                        <td className="px-3 py-3 max-w-56 truncate text-muted-foreground" title={row.observation}>{row.observation}</td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">Nenhum apontamento ou escala no período selecionado.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+
+          <div className="hidden">
+            <table className="w-full min-w-[920px] text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
+                  <th className="py-3 pr-4 font-medium">Técnico</th>
+                  <th className="py-3 pr-4 font-medium">Previsto</th>
+                  <th className="py-3 pr-4 font-medium">Realizado</th>
+                  <th className="py-3 pr-4 font-medium">Saldo</th>
+                  <th className="py-3 pr-4 font-medium">Dias</th>
+                  <th className="py-3 pr-4 font-medium">Folgas</th>
+                  <th className="py-3 pr-4 font-medium">Faltas</th>
+                  <th className="py-3 pr-4 font-medium">Justif.</th>
+                  <th className="py-3 font-medium">Pend.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hourBankRows.map((row) => (
+                  <tr key={row.technician_id} className="border-b border-border last:border-0">
+                    <td className="py-3 pr-4 font-medium text-foreground">{row.technician_name}</td>
+                    <td className="py-3 pr-4">{formatHours(row.planned_hours)}</td>
+                    <td className="py-3 pr-4">{formatHours(row.worked_hours)}</td>
+                    <td className="py-3 pr-4">
+                      <StatusBadge tone={row.balance < 0 ? 'danger' : row.balance > 0 ? 'success' : 'neutral'}>
+                        {formatHours(row.balance)}
+                      </StatusBadge>
+                    </td>
+                    <td className="py-3 pr-4">{row.worked_days}</td>
+                    <td className="py-3 pr-4">{row.day_off_days}</td>
+                    <td className="py-3 pr-4">{row.missed_days}</td>
+                    <td className="py-3 pr-4">{row.justified_days}</td>
+                    <td className="py-3">{row.pending_days}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="hidden">
+            <table className="w-full min-w-[1180px] text-sm">
+              <thead className="bg-secondary/50">
+                <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
+                  <th className="px-3 py-3 font-medium">Data</th>
+                  <th className="px-3 py-3 font-medium">Técnico</th>
+                  <th className="px-3 py-3 font-medium">Situação</th>
+                  <th className="px-3 py-3 font-medium">Entrada prevista</th>
+                  <th className="px-3 py-3 font-medium">Saída prevista</th>
+                  <th className="px-3 py-3 font-medium">Entrada real</th>
+                  <th className="px-3 py-3 font-medium">Saída real</th>
+                  <th className="px-3 py-3 font-medium">Horas</th>
+                  <th className="px-3 py-3 font-medium">Saldo</th>
+                  <th className="px-3 py-3 font-medium">Obs.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hourBankDetailRows.length ? hourBankDetailRows.map((row) => (
+                  <tr key={row.key} className="border-b border-border last:border-0">
+                    <td className="px-3 py-3">{formatDate(row.date)}</td>
+                    <td className="px-3 py-3 font-medium text-foreground">{row.technician_name}</td>
+                    <td className="px-3 py-3">{row.status_label}</td>
+                    <td className="px-3 py-3">{formatTime(row.planned_start_time)}</td>
+                    <td className="px-3 py-3">{formatTime(row.planned_end_time)}</td>
+                    <td className="px-3 py-3">{row.actual_start_time ? formatTime(row.actual_start_time) : '-'}</td>
+                    <td className="px-3 py-3">{row.actual_end_time ? formatTime(row.actual_end_time) : '-'}</td>
+                    <td className="px-3 py-3">{formatHours(row.worked_hours)} / {formatHours(row.planned_hours)}</td>
+                    <td className="px-3 py-3">
+                      <StatusBadge tone={row.balance < 0 ? 'danger' : row.balance > 0 ? 'success' : 'neutral'}>
+                        {formatHours(row.balance)}
+                      </StatusBadge>
+                    </td>
+                    <td className="px-3 py-3 text-muted-foreground">{row.observation}</td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">Nenhum apontamento ou escala no período selecionado.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </DataPanel>
+      </div>
+
+      <Dialog open={isHourBankDetailDialogOpen} onOpenChange={setIsHourBankDetailDialogOpen}>
+        <DialogContent className="max-h-[90vh] overflow-hidden p-0 sm:max-w-7xl">
+          <div className="flex max-h-[90vh] min-h-0 flex-col">
+            <DialogHeader className="border-b border-border/70 px-6 py-5 sm:px-7">
+              <DialogTitle className="text-xl">Banco de horas detalhado</DialogTitle>
+              <DialogDescription className="max-w-3xl text-sm leading-6 text-muted-foreground">
+                {hourBankPeriodLabel} com entrada e saída previstas, entrada e saída reais, horas e saldo.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 sm:px-7">
+              <div className="mb-4 grid gap-3 md:grid-cols-4">
+                <div className="rounded-md border border-border bg-secondary/30 px-3 py-3">
+                  <p className="text-xs font-medium uppercase text-muted-foreground">Período</p>
+                  <p className="mt-1 text-sm font-semibold text-foreground">{formatDate(hourBankRange.startDate)} a {formatDate(hourBankRange.endDate)}</p>
+                </div>
+                <div className="rounded-md border border-border px-3 py-3">
+                  <p className="text-xs font-medium uppercase text-muted-foreground">Previsto</p>
+                  <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatHours(hourBankTotals.planned)}</p>
+                </div>
+                <div className="rounded-md border border-border px-3 py-3">
+                  <p className="text-xs font-medium uppercase text-muted-foreground">Realizado</p>
+                  <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatHours(hourBankTotals.worked)}</p>
+                </div>
+                <div className="rounded-md border border-border px-3 py-3">
+                  <p className="text-xs font-medium uppercase text-muted-foreground">Saldo</p>
+                  <p className={`mt-1 text-lg font-semibold tabular-nums ${hourBankTotals.balance < 0 ? 'text-rose-700' : hourBankTotals.balance > 0 ? 'text-emerald-700' : 'text-foreground'}`}>{formatHours(hourBankTotals.balance)}</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-md border border-border">
+                <table className="w-full min-w-[1040px] text-sm">
+                  <thead className="bg-secondary/40">
+                    <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
+                      <th className="px-3 py-3 font-medium">Data</th>
+                      <th className="px-3 py-3 font-medium">Técnico</th>
+                      <th className="px-3 py-3 font-medium">Situação</th>
+                      <th className="px-3 py-3 font-medium">Entrada prevista</th>
+                      <th className="px-3 py-3 font-medium">Saída prevista</th>
+                      <th className="px-3 py-3 font-medium">Entrada real</th>
+                      <th className="px-3 py-3 font-medium">Saída real</th>
+                      <th className="px-3 py-3 font-medium">Horas</th>
+                      <th className="px-3 py-3 font-medium">Saldo</th>
+                      <th className="px-3 py-3 font-medium">Obs.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hourBankDetailRows.length ? hourBankDetailRows.map((row) => (
+                      <tr key={row.key} className="border-b border-border last:border-0">
+                        <td className="px-3 py-3 whitespace-nowrap">{formatDate(row.date)}</td>
+                        <td className="px-3 py-3 font-medium text-foreground">{row.technician_name}</td>
+                        <td className="px-3 py-3">{row.status_label}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{formatTime(row.planned_start_time)}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{formatTime(row.planned_end_time)}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{row.actual_start_time ? formatTime(row.actual_start_time) : '-'}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{row.actual_end_time ? formatTime(row.actual_end_time) : '-'}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{formatHours(row.worked_hours)} / {formatHours(row.planned_hours)}</td>
+                        <td className="px-3 py-3">
+                          <StatusBadge tone={row.balance < 0 ? 'danger' : row.balance > 0 ? 'success' : 'neutral'}>
+                            {formatHours(row.balance)}
+                          </StatusBadge>
+                        </td>
+                        <td className="px-3 py-3 max-w-64 truncate text-muted-foreground" title={row.observation}>{row.observation}</td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">Nenhum apontamento ou escala no período selecionado.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <DialogFooter className="border-t border-border/70 bg-background/95 px-6 py-4 sm:px-7">
+              <Button type="button" variant="outline" onClick={() => setIsHourBankDetailDialogOpen(false)}>
+                Fechar
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isFormDialogOpen} onOpenChange={handleFormDialogChange}>
         <DialogContent className="max-h-[92vh] overflow-hidden p-0 sm:max-w-6xl">
@@ -2762,7 +3674,7 @@ export function AdminScheduleBuilderPage() {
 
               {attendanceMode === 'day' ? (
               <div className="overflow-x-auto rounded-lg border border-border/70 bg-background">
-                <table className="w-full min-w-[960px] text-sm">
+                <table className="w-full min-w-[1160px] text-sm">
                   <thead className="bg-secondary/60 text-left text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                     <tr>
                       <th className="px-3 py-3">Situação</th>
@@ -2771,6 +3683,7 @@ export function AdminScheduleBuilderPage() {
                       <th className="px-3 py-3">Previsto</th>
                       <th className="px-3 py-3">Entrada</th>
                       <th className="px-3 py-3">Saída</th>
+                      <th className="px-3 py-3">Observacao</th>
                       <th className="px-3 py-3">Saldo</th>
                     </tr>
                   </thead>
@@ -2831,6 +3744,14 @@ export function AdminScheduleBuilderPage() {
                             />
                           </td>
                           <td className="px-3 py-3">
+                            <input
+                              value={draft.notes}
+                              onChange={(event) => updateAttendanceDraft(draft.key, { notes: event.target.value })}
+                              placeholder="Ex.: troca, curso, atestado"
+                              className="min-h-10 w-52 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+                            />
+                          </td>
+                          <td className="px-3 py-3">
                             {isAttendanceSelected(draft) ? (
                               <div className="space-y-1">
                                 <StatusBadge tone={balanceTone}>{balance >= 0 ? `+${formatHours(balance)}` : `-${formatHours(Math.abs(balance))}`}</StatusBadge>
@@ -2848,7 +3769,7 @@ export function AdminScheduleBuilderPage() {
               </div>
               ) : (
                 <div className="overflow-x-auto rounded-lg border border-border/70 bg-background">
-                  <table className="w-full min-w-[1120px] text-sm">
+                  <table className="w-full min-w-[1320px] text-sm">
                     <thead className="bg-secondary/60 text-left text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                       <tr>
                         <th className="px-3 py-3">Data</th>
@@ -2858,6 +3779,7 @@ export function AdminScheduleBuilderPage() {
                         <th className="px-3 py-3">Previsto</th>
                         <th className="px-3 py-3">Entrada</th>
                         <th className="px-3 py-3">Saída</th>
+                        <th className="px-3 py-3">Observacao</th>
                         <th className="px-3 py-3">Saldo</th>
                       </tr>
                     </thead>
@@ -2919,6 +3841,14 @@ export function AdminScheduleBuilderPage() {
                               />
                             </td>
                             <td className="px-3 py-3">
+                              <input
+                                value={draft.notes}
+                                onChange={(event) => updateMonthlyAttendanceDraft(draft.key, { notes: event.target.value })}
+                                placeholder="Ex.: troca, curso, atestado"
+                                className="min-h-10 w-52 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+                              />
+                            </td>
+                            <td className="px-3 py-3">
                               {isAttendanceSelected(draft) ? (
                                 <div className="space-y-1">
                                   <StatusBadge tone={balanceTone}>{balance >= 0 ? `+${formatHours(balance)}` : `-${formatHours(Math.abs(balance))}`}</StatusBadge>
@@ -2932,7 +3862,7 @@ export function AdminScheduleBuilderPage() {
                         );
                       }) : (
                         <tr>
-                          <td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">Nenhuma escala ativa salva para este mês.</td>
+                          <td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">Nenhuma escala ativa salva para este mês.</td>
                         </tr>
                       )}
                     </tbody>
@@ -3151,9 +4081,14 @@ export function AdminScheduleBuilderPage() {
                                   {formatCount(scheduledForDay.length, 'escalado', 'escalados')}
                                 </p>
                               </div>
-                              <span className={`rounded-full px-2 py-1 text-[11px] font-black ${isToday ? 'bg-primary text-primary-foreground' : 'bg-emerald-50 text-emerald-700'}`}>
-                                {scheduledForDay.length}
-                              </span>
+                              <div className="flex shrink-0 items-center gap-2">
+                                <Button type="button" variant="outline" size="sm" onClick={() => openAttendanceForDate(dateKey)}>
+                                  Ajustar
+                                </Button>
+                                <span className={`rounded-full px-2 py-1 text-[11px] font-black ${isToday ? 'bg-primary text-primary-foreground' : 'bg-emerald-50 text-emerald-700'}`}>
+                                  {scheduledForDay.length}
+                                </span>
+                              </div>
                             </div>
 
                             <div className="max-h-52 overflow-y-auto pr-1">
@@ -3163,9 +4098,9 @@ export function AdminScheduleBuilderPage() {
                                     <div key={entry.id} className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1">
                                       <div className="flex items-start justify-between gap-2">
                                         <p className="min-w-0 truncate text-xs font-semibold text-emerald-950">{name}</p>
-                                        <StatusBadge tone={getStatusTone(entry.status)}>{getStatusLabel(entry.status)}</StatusBadge>
+                                        <StatusBadge tone={getScheduleDisplayTone(entry)}>{getScheduleDisplayLabel(entry)}</StatusBadge>
                                       </div>
-                                      <p className="mt-1 text-[11px] text-emerald-700">{formatTimeRange(entry.start_time, entry.end_time)}</p>
+                                      <p className="mt-1 text-[11px] text-emerald-700">{getScheduleTimeLabel(entry)}</p>
                                     </div>
                                   ))}
                                 </div>
@@ -3230,8 +4165,8 @@ export function AdminScheduleBuilderPage() {
                             <div className="min-h-20 rounded-md border border-border bg-background p-2 text-xs">
                               {entry ? (
                                 <>
-                                  <StatusBadge tone={getStatusTone(entry.status)}>{getStatusLabel(entry.status)}</StatusBadge>
-                                  <p className="mt-2 font-medium">{entry.status === 'cancelled' ? entry.notes || 'Dia de folga' : formatTimeRange(entry.start_time, entry.end_time)}</p>
+                                  <StatusBadge tone={getScheduleDisplayTone(entry)}>{getScheduleDisplayLabel(entry)}</StatusBadge>
+                                  <p className="mt-2 font-medium">{getScheduleTimeLabel(entry)}</p>
                                 </>
                               ) : (
                                 <>
@@ -3282,11 +4217,11 @@ export function AdminScheduleBuilderPage() {
                     <tr key={item.id} className="border-b border-border last:border-0">
                       <td className="py-3 pr-4">{formatDate(item.date)}</td>
                       <td className="py-3 pr-4">{item.technician_name || item.technician_id}</td>
-                      <td className="py-3 pr-4">{item.status === 'cancelled' ? item.notes || 'Dia de folga' : formatTimeRange(item.start_time, item.end_time)}</td>
+                      <td className="py-3 pr-4">{getScheduleTimeLabel(item)}</td>
                       <td className="py-3 pr-4">
-                        <StatusBadge tone={getStatusTone(item.status)}>{getStatusLabel(item.status)}</StatusBadge>
+                        <StatusBadge tone={getScheduleDisplayTone(item)}>{getScheduleDisplayLabel(item)}</StatusBadge>
                       </td>
-                      <td className="py-3 text-muted-foreground">{item.notes || '-'}</td>
+                      <td className="py-3 text-muted-foreground">{getScheduleObservation(item)}</td>
                     </tr>
                   ))}
                 </tbody>

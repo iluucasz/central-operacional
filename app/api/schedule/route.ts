@@ -424,24 +424,27 @@ export async function PUT(request: NextRequest) {
 
     const { startDate, endDate } = getScheduleRange(parsedInput.period_mode, parsedInput.year, parsedInput.month, parsedInput.date);
 
-    const completedRows = await sql.query(
+    const preservedRows = await sql.query(
       `
         SELECT technician_id, date
         FROM schedule
         WHERE technician_id = ANY($1)
           AND date >= $2
           AND date <= $3
-          AND status = 'completed'
+          AND (
+            status = 'completed'
+            OR notes LIKE 'Apontamento manual:%'
+          )
       `,
       [targetTechnicianIds, startDate, endDate],
     );
 
-    const completedKeys = new Set(
-      completedRows.map((row) => `${String(row.technician_id)}::${String(row.date).slice(0, 10)}`),
+    const preservedKeys = new Set(
+      preservedRows.map((row) => `${String(row.technician_id)}::${String(row.date).slice(0, 10)}`),
     );
 
     const generatedRows = buildPersistedSchedule(parsedInput, targetTechnicianIds).filter(
-      (row) => !completedKeys.has(`${row.technician_id}::${row.date}`),
+      (row) => !preservedKeys.has(`${row.technician_id}::${row.date}`),
     );
 
     const persistedSchedules = await sql.query(
@@ -452,6 +455,7 @@ export async function PUT(request: NextRequest) {
             AND date >= $2
             AND date <= $3
             AND status <> 'completed'
+            AND COALESCE(notes, '') NOT LIKE 'Apontamento manual:%'
           RETURNING 1
         ),
         input_rows AS (
@@ -482,7 +486,7 @@ export async function PUT(request: NextRequest) {
           startDate,
           endDate,
           technicians: targetTechnicianIds.length,
-          preservedCompleted: completedKeys.size,
+          preservedCompleted: preservedKeys.size,
           inserted: persistedSchedules.length,
         },
       },
