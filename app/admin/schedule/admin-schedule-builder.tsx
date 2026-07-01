@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { CalendarDays, Clock3, Download, FileText, Plus, Search, Trash2, Users, WandSparkles } from 'lucide-react';
+import { CalendarDays, Clock3, Download, FileText, Plus, Search, Trash2, Upload, Users, WandSparkles } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
@@ -19,7 +19,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { formatDate, formatHours, formatTime, formatTimeRange, normalizeText } from '@/lib/formatters';
+import { compactName, formatDate, formatHours, formatTime, formatTimeRange, normalizeText } from '@/lib/formatters';
 import {
   createDateKey,
   enumerateDateKeys,
@@ -90,7 +90,7 @@ interface ScheduleBuilderForm {
 }
 
 type AttendanceStatus = 'not_marked' | 'worked' | 'day_off' | 'missed' | 'justified';
-type AttendanceMode = 'day' | 'month';
+type AttendanceMode = 'day' | 'month' | 'spreadsheet';
 type HourBankPeriodMode = 'day' | 'week' | 'month';
 
 interface AttendanceDraft {
@@ -106,6 +106,44 @@ interface AttendanceDraft {
   actual_end_time: string;
   notes: string;
   schedule_status?: Schedule['status'];
+}
+
+interface AttendanceImportRow {
+  key: string;
+  row_number: number;
+  sheet_name: string;
+  date: string;
+  technician_id: string;
+  technician_name: string;
+  imported_name: string;
+  start_time: string;
+  end_time: string;
+  planned_start_time: string;
+  planned_end_time: string;
+  hours_worked: number;
+  week_number: number;
+  month: number;
+  year: number;
+  notes: string;
+}
+
+interface AttendanceImportError {
+  key: string;
+  row_number: number;
+  sheet_name: string;
+  message: string;
+  details: string[];
+  suggestion: string;
+  values: {
+    date: string;
+    employee: string;
+    start_time: string;
+    end_time: string;
+    hours_worked: string;
+    week_number: string;
+    month: string;
+    year: string;
+  };
 }
 
 interface SchedulePageData {
@@ -674,6 +712,259 @@ function buildSuccessMessage(summary: {
   return `Escala salva de ${formatDate(summary.startDate)} até ${formatDate(summary.endDate)} para ${formatCount(summary.technicians, 'técnico', 'técnicos')}. O sistema gravou ${formatCount(summary.inserted, 'linha', 'linhas')} e preservou ${formatCount(summary.preservedCompleted, 'linha concluída', 'linhas concluídas')}.`;
 }
 
+const attendanceImportColumnAliases = {
+  date: ['data', 'date'],
+  employee: ['funcionario', 'funcionário', 'tecnico', 'técnico', 'colaborador', 'nome'],
+  startTime: ['hora inicio', 'hora início', 'inicio', 'início', 'entrada', 'hora entrada'],
+  endTime: ['hora final', 'fim', 'saida', 'saída', 'hora saida', 'hora saída'],
+  hoursWorked: ['horas trabalhadas', 'horas', 'total horas', 'total'],
+  weekNumber: ['semana do ano', 'semana'],
+  month: ['mes', 'mês'],
+  year: ['ano'],
+};
+
+function getImportValue(row: Record<string, unknown>, aliases: string[]) {
+  const normalizedAliases = new Set(aliases.map((alias) => normalizeText(alias)));
+  const entry = Object.entries(row).find(([key]) => normalizedAliases.has(normalizeText(key)));
+  return entry?.[1] ?? '';
+}
+
+function formatImportValue(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toLocaleString('pt-BR');
+  }
+
+  return String(value ?? '').trim();
+}
+
+function getImportErrorSuggestion(errors: string[]) {
+  if (errors.some((error) => error.includes('tecnico nao encontrado'))) {
+    return 'Confira se o nome do Funcionario esta igual ao cadastro de Tecnicos ativos.';
+  }
+
+  if (errors.some((error) => error.includes('hora'))) {
+    return 'Preencha Hora Inicio e Hora Final no formato HH:mm, por exemplo 08:00 e 17:30.';
+  }
+
+  if (errors.some((error) => error.includes('data'))) {
+    return 'Preencha Data no formato dd/mm/aaaa, por exemplo 01/04/2026.';
+  }
+
+  if (errors.some((error) => error.includes('duplicado'))) {
+    return 'Deixe apenas uma linha para o mesmo tecnico na mesma data.';
+  }
+
+  return 'Revise os campos obrigatorios da linha antes de importar novamente.';
+}
+
+function parseImportNumber(value: unknown) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  const normalized = String(value ?? '')
+    .trim()
+    .replace(/\s/g, '')
+    .replace(',', '.')
+    .replace(/[^\d.-]/g, '');
+  const parsed = Number(normalized);
+
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseImportInteger(value: unknown) {
+  const parsed = parseImportNumber(value);
+  return parsed === null ? null : Math.trunc(parsed);
+}
+
+function normalizeImportYear(value: number) {
+  if (value >= 100) return value;
+  return value >= 70 ? 1900 + value : 2000 + value;
+}
+
+function buildImportDateKey(year: number, month: number, day: number) {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return '';
+  }
+
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return '';
+  }
+
+  return createDateInputValue(date);
+}
+
+function parseImportedDate(value: unknown, monthValue: unknown, yearValue: unknown) {
+  const monthHint = parseImportInteger(monthValue);
+  const yearHint = parseImportInteger(yearValue);
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const date = createDateInputValue(value);
+    return { date, month: value.getMonth() + 1, year: value.getFullYear() };
+  }
+
+  if (typeof value === 'number') {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      const date = buildImportDateKey(parsed.y, parsed.m, parsed.d);
+      if (date) return { date, month: parsed.m, year: parsed.y };
+    }
+  }
+
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+
+  const isoMatch = raw.match(/^(20\d{2})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const year = Number(isoMatch[1]);
+    const month = Number(isoMatch[2]);
+    const day = Number(isoMatch[3]);
+    const date = buildImportDateKey(year, month, day);
+    return date ? { date, month, year } : null;
+  }
+
+  const parts = raw.match(/\d+/g)?.map(Number) ?? [];
+  if (parts.length < 3) return null;
+
+  if (parts[0] >= 1900) {
+    const year = parts[0];
+    const month = parts[1];
+    const day = parts[2];
+    const date = buildImportDateKey(year, month, day);
+    return date ? { date, month, year } : null;
+  }
+
+  let day = parts[0];
+  let month = parts[1];
+  const year = yearHint && yearHint >= 1900 ? yearHint : normalizeImportYear(parts[2]);
+
+  if (monthHint && monthHint >= 1 && monthHint <= 12) {
+    if (parts[0] === monthHint) {
+      month = parts[0];
+      day = parts[1];
+    } else if (parts[1] === monthHint) {
+      month = parts[1];
+      day = parts[0];
+    }
+  } else if (parts[0] <= 12 && parts[1] > 12) {
+    month = parts[0];
+    day = parts[1];
+  }
+
+  const date = buildImportDateKey(year, month, day);
+  return date ? { date, month, year } : null;
+}
+
+function parseImportedTime(value: unknown) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
+  }
+
+  if (typeof value === 'number') {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed) {
+      return `${String(parsed.H).padStart(2, '0')}:${String(parsed.M).padStart(2, '0')}`;
+    }
+  }
+
+  const raw = String(value ?? '').trim();
+  const numericValue = raw && !raw.includes(':') && !/[a-zA-Z]/.test(raw) ? parseImportNumber(raw) : null;
+  if (numericValue !== null && numericValue >= 0 && numericValue < 1) {
+    const parsed = XLSX.SSF.parse_date_code(numericValue);
+    if (parsed) {
+      return `${String(parsed.H).padStart(2, '0')}:${String(parsed.M).padStart(2, '0')}`;
+    }
+  }
+
+  const match = raw.replace(/\s+/g, '').match(/^(\d{1,2})(?::|h|H)(\d{1,2})/);
+  if (!match) return '';
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours > 23 || minutes > 59) {
+    return '';
+  }
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function getGrossHoursBetween(startTime: string, endTime: string) {
+  const start = parseTimeToMinutes(startTime);
+  const end = parseTimeToMinutes(endTime);
+  if (start === null || end === null) return 0;
+
+  const endWithRollover = end >= start ? end : end + 24 * 60;
+  return Number(((endWithRollover - start) / 60).toFixed(2));
+}
+
+function parseImportedHours(value: unknown, startTime: string, endTime: string) {
+  const parsed = parseImportNumber(value);
+  if (parsed !== null && parsed > 0 && parsed <= 24) {
+    return Number(parsed.toFixed(2));
+  }
+
+  const calculated = getGrossHoursBetween(startTime, endTime);
+  return calculated > 0 && calculated <= 24 ? calculated : null;
+}
+
+function getAttendanceWorksheetName(workbook: XLSX.WorkBook) {
+  const preferred = workbook.SheetNames.find((sheetName) => normalizeText(sheetName) === 'banco de dados');
+  if (preferred) return preferred;
+
+  return workbook.SheetNames.find((sheetName) => {
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '', raw: false, blankrows: false });
+    const firstRow = rows[0] ?? {};
+    return Boolean(
+      getImportValue(firstRow, attendanceImportColumnAliases.date) &&
+      getImportValue(firstRow, attendanceImportColumnAliases.employee) &&
+      getImportValue(firstRow, attendanceImportColumnAliases.startTime) &&
+      getImportValue(firstRow, attendanceImportColumnAliases.endTime),
+    );
+  }) ?? workbook.SheetNames[0] ?? '';
+}
+
+function buildTechnicianMatchMap(technicians: Technician[]) {
+  const matches = new Map<string, Technician | null>();
+
+  technicians.forEach((technician) => {
+    const keys = Array.from(new Set([
+      technician.name,
+      compactName(technician.name),
+      technician.qra,
+    ].map((value) => normalizeText(value)).filter(Boolean)));
+
+    keys.forEach((key) => {
+      matches.set(key, matches.has(key) ? null : technician);
+    });
+  });
+
+  return matches;
+}
+
+function resolveImportedTechnician(importedName: string, technicians: Technician[], technicianMatches: Map<string, Technician | null>) {
+  const normalizedName = normalizeText(importedName);
+  const compactImportedName = normalizeText(compactName(importedName));
+  const directMatch = technicianMatches.get(normalizedName) ?? technicianMatches.get(compactImportedName);
+
+  if (directMatch) {
+    return directMatch;
+  }
+
+  const importedTokens = normalizedName.split(/\s+/).filter((token) => token.length > 2);
+  const fuzzyMatches = technicians.filter((technician) => {
+    const technicianName = normalizeText(technician.name);
+    if (!technicianName || !normalizedName) return false;
+    if (technicianName.includes(normalizedName) || normalizedName.includes(technicianName)) return true;
+
+    const technicianTokens = technicianName.split(/\s+/).filter((token) => token.length > 2);
+    return importedTokens.length >= 2 && importedTokens.every((token) => technicianTokens.includes(token));
+  });
+
+  return fuzzyMatches.length === 1 ? fuzzyMatches[0] : null;
+}
+
 async function fetchSchedulePageData(): Promise<SchedulePageData> {
   const [scheduleRes, techniciansRes, workHoursRes] = await Promise.allSettled([fetch('/api/schedule'), fetch('/api/technicians'), fetch('/api/work-hours')]);
   const errors: string[] = [];
@@ -863,6 +1154,11 @@ export function AdminScheduleBuilderPage() {
   const [attendanceMonth, setAttendanceMonth] = useState(() => createMonthInputValue(new Date()));
   const [attendanceDrafts, setAttendanceDrafts] = useState<AttendanceDraft[]>([]);
   const [monthlyAttendanceDrafts, setMonthlyAttendanceDrafts] = useState<AttendanceDraft[]>([]);
+  const [attendanceImportFileName, setAttendanceImportFileName] = useState('');
+  const [attendanceImportRows, setAttendanceImportRows] = useState<AttendanceImportRow[]>([]);
+  const [attendanceImportErrors, setAttendanceImportErrors] = useState<AttendanceImportError[]>([]);
+  const [showAllAttendanceImportErrors, setShowAllAttendanceImportErrors] = useState(false);
+  const [isAttendanceImportParsing, setIsAttendanceImportParsing] = useState(false);
   const [attendanceError, setAttendanceError] = useState('');
   const [attendanceMessage, setAttendanceMessage] = useState('');
   const [isAttendanceSubmitting, setIsAttendanceSubmitting] = useState(false);
@@ -1427,6 +1723,10 @@ export function AdminScheduleBuilderPage() {
       setAttendanceMode('day');
       setAttendanceDate(createDateInputValue(now));
       setAttendanceMonth(createMonthInputValue(now));
+      setAttendanceImportFileName('');
+      setAttendanceImportRows([]);
+      setAttendanceImportErrors([]);
+      setShowAllAttendanceImportErrors(false);
     }
   }
 
@@ -1439,10 +1739,231 @@ export function AdminScheduleBuilderPage() {
     setIsAttendanceDialogOpen(true);
   }
 
+  function openAttendanceImportDialog() {
+    setAttendanceMode('spreadsheet');
+    setAttendanceError('');
+    setAttendanceMessage('');
+    resetAttendanceImport();
+    setIsAttendanceDialogOpen(true);
+  }
+
   function handleAttendanceModeChange(mode: AttendanceMode) {
     setAttendanceMode(mode);
     setAttendanceError('');
     setAttendanceMessage('');
+  }
+
+  function resetAttendanceImport() {
+    setAttendanceImportFileName('');
+    setAttendanceImportRows([]);
+    setAttendanceImportErrors([]);
+    setShowAllAttendanceImportErrors(false);
+  }
+
+  function parseAttendanceWorkbook(workbook: XLSX.WorkBook, fileName: string) {
+    const sheetName = getAttendanceWorksheetName(workbook);
+    if (!sheetName) {
+      return {
+        rows: [],
+        errors: [{
+          key: 'workbook-empty',
+          row_number: 0,
+          sheet_name: '',
+          message: 'A planilha nao possui abas para importar.',
+          details: ['Nenhuma aba foi encontrada no arquivo selecionado.'],
+          suggestion: 'Baixe o modelo XLSX, preencha a aba Banco de Dados e tente novamente.',
+          values: {
+            date: '',
+            employee: '',
+            start_time: '',
+            end_time: '',
+            hours_worked: '',
+            week_number: '',
+            month: '',
+            year: '',
+          },
+        }],
+      };
+    }
+
+    const worksheet = workbook.Sheets[sheetName];
+    const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '', raw: false, blankrows: false });
+    const technicianMatches = buildTechnicianMatchMap(sortedTechnicians);
+    const seenKeys = new Set<string>();
+    const rows: AttendanceImportRow[] = [];
+    const errors: AttendanceImportError[] = [];
+
+    rawRows.forEach((rawRow, index) => {
+      const rowNumber = index + 2;
+      const dateValue = getImportValue(rawRow, attendanceImportColumnAliases.date);
+      const importedName = String(getImportValue(rawRow, attendanceImportColumnAliases.employee) ?? '').trim();
+      const startTimeValue = getImportValue(rawRow, attendanceImportColumnAliases.startTime);
+      const endTimeValue = getImportValue(rawRow, attendanceImportColumnAliases.endTime);
+      const hoursValue = getImportValue(rawRow, attendanceImportColumnAliases.hoursWorked);
+      const weekValue = getImportValue(rawRow, attendanceImportColumnAliases.weekNumber);
+      const monthValue = getImportValue(rawRow, attendanceImportColumnAliases.month);
+      const yearValue = getImportValue(rawRow, attendanceImportColumnAliases.year);
+      const errorValues = {
+        date: formatImportValue(dateValue),
+        employee: importedName,
+        start_time: formatImportValue(startTimeValue),
+        end_time: formatImportValue(endTimeValue),
+        hours_worked: formatImportValue(hoursValue),
+        week_number: formatImportValue(weekValue),
+        month: formatImportValue(monthValue),
+        year: formatImportValue(yearValue),
+      };
+
+      if (!dateValue && !importedName && !startTimeValue && !endTimeValue && !hoursValue) {
+        return;
+      }
+
+      const rowErrors: string[] = [];
+      const rowDetails: string[] = [];
+      const parsedDate = parseImportedDate(dateValue, monthValue, yearValue);
+      const startTime = parseImportedTime(startTimeValue);
+      const endTime = parseImportedTime(endTimeValue);
+      const technician = resolveImportedTechnician(importedName, sortedTechnicians, technicianMatches);
+      const hoursWorked = parseImportedHours(hoursValue, startTime, endTime);
+
+      if (!parsedDate) {
+        rowErrors.push('data invalida');
+        rowDetails.push(`Data lida: "${errorValues.date || 'vazio'}". Use dd/mm/aaaa.`);
+      }
+
+      if (!importedName) {
+        rowErrors.push('funcionario vazio');
+        rowDetails.push('Funcionario veio vazio. Preencha com o nome de um tecnico ativo.');
+      }
+
+      if (importedName && !technician) {
+        rowErrors.push(`tecnico nao encontrado: ${importedName}`);
+        rowDetails.push(`Funcionario lido: "${importedName}". O sistema nao encontrou um tecnico ativo com esse nome.`);
+      }
+
+      if (!startTime) {
+        rowErrors.push('hora de inicio invalida');
+        rowDetails.push(`Hora Inicio lida: "${errorValues.start_time || 'vazio'}". Use HH:mm, por exemplo 08:00.`);
+      }
+
+      if (!endTime) {
+        rowErrors.push('hora final invalida');
+        rowDetails.push(`Hora Final lida: "${errorValues.end_time || 'vazio'}". Use HH:mm, por exemplo 17:30.`);
+      }
+
+      if (hoursWorked === null) {
+        rowErrors.push('horas trabalhadas invalidas');
+        rowDetails.push(`Horas Trabalhadas lida: "${errorValues.hours_worked || 'vazio'}". Use decimal, por exemplo 9,65, ou preencha Entrada e Saida validas.`);
+      }
+
+      if (parsedDate && parseImportInteger(monthValue) && parseImportInteger(monthValue) !== parsedDate.month) {
+        rowErrors.push('mes da linha nao confere com a data');
+        rowDetails.push(`Mes lido: "${errorValues.month}". Pela Data, o mes esperado e ${parsedDate.month}.`);
+      }
+
+      if (parsedDate && parseImportInteger(yearValue) && parseImportInteger(yearValue) !== parsedDate.year) {
+        rowErrors.push('ano da linha nao confere com a data');
+        rowDetails.push(`Ano lido: "${errorValues.year}". Pela Data, o ano esperado e ${parsedDate.year}.`);
+      }
+
+      if (rowErrors.length || !parsedDate || !technician || hoursWorked === null) {
+        errors.push({
+          key: `${sheetName}-${rowNumber}`,
+          row_number: rowNumber,
+          sheet_name: sheetName,
+          message: rowErrors.join('; '),
+          details: rowDetails,
+          suggestion: getImportErrorSuggestion(rowErrors),
+          values: errorValues,
+        });
+        return;
+      }
+
+      const duplicateKey = createAttendanceKey(technician.id, parsedDate.date);
+      if (seenKeys.has(duplicateKey)) {
+        errors.push({
+          key: `${sheetName}-${rowNumber}`,
+          row_number: rowNumber,
+          sheet_name: sheetName,
+          message: `apontamento duplicado para ${technician.name} em ${formatDate(parsedDate.date)}`,
+          details: [
+            `Funcionario lido: "${importedName}".`,
+            `Data lida: "${errorValues.date}".`,
+            'Ja existe outra linha valida para o mesmo tecnico e data nesta importacao.',
+          ],
+          suggestion: getImportErrorSuggestion(['duplicado']),
+          values: errorValues,
+        });
+        return;
+      }
+
+      seenKeys.add(duplicateKey);
+
+      const scheduleEntry = getBestScheduleEntry((scheduleByDate.get(parsedDate.date) ?? []).filter((item) => item.technician_id === technician.id));
+      const plannedTimes = getSchedulePlannedTimes(scheduleEntry, startTime, endTime);
+      const month = parseImportInteger(monthValue) ?? parsedDate.month;
+      const year = parseImportInteger(yearValue) ?? parsedDate.year;
+      const weekNumber = parseImportInteger(weekValue) ?? getIsoWeekNumber(parsedDate.date);
+
+      rows.push({
+        key: duplicateKey,
+        row_number: rowNumber,
+        sheet_name: sheetName,
+        date: parsedDate.date,
+        technician_id: technician.id,
+        technician_name: technician.name,
+        imported_name: importedName,
+        start_time: startTime,
+        end_time: endTime,
+        planned_start_time: plannedTimes.startTime,
+        planned_end_time: plannedTimes.endTime,
+        hours_worked: hoursWorked,
+        week_number: weekNumber,
+        month,
+        year,
+        notes: `Importado via planilha ${fileName}; aba ${sheetName}; linha ${rowNumber}`,
+      });
+    });
+
+    return {
+      rows: rows.sort((left, right) => left.date.localeCompare(right.date) || left.technician_name.localeCompare(right.technician_name, 'pt-BR')),
+      errors,
+    };
+  }
+
+  async function handleAttendanceImportFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    setAttendanceError('');
+    setAttendanceMessage('');
+    resetAttendanceImport();
+
+    if (!file) {
+      return;
+    }
+
+    setIsAttendanceImportParsing(true);
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+      const parsed = parseAttendanceWorkbook(workbook, file.name);
+
+      setAttendanceImportFileName(file.name);
+      setAttendanceImportRows(parsed.rows);
+      setAttendanceImportErrors(parsed.errors);
+
+      if (!parsed.rows.length) {
+        setAttendanceError(parsed.errors.length ? 'Nenhuma linha valida foi encontrada na planilha.' : 'A planilha nao possui linhas para importar.');
+        return;
+      }
+
+      setAttendanceMessage(`${formatCount(parsed.rows.length, 'apontamento valido', 'apontamentos validos')} carregado(s) da planilha.`);
+    } catch (error) {
+      setAttendanceError(error instanceof Error ? error.message : 'Nao foi possivel ler a planilha. Use XLSX, XLS ou CSV.');
+    } finally {
+      setIsAttendanceImportParsing(false);
+    }
   }
 
   function updateAttendanceDraft(draftKey: string, changes: Partial<AttendanceDraft>) {
@@ -1492,6 +2013,63 @@ export function AdminScheduleBuilderPage() {
     event.preventDefault();
     setAttendanceError('');
     setAttendanceMessage('');
+
+    if (attendanceMode === 'spreadsheet') {
+      if (!attendanceImportRows.length) {
+        setAttendanceError('Carregue uma planilha com apontamentos validos antes de salvar.');
+        return;
+      }
+
+      setIsAttendanceSubmitting(true);
+
+      const entries = attendanceImportRows.map((row) => ({
+        technician_id: row.technician_id,
+        date: row.date,
+        start_time: row.start_time,
+        end_time: row.end_time,
+        planned_start_time: row.planned_start_time,
+        planned_end_time: row.planned_end_time,
+        hours_worked: row.hours_worked,
+        week_number: row.week_number,
+        month: row.month,
+        year: row.year,
+        attendance_status: 'worked',
+        notes: row.notes,
+      }));
+
+      try {
+        const response = await fetch('/api/work-hours', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries }),
+        });
+
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          throw new Error(data?.error || 'Nao foi possivel salvar os apontamentos da planilha.');
+        }
+
+        const refreshed = await fetchSchedulePageData();
+        setSchedule(refreshed.schedule);
+        setTechnicians(refreshed.technicians);
+        setWorkHours(refreshed.workHours);
+        setDataError(refreshed.error);
+        setSaveMessage(`Banco de horas atualizado via planilha com ${formatCount(Number(data?.count ?? entries.length), 'apontamento', 'apontamentos')}.`);
+        setIsAttendanceDialogOpen(false);
+        setAttendanceDrafts([]);
+        setMonthlyAttendanceDrafts([]);
+        resetAttendanceImport();
+        setAttendanceError('');
+        setAttendanceMessage('');
+      } catch (error) {
+        setAttendanceError(error instanceof Error ? error.message : 'Nao foi possivel salvar os apontamentos da planilha.');
+      } finally {
+        setIsAttendanceSubmitting(false);
+      }
+
+      return;
+    }
 
     const sourceDrafts = attendanceMode === 'day' ? attendanceDrafts : monthlyAttendanceDrafts;
     const selectedDrafts = sourceDrafts.filter(isAttendanceSelected);
@@ -2088,6 +2666,101 @@ export function AdminScheduleBuilderPage() {
     setSaveMessage(`Planilha de ${hourBankPeriodLabel} gerada com ${formatCount(scheduleRows.length, 'linha', 'linhas')}.`);
   }
 
+  function handleDownloadAttendanceImportTemplate() {
+    const headers = ['Data', 'Funcionário', 'Hora Início', 'Hora Final', 'Horas Trabalhadas', 'Semana do Ano', 'Mês', 'Ano', 'Dia da semana'];
+    const blankRows = Array.from({ length: 100 }, () => ['', '', '', '', '', '', '', '', '']);
+    const templateSheet = XLSX.utils.aoa_to_sheet([headers, ...blankRows]);
+    templateSheet['!cols'] = [
+      { wch: 14 },
+      { wch: 34 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 10 },
+      { wch: 10 },
+      { wch: 16 },
+    ];
+
+    const firstTechnicianName = sortedTechnicians[0]?.name || 'NOME DO TECNICO';
+    const secondTechnicianName = sortedTechnicians[1]?.name || 'OUTRO TECNICO';
+    const exampleSheet = XLSX.utils.aoa_to_sheet([
+      headers,
+      ['01/04/2026', firstTechnicianName, '08:00', '17:38', '9,65', 14, 4, 2026, 4],
+      ['01/04/2026', secondTechnicianName, '08:01', '17:10', '9,16', 14, 4, 2026, 4],
+    ]);
+    exampleSheet['!cols'] = templateSheet['!cols'];
+
+    const techniciansSheet = XLSX.utils.aoa_to_sheet([
+      ['Técnicos ativos cadastrados'],
+      ...sortedTechnicians.map((technician) => [technician.name]),
+    ]);
+    techniciansSheet['!cols'] = [{ wch: 42 }];
+
+    const instructionsSheet = XLSX.utils.aoa_to_sheet([
+      ['Como usar'],
+      ['1. Preencha a aba Banco de Dados.'],
+      ['2. Use uma linha para cada técnico em cada dia trabalhado.'],
+      ['3. O nome do funcionário deve bater com um técnico ativo. Consulte a aba Técnicos ativos.'],
+      ['4. Use Data no formato dd/mm/aaaa e horários no formato HH:mm.'],
+      ['5. Horas Trabalhadas pode ser preenchida em decimal, como 9,65. Se ficar vazia, o sistema calcula pela entrada e saída.'],
+      ['6. Depois salve a planilha e suba em Subir horas por planilha.'],
+    ]);
+    instructionsSheet['!cols'] = [{ wch: 92 }];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, templateSheet, 'Banco de Dados');
+    XLSX.utils.book_append_sheet(workbook, exampleSheet, 'Exemplo');
+    XLSX.utils.book_append_sheet(workbook, techniciansSheet, 'Técnicos ativos');
+    XLSX.utils.book_append_sheet(workbook, instructionsSheet, 'Instruções');
+    XLSX.writeFile(workbook, 'modelo-importacao-horas.xlsx');
+    setSaveMessage('Modelo XLSX de importacao de horas baixado.');
+  }
+
+  function handleDownloadAttendanceImportErrors() {
+    if (!attendanceImportErrors.length) {
+      setAttendanceMessage('Nao ha erros de importacao para baixar.');
+      return;
+    }
+
+    const rows = attendanceImportErrors.map((item) => ({
+      Aba: item.sheet_name || '-',
+      Linha: item.row_number || '-',
+      Motivo: item.message,
+      Detalhes: item.details.join(' | '),
+      Sugestao: item.suggestion,
+      Data: item.values.date,
+      Funcionario: item.values.employee,
+      Hora_Inicio: item.values.start_time,
+      Hora_Final: item.values.end_time,
+      Horas_Trabalhadas: item.values.hours_worked,
+      Semana_do_Ano: item.values.week_number,
+      Mes: item.values.month,
+      Ano: item.values.year,
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet['!cols'] = [
+      { wch: 18 },
+      { wch: 10 },
+      { wch: 48 },
+      { wch: 100 },
+      { wch: 72 },
+      { wch: 18 },
+      { wch: 36 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 20 },
+      { wch: 16 },
+      { wch: 10 },
+      { wch: 10 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Erros');
+    XLSX.writeFile(workbook, 'erros-importacao-horas.xlsx');
+    setAttendanceMessage('Planilha de erros baixada.');
+  }
+
   function handleExportPdf() {
     if (typeof window === 'undefined') return;
 
@@ -2242,6 +2915,17 @@ export function AdminScheduleBuilderPage() {
   const monthlyAttendanceWorkedTotal = selectedMonthlyAttendanceDrafts.reduce((total, draft) => total + getAttendanceWorkedHours(draft), 0);
   const monthlyAttendanceBalance = selectedMonthlyAttendanceDrafts.reduce((total, draft) => total + getAttendanceBalance(draft), 0);
   const monthlyAttendanceDays = new Set(selectedMonthlyAttendanceDrafts.map((draft) => draft.date)).size;
+  const attendanceImportWorkedTotal = attendanceImportRows.reduce((total, row) => total + row.hours_worked, 0);
+  const attendanceImportTechnicianCount = new Set(attendanceImportRows.map((row) => row.technician_id)).size;
+  const attendanceImportFirstDate = attendanceImportRows[0]?.date ?? '';
+  const attendanceImportLastDate = attendanceImportRows[attendanceImportRows.length - 1]?.date ?? '';
+  const attendanceImportPeriodLabel = attendanceImportFirstDate
+    ? attendanceImportFirstDate === attendanceImportLastDate
+      ? formatDate(attendanceImportFirstDate)
+      : `${formatDate(attendanceImportFirstDate)} a ${formatDate(attendanceImportLastDate)}`
+    : 'Sem periodo';
+  const visibleAttendanceImportErrors = showAllAttendanceImportErrors ? attendanceImportErrors : attendanceImportErrors.slice(0, 8);
+  const hiddenAttendanceImportErrorCount = Math.max(0, attendanceImportErrors.length - visibleAttendanceImportErrors.length);
 
   function renderBuilderDialogContent() {
     if (builderDialog === 'scope') {
@@ -2686,6 +3370,14 @@ export function AdminScheduleBuilderPage() {
           <Button type="button" variant="outline" onClick={() => handleAttendanceDialogChange(true)}>
             <Clock3 className="h-4 w-4" />
             Apontar horas
+          </Button>
+          <Button type="button" variant="outline" onClick={openAttendanceImportDialog}>
+            <Upload className="h-4 w-4" />
+            Subir horas por planilha
+          </Button>
+          <Button type="button" variant="outline" onClick={handleDownloadAttendanceImportTemplate}>
+            <Download className="h-4 w-4" />
+            Baixar modelo XLSX
           </Button>
           <Button type="button" variant="outline" onClick={handleExportSpreadsheet}>
             <Download className="h-4 w-4" />
@@ -3612,7 +4304,7 @@ export function AdminScheduleBuilderPage() {
             <DialogHeader className="border-b border-border/70 px-6 py-5 sm:px-7">
               <DialogTitle className="text-xl">Apontar horas</DialogTitle>
               <DialogDescription className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                Lance um dia específico ou feche o mês inteiro usando os horários previstos na escala.
+                Lance um dia especifico, feche o mes inteiro ou importe os apontamentos por planilha.
               </DialogDescription>
             </DialogHeader>
 
@@ -3627,30 +4319,50 @@ export function AdminScheduleBuilderPage() {
                     <select value={attendanceMode} onChange={(event) => handleAttendanceModeChange(event.target.value as AttendanceMode)} className={inputClassName}>
                       <option value="day">Diário</option>
                       <option value="month">Mensal</option>
+                      <option value="spreadsheet">Horas por planilha</option>
                     </select>
                   </label>
 
-                  <label className="mt-3 block text-sm">
-                    <span className="mb-1.5 block font-medium">{attendanceMode === 'day' ? 'Data do apontamento' : 'Mês do apontamento'}</span>
-                    {attendanceMode === 'day' ? (
-                      <input type="date" value={attendanceDate} onChange={(event) => setAttendanceDate(event.target.value)} className={inputClassName} />
-                    ) : (
-                      <input type="month" value={attendanceMonth} onChange={(event) => setAttendanceMonth(event.target.value)} className={inputClassName} />
-                    )}
-                  </label>
-                  <Button type="button" variant="outline" onClick={markAttendanceAutomatically} className="mt-3 w-full">
-                    <Clock3 className="h-4 w-4" />
-                    Marcar automático
-                  </Button>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {attendanceMode === 'day'
-                      ? 'Automático marca todos com o horário previsto.'
-                      : 'Automático marca todos os apontamentos do mês com o horário previsto.'}
-                  </p>
+                  {attendanceMode === 'spreadsheet' ? (
+                    <div className="mt-3">
+                      <label className="flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-input bg-background px-3 text-sm font-medium transition hover:bg-secondary">
+                        <Upload className="h-4 w-4" />
+                        {isAttendanceImportParsing ? 'Lendo planilha...' : 'Selecionar planilha de horas'}
+                        <input type="file" accept=".xlsx,.xls,.csv" onChange={handleAttendanceImportFile} className="sr-only" />
+                      </label>
+                      <Button type="button" variant="outline" onClick={handleDownloadAttendanceImportTemplate} className="mt-2 w-full">
+                        <Download className="h-4 w-4" />
+                        Baixar modelo XLSX
+                      </Button>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {attendanceImportFileName || 'Use a aba Banco de Dados com Data, Funcionario, Hora Inicio, Hora Final e Horas Trabalhadas.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <label className="mt-3 block text-sm">
+                        <span className="mb-1.5 block font-medium">{attendanceMode === 'day' ? 'Data do apontamento' : 'Mês do apontamento'}</span>
+                        {attendanceMode === 'day' ? (
+                          <input type="date" value={attendanceDate} onChange={(event) => setAttendanceDate(event.target.value)} className={inputClassName} />
+                        ) : (
+                          <input type="month" value={attendanceMonth} onChange={(event) => setAttendanceMonth(event.target.value)} className={inputClassName} />
+                        )}
+                      </label>
+                      <Button type="button" variant="outline" onClick={markAttendanceAutomatically} className="mt-3 w-full">
+                        <Clock3 className="h-4 w-4" />
+                        Marcar automático
+                      </Button>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        {attendanceMode === 'day'
+                          ? 'Automático marca todos com o horário previsto.'
+                          : 'Automático marca todos os apontamentos do mês com o horário previsto.'}
+                      </p>
+                    </>
+                  )}
                 </section>
 
                 <section className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-800">{attendanceMode === 'day' ? 'Resumo do dia' : 'Resumo do mês'}</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-800">{attendanceMode === 'day' ? 'Resumo do dia' : attendanceMode === 'month' ? 'Resumo do mês' : 'Resumo da importação'}</p>
                   <div className="mt-3 flex flex-wrap gap-2 text-sm text-emerald-950">
                     {attendanceMode === 'day' ? (
                       <>
@@ -3659,13 +4371,21 @@ export function AdminScheduleBuilderPage() {
                         <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">Realizado: {formatHours(attendanceWorkedTotal)}</span>
                         <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">Saldo: {formatHours(attendanceBalance)}</span>
                       </>
-                    ) : (
+                    ) : attendanceMode === 'month' ? (
                       <>
                         <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">{formatCount(selectedMonthlyAttendanceDrafts.length, 'apontamento', 'apontamentos')}</span>
                         <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">{formatCount(monthlyAttendanceDays, 'dia escalado', 'dias escalados')}</span>
                         <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">Previsto: {formatHours(monthlyAttendancePlannedTotal)}</span>
                         <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">Realizado: {formatHours(monthlyAttendanceWorkedTotal)}</span>
                         <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">Saldo: {formatHours(monthlyAttendanceBalance)}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">{formatCount(attendanceImportRows.length, 'linha valida', 'linhas validas')}</span>
+                        <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">{formatCount(attendanceImportTechnicianCount, 'tecnico', 'tecnicos')}</span>
+                        <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">Periodo: {attendanceImportPeriodLabel}</span>
+                        <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">Horas: {formatHours(attendanceImportWorkedTotal)}</span>
+                        <span className="rounded-md border border-emerald-200 bg-white/80 px-3 py-2">Erros: {attendanceImportErrors.length}</span>
                       </>
                     )}
                   </div>
@@ -3767,7 +4487,7 @@ export function AdminScheduleBuilderPage() {
                   </tbody>
                 </table>
               </div>
-              ) : (
+              ) : attendanceMode === 'month' ? (
                 <div className="overflow-x-auto rounded-lg border border-border/70 bg-background">
                   <table className="w-full min-w-[1320px] text-sm">
                     <thead className="bg-secondary/60 text-left text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
@@ -3868,6 +4588,101 @@ export function AdminScheduleBuilderPage() {
                     </tbody>
                   </table>
                 </div>
+              ) : (
+                <div className="space-y-4">
+                  {attendanceImportErrors.length ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">{formatCount(attendanceImportErrors.length, 'linha com erro', 'linhas com erro')}</p>
+                          <p className="mt-1 text-xs text-amber-800">Corrija as linhas abaixo na planilha e suba o arquivo novamente.</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {attendanceImportErrors.length > 8 ? (
+                            <Button type="button" variant="outline" size="sm" onClick={() => setShowAllAttendanceImportErrors((current) => !current)}>
+                              {showAllAttendanceImportErrors ? 'Ver menos' : `Ver todos (${attendanceImportErrors.length})`}
+                            </Button>
+                          ) : null}
+                          <Button type="button" variant="outline" size="sm" onClick={handleDownloadAttendanceImportErrors}>
+                            <Download className="h-4 w-4" />
+                            Baixar erros XLSX
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid gap-2">
+                        {visibleAttendanceImportErrors.map((item) => (
+                          <div key={item.key} className="rounded-md border border-amber-200 bg-white/80 p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-semibold">Linha {item.row_number || '-'}</span>
+                              {item.sheet_name ? <span className="text-xs text-amber-700">Aba {item.sheet_name}</span> : null}
+                            </div>
+                            <p className="mt-1 font-medium text-amber-950">{item.message}</p>
+                            <div className="mt-2 grid gap-1 text-xs text-amber-900 md:grid-cols-2 xl:grid-cols-5">
+                              <span>Data: {item.values.date || '-'}</span>
+                              <span>Funcionário: {item.values.employee || '-'}</span>
+                              <span>Entrada: {item.values.start_time || '-'}</span>
+                              <span>Saída: {item.values.end_time || '-'}</span>
+                              <span>Horas: {item.values.hours_worked || '-'}</span>
+                            </div>
+                            {item.details.length ? (
+                              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-900">
+                                {item.details.map((detail) => (
+                                  <li key={`${item.key}-${detail}`}>{detail}</li>
+                                ))}
+                              </ul>
+                            ) : null}
+                            <p className="mt-2 text-xs font-medium text-amber-950">Como corrigir: {item.suggestion}</p>
+                          </div>
+                        ))}
+                      </div>
+                      {hiddenAttendanceImportErrorCount ? <p className="mt-2 text-xs">Exibindo 8 primeiros erros. Ainda há {hiddenAttendanceImportErrorCount} linha(s) ocultas.</p> : null}
+                    </div>
+                  ) : null}
+
+                  <div className="overflow-x-auto rounded-lg border border-border/70 bg-background">
+                    <table className="w-full min-w-[1120px] text-sm">
+                      <thead className="bg-secondary/60 text-left text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                        <tr>
+                          <th className="px-3 py-3">Linha</th>
+                          <th className="px-3 py-3">Data</th>
+                          <th className="px-3 py-3">Técnico</th>
+                          <th className="px-3 py-3">Nome na planilha</th>
+                          <th className="px-3 py-3">Entrada</th>
+                          <th className="px-3 py-3">Saída</th>
+                          <th className="px-3 py-3">Horas</th>
+                          <th className="px-3 py-3">Previsto</th>
+                          <th className="px-3 py-3">Semana</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {attendanceImportRows.length ? attendanceImportRows.slice(0, 160).map((row) => (
+                          <tr key={`${row.key}-${row.row_number}`} className="border-t border-border/70">
+                            <td className="px-3 py-3 text-muted-foreground">{row.row_number}</td>
+                            <td className="px-3 py-3">{formatDate(row.date)}</td>
+                            <td className="px-3 py-3 font-medium text-foreground">{row.technician_name}</td>
+                            <td className="px-3 py-3 text-muted-foreground">{row.imported_name}</td>
+                            <td className="px-3 py-3">{formatTime(row.start_time)}</td>
+                            <td className="px-3 py-3">{formatTime(row.end_time)}</td>
+                            <td className="px-3 py-3">{formatHours(row.hours_worked)}</td>
+                            <td className="px-3 py-3 text-muted-foreground">{formatTimeRange(row.planned_start_time, row.planned_end_time)}</td>
+                            <td className="px-3 py-3 text-muted-foreground">{row.week_number || '-'}</td>
+                          </tr>
+                        )) : (
+                          <tr>
+                            <td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">
+                              Carregue uma planilha XLSX, XLS ou CSV para validar os apontamentos antes de salvar.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {attendanceImportRows.length > 160 ? (
+                    <p className="text-xs text-muted-foreground">Exibindo as 160 primeiras linhas válidas. Todas as {attendanceImportRows.length} linhas válidas serão salvas.</p>
+                  ) : null}
+                </div>
               )}
             </form>
 
@@ -3877,16 +4692,17 @@ export function AdminScheduleBuilderPage() {
                 {attendanceMessage ? <span className="text-emerald-700">{attendanceMessage}</span> : null}
                 {isAttendanceSubmitting ? (
                   <span className="text-muted-foreground">
-                    {attendanceMode === 'month' ? 'Salvando apontamentos do mês...' : 'Salvando apontamento...'}
+                    {attendanceMode === 'spreadsheet' ? 'Salvando horas importadas...' : attendanceMode === 'month' ? 'Salvando apontamentos do mês...' : 'Salvando apontamento...'}
                   </span>
                 ) : null}
+                {isAttendanceImportParsing ? <span className="text-muted-foreground">Lendo planilha...</span> : null}
               </div>
               <div className="flex gap-2">
                 <Button type="button" variant="outline" onClick={() => handleAttendanceDialogChange(false)}>
                   Cancelar
                 </Button>
-                <Button type="submit" form="attendance-form" disabled={isAttendanceSubmitting} className="min-w-44">
-                  {isAttendanceSubmitting ? 'Salvando...' : attendanceMode === 'month' ? 'Salvar mês automático' : 'Salvar apontamento'}
+                <Button type="submit" form="attendance-form" disabled={isAttendanceSubmitting || isAttendanceImportParsing || (attendanceMode === 'spreadsheet' && !attendanceImportRows.length)} className="min-w-44">
+                  {isAttendanceSubmitting ? 'Salvando...' : attendanceMode === 'spreadsheet' ? `Salvar horas importadas (${attendanceImportRows.length})` : attendanceMode === 'month' ? 'Salvar mês automático' : 'Salvar apontamento'}
                 </Button>
               </div>
             </DialogFooter>
