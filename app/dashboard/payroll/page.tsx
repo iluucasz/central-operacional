@@ -123,7 +123,7 @@ export default function TechnicianPayrollPage() {
 
   const earningsItems = [
     { label: 'Salário base', value: currentPayroll?.base_salary ?? 0 },
-    { label: 'Comissão por serviços', value: currentPayroll?.commission_value ?? 0 },
+    { label: 'Comissão / DSR', value: currentPayroll?.commission_value ?? 0 },
     { label: 'Horas extras', value: currentPayroll?.extra_hours_value ?? 0 },
     { label: 'Premiação extraordinária', value: currentPayroll?.extraordinary_award_value ?? 0 },
   ];
@@ -238,7 +238,7 @@ export default function TechnicianPayrollPage() {
                     <tr className="border-b border-border text-xs uppercase text-muted-foreground">
                       <th className="py-3 pr-4 text-left font-medium">Competência</th>
                       <th className={historyHeaderClass}>Base</th>
-                      <th className={historyHeaderClass}>Comissão</th>
+                      <th className={historyHeaderClass}>Comissão / DSR</th>
                       <th className={historyHeaderClass}>Horas extras</th>
                       <th className={historyHeaderClass}>Premiação</th>
                       <th className={historyHeaderClass}>Descontos</th>

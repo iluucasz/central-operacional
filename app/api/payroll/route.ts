@@ -61,6 +61,8 @@ export async function GET(request: NextRequest) {
     const competenceMonth = searchParams.get('competenceMonth');
     const technicianId = searchParams.get('technicianId');
 
+    await ensurePayrollSchema();
+
     let query = `
       SELECT p.*
       FROM payroll p
@@ -73,6 +75,12 @@ export async function GET(request: NextRequest) {
     if (auth.role === 'technician' || technicianId) {
       conditions.push(`p.technician_id = $${params.length + 1}`);
       params.push(technicianId || auth.technicianId || auth.userId);
+    }
+
+    // O técnico só enxerga folhas efetivamente fechadas. Rascunhos ficam
+    // restritos ao admin até o fechamento explícito.
+    if (auth.role === 'technician') {
+      conditions.push(`p.status = 'closed'`);
     }
 
     if (competenceMonth) {
@@ -119,6 +127,7 @@ export async function POST(request: NextRequest) {
       extraordinary_award_value = 0,
       hour_bank_balance,
       net_total,
+      status,
     } = await request.json();
 
     await ensurePayrollSchema();
@@ -129,6 +138,8 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
+
+    const payrollStatus = status === 'closed' ? 'closed' : 'draft';
 
     const values = {
       total_services_value: roundCurrency(total_services_value),
@@ -148,12 +159,12 @@ export async function POST(request: NextRequest) {
       INSERT INTO payroll (
         technician_id, competence_month, total_services_value, commission_value,
         base_salary, va_deduction, vr_deduction, discounts_total,
-        advances_total, extra_hours_value, extraordinary_award_value, hour_bank_balance, net_total
+        advances_total, extra_hours_value, extraordinary_award_value, hour_bank_balance, net_total, status
       )
       VALUES (
         ${technician_id}, ${competence_month}, ${values.total_services_value}, ${values.commission_value},
         ${values.base_salary}, ${values.va_deduction}, ${values.vr_deduction}, ${values.discounts_total},
-        ${values.advances_total}, ${values.extra_hours_value}, ${values.extraordinary_award_value}, ${values.hour_bank_balance}, ${values.net_total}
+        ${values.advances_total}, ${values.extra_hours_value}, ${values.extraordinary_award_value}, ${values.hour_bank_balance}, ${values.net_total}, ${payrollStatus}
       )
       ON CONFLICT (technician_id, competence_month) DO UPDATE
       SET total_services_value = EXCLUDED.total_services_value,
@@ -167,6 +178,7 @@ export async function POST(request: NextRequest) {
           extraordinary_award_value = EXCLUDED.extraordinary_award_value,
           hour_bank_balance = EXCLUDED.hour_bank_balance,
           net_total = EXCLUDED.net_total,
+          status = EXCLUDED.status,
           updated_at = NOW()
       RETURNING *
     `;

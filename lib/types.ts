@@ -95,10 +95,13 @@ export interface Payroll {
   extraordinary_award_value?: number
   hour_bank_balance: number
   net_total: number
+  status?: PayrollStatus
   created_at: string
   updated_at: string
   technician_name?: string
 }
+
+export type PayrollStatus = 'draft' | 'closed'
 
 export interface FinancialEntry {
   id: string

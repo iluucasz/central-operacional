@@ -74,6 +74,14 @@ export function ensurePayrollSchema() {
         ALTER TABLE payroll
         ADD COLUMN IF NOT EXISTS extraordinary_award_value NUMERIC(12, 2) NOT NULL DEFAULT 0
       `;
+
+      // Registros antigos, no modelo anterior, já eram efetivamente fechados
+      // (salvar == fechar). Por isso o default é 'closed' para não sumir com o
+      // histórico do técnico. Rascunhos novos gravam status = 'draft'.
+      await sql`
+        ALTER TABLE payroll
+        ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'closed'
+      `;
     })().catch((error) => {
       payrollSchemaReady = null;
       throw error;

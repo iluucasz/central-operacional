@@ -69,6 +69,7 @@ type PayrollRow = {
   profitValue: number;
   serviceFortnightSummary: ServiceFortnightSummary;
   commissionPercentage: number;
+  calculationBase: number;
   baseSalary: number;
   vaAllowance: number;
   vrAllowance: number;
@@ -420,7 +421,11 @@ export default function PayrollPage() {
   const [payrollDraft, setPayrollDraft] = useState<PayrollDraft | null>(null);
   const [draftError, setDraftError] = useState('');
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [draftStatus, setDraftStatus] = useState<'none' | 'draft' | 'closed'>('none');
   const selectedCompetenceYear = Number(competenceMonth.slice(0, 4)) || new Date().getFullYear();
   const selectedCompetenceMonth = Number(competenceMonth.slice(5, 7)) || new Date().getMonth() + 1;
   const competenceYearOptions = useMemo(
@@ -560,6 +565,7 @@ export default function PayrollPage() {
         profitValue: hasMonthlyObligation ? roundMoney(totalServicesValue - roundMoney(cashNetTotal + displayBenefitsTotal)) : 0,
         serviceFortnightSummary,
         commissionPercentage,
+        calculationBase,
         baseSalary,
         vaAllowance,
         vrAllowance,
@@ -590,7 +596,8 @@ export default function PayrollPage() {
   const totalServiceCount = rowsWithMonthlyActivity.reduce((total, row) => total + row.serviceCount, 0);
   const totalServicesValue = rowsWithMonthlyActivity.reduce((total, row) => total + row.totalServicesValue, 0);
   const totalProfit = rowsWithMonthlyObligation.reduce((total, row) => total + row.profitValue, 0);
-  const closedCount = rowsWithMonthlyObligation.filter((row) => row.payrollItem).length;
+  const closedCount = rowsWithMonthlyObligation.filter((row) => row.payrollItem?.status === 'closed').length;
+  const draftCount = rowsWithMonthlyObligation.filter((row) => row.payrollItem && row.payrollItem.status !== 'closed').length;
   const pendingClosureCount = rowsWithMonthlyObligation.length - closedCount;
   const isPayrollAwaitingClosure = rowsWithMonthlyObligation.length > 0 && pendingClosureCount > 0;
 
@@ -599,7 +606,11 @@ export default function PayrollPage() {
     setPayrollDraft(null);
     setDraftError('');
     setIsPreviewLoading(false);
-    setIsSavingDraft(false);
+    setIsClosing(false);
+    setIsDirty(false);
+    setAutoSaveState('idle');
+    setLastSavedAt(null);
+    setDraftStatus('none');
   }
 
   function handleDialogOpenChange(open: boolean) {
@@ -641,15 +652,25 @@ export default function PayrollPage() {
   }
 
   async function openPayrollDialog(row: PayrollRow) {
-    if (row.payrollItem || !row.hasMonthlyObligation) {
+    if (!row.hasMonthlyObligation) {
       return;
     }
 
     setSelectedRow(row);
     setIsPayrollDialogOpen(true);
     setDraftError('');
-    setPayrollDraft(null);
-    await loadPreview(row);
+    setIsDirty(false);
+    setAutoSaveState('idle');
+    setLastSavedAt(row.payrollItem?.updated_at ? new Date(row.payrollItem.updated_at) : null);
+    setDraftStatus(row.payrollItem ? (row.payrollItem.status === 'closed' ? 'closed' : 'draft') : 'none');
+
+    if (row.payrollItem) {
+      // Já existe rascunho/fechamento salvo: carrega os valores gravados, sem recalcular.
+      setPayrollDraft(createDraftFromRow(row, competenceMonth));
+    } else {
+      setPayrollDraft(null);
+      await loadPreview(row);
+    }
   }
 
   function openPayrollPdf(row: PayrollRow) {
@@ -746,6 +767,7 @@ export default function PayrollPage() {
   }
 
   function updateDraftNumber(field: PayrollDraftField, value: number) {
+    setIsDirty(true);
     setPayrollDraft((current) => {
       if (!current) return current;
 
@@ -769,6 +791,7 @@ export default function PayrollPage() {
   }
 
   function applyCommissionFormula() {
+    setIsDirty(true);
     setPayrollDraft((current) => {
       if (!current) return current;
       const commissionPercentage = selectedRow?.commissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE;
@@ -784,49 +807,147 @@ export default function PayrollPage() {
     });
   }
 
-  async function savePayrollDraft() {
-    if (!payrollDraft) return;
+  async function persistPayroll(status: 'draft' | 'closed') {
+    if (!payrollDraft) return null;
 
-    setIsSavingDraft(true);
+    const response = await fetch('/api/payroll', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...normalizeDraft(payrollDraft), status }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Save failed');
+    }
+
+    const savedPayroll = (await response.json()) as Payroll;
+    setPayroll((current) => {
+      const others = current.filter(
+        (item) =>
+          item.technician_id !== savedPayroll.technician_id ||
+          item.competence_month !== savedPayroll.competence_month,
+      );
+
+      return [savedPayroll, ...others];
+    });
+
+    return savedPayroll;
+  }
+
+  async function autoSaveDraft() {
+    if (!payrollDraft || isClosing) return;
+
+    setAutoSaveState('saving');
     setDraftError('');
 
     try {
-      const response = await fetch('/api/payroll', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(normalizeDraft(payrollDraft)),
-      });
+      await persistPayroll('draft');
+      setIsDirty(false);
+      setDraftStatus('draft');
+      setLastSavedAt(new Date());
+      setAutoSaveState('saved');
+    } catch {
+      setAutoSaveState('error');
+      setDraftError('Não foi possível salvar automaticamente. Verifique a conexão e tente novamente.');
+    }
+  }
 
-      if (!response.ok) {
-        throw new Error('Save failed');
-      }
+  async function closePayroll() {
+    if (!payrollDraft) return;
 
-      const savedPayroll = (await response.json()) as Payroll;
-      setPayroll((current) => {
-        const others = current.filter(
-          (item) =>
-            item.technician_id !== savedPayroll.technician_id ||
-            item.competence_month !== savedPayroll.competence_month,
-        );
+    setIsClosing(true);
+    setDraftError('');
 
-        return [savedPayroll, ...others];
-      });
+    try {
+      await persistPayroll('closed');
+      setIsDirty(false);
+      setDraftStatus('closed');
+      setLastSavedAt(new Date());
       setIsPayrollDialogOpen(false);
       resetDialogState();
     } catch {
       setDraftError('Não foi possível fechar a folha. Confira os valores e tente novamente.');
     } finally {
-      setIsSavingDraft(false);
+      setIsClosing(false);
     }
   }
+
+  // Salva automaticamente como rascunho toda vez que um valor da folha muda,
+  // com um pequeno atraso para agrupar edições consecutivas. O fechamento
+  // continua sendo uma ação manual e explícita.
+  useEffect(() => {
+    if (!isPayrollDialogOpen || !payrollDraft || !isDirty || isClosing) return;
+
+    const handle = setTimeout(() => {
+      void autoSaveDraft();
+    }, 900);
+
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payrollDraft, isDirty, isPayrollDialogOpen, isClosing]);
 
   const currentCommissionPercentage = selectedRow?.commissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE;
   const formulaCommission = payrollDraft ? calculateFormulaCommission(payrollDraft, currentCommissionPercentage) : 0;
   const formulaCashNet = payrollDraft ? calculateCashNet(payrollDraft) : 0;
   const previewPayrollNet = payrollDraft ? calculatePayrollNet(payrollDraft) : 0;
   const previewProfit = payrollDraft ? roundMoney(payrollDraft.total_services_value - previewPayrollNet) : 0;
-  const hasSavedPayroll = Boolean(selectedRow?.payrollItem);
+  const isClosed = draftStatus === 'closed';
+  const autoSaveLabel =
+    autoSaveState === 'saving'
+      ? 'Salvando alterações...'
+      : autoSaveState === 'error'
+        ? 'Falha ao salvar automaticamente'
+        : lastSavedAt
+          ? `Alterações salvas automaticamente às ${lastSavedAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+          : 'As alterações são salvas automaticamente como rascunho';
   const hasManualNetAdjustment = payrollDraft ? roundMoney(payrollDraft.net_total) !== roundMoney(formulaCashNet) : false;
+
+  function renderRowStatus(row: PayrollRow) {
+    if (row.payrollItem?.status === 'closed') return <StatusBadge tone="success">Folha fechada</StatusBadge>;
+    if (row.payrollItem) return <StatusBadge tone="info">Rascunho salvo</StatusBadge>;
+    if (row.hasMonthlyObligation) return <StatusBadge tone="warning">Aguardando fechamento</StatusBadge>;
+    return <StatusBadge tone="neutral">Sem movimento</StatusBadge>;
+  }
+
+  function renderRowActions(row: PayrollRow) {
+    if (!row.hasMonthlyObligation) {
+      return <span className="text-sm text-muted-foreground">-</span>;
+    }
+
+    const isClosedRow = row.payrollItem?.status === 'closed';
+    const isLoadingRow = openingTechnicianId === row.technician.id;
+
+    return (
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant={isClosedRow ? 'outline' : 'default'}
+          onClick={() => openPayrollDialog(row)}
+          disabled={isLoadingRow}
+        >
+          <Calculator className="h-4 w-4" />
+          {isLoadingRow ? 'Carregando' : isClosedRow ? 'Editar' : row.payrollItem ? 'Continuar rascunho' : 'Abrir folha'}
+        </Button>
+        {isClosedRow ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon-sm"
+                onClick={() => openPayrollPdf(row)}
+                aria-label={`Gerar PDF da folha de ${row.technician.name}`}
+              >
+                <FileText className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6}>Gerar PDF da folha</TooltipContent>
+          </Tooltip>
+        ) : null}
+      </div>
+    );
+  }
 
   if (loading || isDataLoading || !user) {
     return <LoadingState />;
@@ -837,7 +958,7 @@ export default function PayrollPage() {
       <PageHeader
         eyebrow="Fechamento"
         title="Folha de pagamento"
-        description="Escolha a competência, abra a folha do técnico, revise os valores e feche somente quando estiver certo."
+        description="Abra a folha do técnico e edite à vontade: cada alteração é salva automaticamente como rascunho. A folha só é enviada ao técnico quando você clicar em Fechar folha."
       />
 
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
@@ -852,7 +973,7 @@ export default function PayrollPage() {
         <MetricCard
           title="Finalizados"
           value={`${closedCount}/${rowsWithMonthlyObligation.length}`}
-          hint={isPayrollAwaitingClosure ? `Faltam ${pendingClosureCount} folha(s) para concluir a competência.` : 'Todas as folhas da competência foram fechadas.'}
+          hint={isPayrollAwaitingClosure ? `Faltam ${pendingClosureCount} folha(s) (${draftCount} em rascunho).` : 'Todas as folhas da competência foram fechadas.'}
           icon={WalletCards}
           tone={isPayrollAwaitingClosure ? 'warning' : 'success'}
         />
@@ -913,7 +1034,7 @@ export default function PayrollPage() {
 
       <DataPanel
         title="Fechamento por técnico"
-        description="A tabela mostra o resumo do mês com o breakdown de Q1 e Q2. Abra a folha para revisar e fechar. Depois de fechada, a ação disponível passa a ser o PDF do técnico."
+        description="A tabela mostra o resumo do mês, a base de cálculo (valor usado para os 25%) e o breakdown de Q1 e Q2. Abra a folha para editar (salva sozinho como rascunho) e feche quando estiver pronto para o técnico."
         action={
           <div className="flex min-h-10 w-full items-center gap-2 rounded-md border border-border bg-background px-3 sm:w-auto">
             <Search className="h-4 w-4 text-muted-foreground" />
@@ -921,13 +1042,14 @@ export default function PayrollPage() {
           </div>
         }
       >
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1050px] text-sm">
+        <div className="hidden overflow-x-auto lg:block">
+          <table className="w-full min-w-6xl text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
                 <th className="py-3 pr-4 font-medium">Técnico</th>
                 <th className="py-3 pr-4 font-medium">OS</th>
                 <th className="py-3 pr-4 font-medium">Valor bruto</th>
+                <th className="py-3 pr-4 font-medium">Base de cálculo</th>
                 <th className="py-3 pr-4 font-medium">Comissão</th>
                 <th className="py-3 pr-4 font-medium">Descontos</th>
                 <th className="py-3 pr-4 font-medium">Em conta</th>
@@ -956,6 +1078,12 @@ export default function PayrollPage() {
                       {row.hasMonthlyActivity ? formatServiceFortnightValueSummary(row.serviceFortnightSummary) : row.hasMonthlyObligation ? 'Somente custo fixo' : 'Sem valor lançado'}
                     </div>
                   </td>
+                  <td className="whitespace-nowrap py-3 pr-4">
+                    <div className="font-medium">{row.hasMonthlyObligation ? formatCurrency(row.calculationBase) : '-'}</div>
+                    {row.hasMonthlyObligation ? (
+                      <div className="text-xs text-muted-foreground">{row.commissionPercentage}% do bruto</div>
+                    ) : null}
+                  </td>
                   <td className="whitespace-nowrap py-3 pr-4">{row.hasMonthlyObligation ? formatCurrency(row.commission) : '-'}</td>
                   <td className="whitespace-nowrap py-3 pr-4">{row.hasMonthlyObligation ? formatCurrency(row.totalDeductions) : '-'}</td>
                   <td className="whitespace-nowrap py-3 pr-4 font-semibold">{row.hasMonthlyObligation ? formatCurrency(row.cashNetTotal) : '-'}</td>
@@ -963,49 +1091,73 @@ export default function PayrollPage() {
                   <td className={`whitespace-nowrap py-3 pr-4 font-semibold ${row.profitValue >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
                     {row.hasMonthlyObligation ? formatCurrency(row.profitValue) : '-'}
                   </td>
-                  <td className="py-3 pr-4">
-                    {row.payrollItem ? (
-                      <StatusBadge tone="success">Folha fechada</StatusBadge>
-                    ) : row.hasMonthlyObligation ? (
-                      <StatusBadge tone="warning">Aguardando fechamento</StatusBadge>
-                    ) : (
-                      <StatusBadge tone="neutral">Sem movimento</StatusBadge>
-                    )}
-                  </td>
-                  <td className="py-3">
-                    {row.payrollItem ? (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="icon-sm"
-                            onClick={() => openPayrollPdf(row)}
-                            aria-label={`Gerar PDF da folha de ${row.technician.name}`}
-                          >
-                            <FileText className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" sideOffset={6}>Gerar PDF da folha</TooltipContent>
-                      </Tooltip>
-                    ) : row.hasMonthlyObligation ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => openPayrollDialog(row)}
-                        disabled={openingTechnicianId === row.technician.id}
-                      >
-                        <Calculator className="h-4 w-4" />
-                        {openingTechnicianId === row.technician.id ? 'Carregando' : 'Abrir Folha'}
-                      </Button>
-                    ) : (
-                      <span className="text-sm text-muted-foreground">-</span>
-                    )}
-                  </td>
+                  <td className="py-3 pr-4">{renderRowStatus(row)}</td>
+                  <td className="py-3">{renderRowActions(row)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+
+        <div className="grid gap-3 lg:hidden">
+          {filteredRows.map((row) => (
+            <div key={row.technician.id} className="rounded-lg border border-border bg-background p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium">{row.technician.name}</div>
+                  {row.technician.qra ? <div className="text-xs text-muted-foreground">{row.technician.qra}</div> : null}
+                </div>
+                {renderRowStatus(row)}
+              </div>
+
+              <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                <div>
+                  <dt className="text-xs uppercase text-muted-foreground">OS</dt>
+                  <dd className="font-medium">
+                    {row.serviceCount}
+                    <span className="block text-xs font-normal text-muted-foreground">
+                      {row.hasMonthlyActivity ? formatServiceFortnightCountSummary(row.serviceFortnightSummary) : row.hasMonthlyObligation ? 'Sem OS' : 'Sem movimento'}
+                    </span>
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-muted-foreground">Valor bruto</dt>
+                  <dd className="font-medium">{formatCurrency(row.totalServicesValue)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-muted-foreground">Base de cálculo</dt>
+                  <dd className="font-medium">
+                    {row.hasMonthlyObligation ? formatCurrency(row.calculationBase) : '-'}
+                    {row.hasMonthlyObligation ? <span className="block text-xs font-normal text-muted-foreground">{row.commissionPercentage}% do bruto</span> : null}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-muted-foreground">Comissão</dt>
+                  <dd className="font-medium">{row.hasMonthlyObligation ? formatCurrency(row.commission) : '-'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-muted-foreground">Descontos</dt>
+                  <dd className="font-medium">{row.hasMonthlyObligation ? formatCurrency(row.totalDeductions) : '-'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-muted-foreground">Em conta</dt>
+                  <dd className="font-semibold">{row.hasMonthlyObligation ? formatCurrency(row.cashNetTotal) : '-'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-muted-foreground">Líquido da folha</dt>
+                  <dd className="font-semibold">{row.hasMonthlyObligation ? formatCurrency(row.payrollNetTotal) : '-'}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-muted-foreground">Lucro gerado</dt>
+                  <dd className={`font-semibold ${row.profitValue >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    {row.hasMonthlyObligation ? formatCurrency(row.profitValue) : '-'}
+                  </dd>
+                </div>
+              </dl>
+
+              <div className="mt-4">{renderRowActions(row)}</div>
+            </div>
+          ))}
         </div>
       </DataPanel>
 
@@ -1035,9 +1187,9 @@ export default function PayrollPage() {
                 <div className="rounded-lg border border-border bg-muted/20 p-4">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-base font-semibold">Resumo</h3>
-                    <HelpTip text="Esses números já foram calculados automaticamente. Eles só ficam gravados quando você clicar em fechar a folha." />
-                    <StatusBadge tone={hasSavedPayroll ? 'success' : 'warning'}>
-                      {hasSavedPayroll ? 'Fechada' : 'Em aberto'}
+                    <HelpTip text="As alterações são salvas automaticamente como rascunho. A folha só fica visível para o técnico quando você clicar em Fechar folha." />
+                    <StatusBadge tone={isClosed ? 'success' : draftStatus === 'draft' ? 'info' : 'warning'}>
+                      {isClosed ? 'Fechada' : draftStatus === 'draft' ? 'Rascunho salvo' : 'Em aberto'}
                     </StatusBadge>
                     <StatusBadge tone={hasManualNetAdjustment ? 'warning' : 'info'}>
                       {hasManualNetAdjustment ? 'Ajuste manual' : 'Fórmula'}
@@ -1177,24 +1329,42 @@ export default function PayrollPage() {
             ) : null}
           </div>
 
-          <DialogFooter className="shrink-0 border-t border-border p-3 sm:p-4">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => selectedRow && loadPreview(selectedRow)}
-              disabled={!selectedRow || isPreviewLoading || isSavingDraft}
-              className="w-full sm:w-auto"
+          <DialogFooter className="shrink-0 flex-col gap-3 border-t border-border p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+            <div
+              className={`flex items-center gap-2 text-xs font-medium ${
+                autoSaveState === 'error' ? 'text-rose-600' : autoSaveState === 'saving' ? 'text-muted-foreground' : 'text-emerald-700'
+              }`}
+              aria-live="polite"
             >
-              <RefreshCw className="h-4 w-4" />
-              {isPreviewLoading ? 'Atualizando' : 'Atualizar'}
-            </Button>
-            <Button type="button" variant="secondary" onClick={() => handleDialogOpenChange(false)} disabled={isSavingDraft} className="w-full sm:w-auto">
-              Fechar
-            </Button>
-            <Button type="button" onClick={savePayrollDraft} disabled={!payrollDraft || isSavingDraft || isPreviewLoading} className="w-full sm:w-auto">
-              <CheckCircle2 className="h-4 w-4" />
-              {isSavingDraft ? 'Fechando' : 'Fechar Folha'}
-            </Button>
+              {autoSaveState === 'saving' ? (
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              ) : autoSaveState === 'error' ? (
+                <AlertCircle className="h-3.5 w-3.5" />
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              )}
+              <span>{autoSaveLabel}</span>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => selectedRow && loadPreview(selectedRow).then(() => setIsDirty(true))}
+                disabled={!selectedRow || isPreviewLoading || isClosing}
+                className="w-full sm:w-auto"
+              >
+                <RefreshCw className="h-4 w-4" />
+                {isPreviewLoading ? 'Recalculando' : 'Recalcular'}
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => handleDialogOpenChange(false)} disabled={isClosing || autoSaveState === 'saving'} className="w-full sm:w-auto">
+                Fechar janela
+              </Button>
+              <Button type="button" onClick={closePayroll} disabled={!payrollDraft || isClosing || isPreviewLoading || autoSaveState === 'saving'} className="w-full sm:w-auto">
+                <CheckCircle2 className="h-4 w-4" />
+                {isClosing ? 'Fechando' : isClosed ? 'Atualizar fechamento' : 'Fechar folha'}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

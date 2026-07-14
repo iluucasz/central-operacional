@@ -1,11 +1,14 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import * as XLSX from 'xlsx';
 import {
   AlertTriangle,
   CalendarDays,
   CheckCircle2,
   Clock3,
+  Download,
+  FileSpreadsheet,
   Landmark,
   MoreHorizontal,
   PencilLine,
@@ -15,6 +18,7 @@ import {
   TrendingDown,
   TrendingUp,
   Undo2,
+  UploadCloud,
   WalletCards,
 } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
@@ -255,6 +259,167 @@ function sortEntries(left: FinancialEntry, right: FinancialEntry) {
   return left.description.localeCompare(right.description, 'pt-BR');
 }
 
+const importColumns = [
+  'Tipo',
+  'Descrição',
+  'Categoria',
+  'Valor',
+  'Vencimento',
+  'Competência',
+  'Status',
+  'Valor pago',
+  'Data da baixa',
+  'Observações',
+] as const;
+
+type SpreadsheetRow = Record<(typeof importColumns)[number], string | number>;
+
+type ParsedImportRow = {
+  line: number;
+  values: {
+    type: FinancialEntryType;
+    description: string;
+    category: string;
+    amount: number;
+    due_date: string;
+    competence_month: string;
+    status: FinancialEntryStatus;
+    paid_amount: number;
+    paid_at: string;
+    notes: string;
+  };
+  errors: string[];
+};
+
+function pad2(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function dateToKey(date: Date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function cellToDateKey(value: unknown): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return dateToKey(value);
+  }
+
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+
+  // AAAA-MM-DD
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  // DD/MM/AAAA
+  const brMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (brMatch) return `${brMatch[3]}-${pad2(Number(brMatch[2]))}-${pad2(Number(brMatch[1]))}`;
+
+  return '';
+}
+
+function cellToCompetence(value: unknown): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${pad2(value.getMonth() + 1)}`;
+  }
+
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+
+  const isoMatch = text.match(/^(\d{4})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}`;
+
+  // MM/AAAA
+  const brMatch = text.match(/^(\d{1,2})\/(\d{4})/);
+  if (brMatch) return `${brMatch[2]}-${pad2(Number(brMatch[1]))}`;
+
+  return '';
+}
+
+function cellToNumber(value: unknown): number {
+  if (typeof value === 'number') return value;
+  const text = String(value ?? '').trim();
+  if (!text) return 0;
+  // Aceita formatos "1.234,56" e "1234.56"
+  const normalized = text.replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function parseTypeCell(value: unknown): FinancialEntryType | null {
+  const normalized = normalizeText(String(value ?? ''));
+  if (['payable', 'a pagar', 'pagar', 'despesa'].includes(normalized)) return 'payable';
+  if (['receivable', 'a receber', 'receber', 'receita'].includes(normalized)) return 'receivable';
+  return null;
+}
+
+function parseStatusCell(value: unknown): FinancialEntryStatus {
+  const normalized = normalizeText(String(value ?? ''));
+  if (['paid', 'baixada', 'baixado', 'pago', 'recebido'].includes(normalized)) return 'paid';
+  return 'pending';
+}
+
+function pickCell(row: Record<string, unknown>, header: string): unknown {
+  // tolera pequenas variações de cabeçalho (acento/caixa/espaços)
+  const target = normalizeText(header);
+  const key = Object.keys(row).find((candidate) => normalizeText(candidate) === target);
+  return key ? row[key] : '';
+}
+
+function parseFinanceImportRows(rows: Record<string, unknown>[]): ParsedImportRow[] {
+  return rows.map((row, index) => {
+    const errors: string[] = [];
+    const type = parseTypeCell(pickCell(row, 'Tipo'));
+    const description = String(pickCell(row, 'Descrição') ?? '').trim();
+    const category = String(pickCell(row, 'Categoria') ?? '').trim() || 'Geral';
+    const amount = cellToNumber(pickCell(row, 'Valor'));
+    const dueDate = cellToDateKey(pickCell(row, 'Vencimento'));
+    const competenceMonth = cellToCompetence(pickCell(row, 'Competência')) || dueDate.slice(0, 7);
+    const status = parseStatusCell(pickCell(row, 'Status'));
+    const paidAmount = cellToNumber(pickCell(row, 'Valor pago'));
+    const paidAt = cellToDateKey(pickCell(row, 'Data da baixa'));
+    const notes = String(pickCell(row, 'Observações') ?? '').trim();
+
+    if (!type) errors.push('Tipo inválido');
+    if (!description) errors.push('Descrição vazia');
+    if (!Number.isFinite(amount) || amount <= 0) errors.push('Valor inválido');
+    if (!dueDate) errors.push('Vencimento inválido');
+    if (!/^\d{4}-\d{2}$/.test(competenceMonth)) errors.push('Competência inválida');
+
+    return {
+      line: index + 2, // +2: linha 1 é o cabeçalho
+      values: {
+        type: (type ?? 'payable') as FinancialEntryType,
+        description,
+        category,
+        amount: Number.isFinite(amount) ? amount : 0,
+        due_date: dueDate,
+        competence_month: competenceMonth,
+        status,
+        paid_amount: Number.isFinite(paidAmount) ? paidAmount : 0,
+        paid_at: paidAt,
+        notes,
+      },
+      errors,
+    };
+  });
+}
+
+function entryToSpreadsheetRow(entry: FinancialEntry): SpreadsheetRow {
+  return {
+    Tipo: entry.type === 'payable' ? 'A pagar' : 'A receber',
+    Descrição: entry.description,
+    Categoria: entry.category || 'Geral',
+    Valor: roundCurrency(entry.amount),
+    Vencimento: String(entry.due_date ?? '').slice(0, 10),
+    Competência: entry.competence_month,
+    Status: entry.status === 'paid' ? 'Baixada' : 'Pendente',
+    'Valor pago': roundCurrency(entry.paid_amount ?? 0),
+    'Data da baixa': entry.paid_at ? String(entry.paid_at).slice(0, 10) : '',
+    Observações: entry.notes ?? '',
+  };
+}
+
 export default function AdminFinanceiroPage() {
   const { user, loading } = useAppSession();
   const [entries, setEntries] = useState<FinancialEntry[]>([]);
@@ -276,6 +441,14 @@ export default function AdminFinanceiroPage() {
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [rowActionId, setRowActionId] = useState<string | null>(null);
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
+  const [exportScope, setExportScope] = useState<'month' | 'year' | 'all'>('month');
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [importRows, setImportRows] = useState<ParsedImportRow[]>([]);
+  const [importFileName, setImportFileName] = useState('');
+  const [importError, setImportError] = useState('');
+  const [importResult, setImportResult] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -615,6 +788,155 @@ export default function AdminFinanceiroPage() {
     }
   }
 
+  const selectedYear = competenceMonth.slice(0, 4);
+  const validImportRows = useMemo(() => importRows.filter((row) => row.errors.length === 0), [importRows]);
+  const invalidImportRows = importRows.length - validImportRows.length;
+
+  function handleExport() {
+    const scopedEntries =
+      exportScope === 'all'
+        ? entries
+        : exportScope === 'year'
+          ? entries.filter((entry) => entry.competence_month.slice(0, 4) === selectedYear)
+          : entriesInCompetence;
+
+    const sortedForExport = [...scopedEntries].sort(sortEntries);
+    const worksheet = XLSX.utils.json_to_sheet(sortedForExport.map(entryToSpreadsheetRow), { header: [...importColumns] });
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Contas');
+
+    const scopeLabel =
+      exportScope === 'all' ? 'completo' : exportScope === 'year' ? selectedYear : competenceMonth;
+    XLSX.writeFile(workbook, `financeiro-${scopeLabel}.xlsx`);
+    setIsExportDialogOpen(false);
+  }
+
+  function handleDownloadTemplate() {
+    const exampleRow: SpreadsheetRow = {
+      Tipo: 'A pagar',
+      Descrição: 'Aluguel do escritório',
+      Categoria: 'Aluguel',
+      Valor: 1500,
+      Vencimento: `${todayKey.slice(0, 8)}10`,
+      Competência: defaultCompetenceMonth,
+      Status: 'Pendente',
+      'Valor pago': 0,
+      'Data da baixa': '',
+      Observações: 'Exemplo — pode apagar esta linha',
+    };
+
+    const contasSheet = XLSX.utils.json_to_sheet([exampleRow], { header: [...importColumns] });
+    const instructionsSheet = XLSX.utils.aoa_to_sheet([
+      ['Instruções de preenchimento'],
+      [''],
+      ['Tipo', 'Use "A pagar" ou "A receber".'],
+      ['Descrição', 'Texto obrigatório.'],
+      ['Categoria', 'Opcional. Se vazio, entra como "Geral".'],
+      ['Valor', 'Número maior que zero. Ex.: 1500 ou 1500,50.'],
+      ['Vencimento', 'Data no formato AAAA-MM-DD ou DD/MM/AAAA.'],
+      ['Competência', 'Mês de referência no formato AAAA-MM ou MM/AAAA.'],
+      ['Status', 'Opcional. "Pendente" (padrão) ou "Baixada".'],
+      ['Valor pago', 'Opcional. Valor já baixado.'],
+      ['Data da baixa', 'Opcional. Data em que a conta foi baixada.'],
+      ['Observações', 'Opcional.'],
+      [''],
+      ['Preencha a aba "Contas" e importe este arquivo na tela de Controle de Despesas.'],
+    ]);
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, contasSheet, 'Contas');
+    XLSX.utils.book_append_sheet(workbook, instructionsSheet, 'Instruções');
+    XLSX.writeFile(workbook, 'modelo-importacao-financeiro.xlsx');
+  }
+
+  async function handleImportFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setImportError('');
+    setImportResult('');
+    setImportFileName(file.name);
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+
+      let bestRows: Record<string, unknown>[] = [];
+      for (const sheetName of workbook.SheetNames) {
+        const parsed = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheetName], { defval: '', raw: false });
+        if (parsed.length > bestRows.length) {
+          bestRows = parsed;
+        }
+      }
+
+      if (!bestRows.length) {
+        setImportRows([]);
+        setImportError('A planilha não possui linhas para importar.');
+        return;
+      }
+
+      setImportRows(parseFinanceImportRows(bestRows));
+    } catch (error) {
+      console.error('[admin/financeiro] import read error:', error);
+      setImportRows([]);
+      setImportError('Não foi possível ler a planilha. Use o modelo em XLSX, XLS ou CSV.');
+    } finally {
+      event.target.value = '';
+    }
+  }
+
+  async function handleImportSubmit() {
+    if (!validImportRows.length) return;
+
+    setIsImporting(true);
+    setImportError('');
+    setImportResult('');
+
+    try {
+      const response = await fetch('/api/finance/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entries: validImportRows.map((row) => ({ ...row.values, __line: row.line })),
+        }),
+      });
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        setImportError(data?.error || 'Não foi possível importar as contas.');
+        return;
+      }
+
+      // Recarrega a lista para refletir os registros normalizados do servidor.
+      const refreshed = await fetch('/api/finance');
+      if (refreshed.ok) {
+        const refreshedData = await refreshed.json();
+        setEntries(Array.isArray(refreshedData.entries) ? refreshedData.entries : []);
+      }
+
+      const rejectedCount = Array.isArray(data?.rejected) ? data.rejected.length : 0;
+      setImportResult(`${data?.imported ?? 0} conta(s) importada(s).${rejectedCount ? ` ${rejectedCount} rejeitada(s) pelo servidor.` : ''}`);
+      setImportRows([]);
+      setImportFileName('');
+    } catch (error) {
+      console.error('[admin/financeiro] import submit error:', error);
+      setImportError('Não foi possível importar as contas.');
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
+  function handleImportDialogChange(open: boolean) {
+    if (isImporting && !open) return;
+    setIsImportDialogOpen(open);
+    if (!open) {
+      setImportRows([]);
+      setImportFileName('');
+      setImportError('');
+      setImportResult('');
+    }
+  }
+
   if (loading || isDataLoading || !user) {
     return <LoadingState />;
   }
@@ -635,6 +957,14 @@ export default function AdminFinanceiroPage() {
         description="Contas a pagar e a receber, baixas, vencimentos e DRE por competência."
       >
         <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={() => setIsImportDialogOpen(true)}>
+            <UploadCloud className="h-4 w-4" />
+            Importar
+          </Button>
+          <Button type="button" variant="outline" onClick={() => setIsExportDialogOpen(true)}>
+            <Download className="h-4 w-4" />
+            Exportar
+          </Button>
           <Button type="button" variant="outline" onClick={() => openCreateDialog('receivable')}>
             <TrendingUp className="h-4 w-4" />
             A receber
@@ -1221,6 +1551,144 @@ export default function AdminFinanceiroPage() {
             </Button>
             <Button type="button" onClick={() => void handlePaymentSubmit()} disabled={isPaymentSubmitting || !paymentEntry}>
               {isPaymentSubmitting ? 'Baixando...' : 'Confirmar baixa'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isExportDialogOpen} onOpenChange={setIsExportDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Exportar contas</DialogTitle>
+            <DialogDescription>Escolha o período que será gerado na planilha Excel.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            {([
+              { value: 'month', label: `Somente a competência ${formatCompetenceLabel(competenceMonth)}`, count: entriesInCompetence.length },
+              { value: 'year', label: `Todo o ano ${selectedYear}`, count: entries.filter((entry) => entry.competence_month.slice(0, 4) === selectedYear).length },
+              { value: 'all', label: 'Todas as contas cadastradas', count: entries.length },
+            ] as const).map((option) => (
+              <label
+                key={option.value}
+                className={`flex cursor-pointer items-center justify-between gap-3 rounded-md border p-3 text-sm transition ${
+                  exportScope === option.value ? 'border-primary bg-primary/5' : 'border-border bg-background hover:border-primary/40'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="export-scope"
+                    value={option.value}
+                    checked={exportScope === option.value}
+                    onChange={() => setExportScope(option.value)}
+                    className="h-4 w-4"
+                  />
+                  {option.label}
+                </span>
+                <span className="text-xs text-muted-foreground">{formatCount(option.count, 'registro', 'registros')}</span>
+              </label>
+            ))}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setIsExportDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button type="button" onClick={handleExport}>
+              <Download className="h-4 w-4" />
+              Baixar planilha
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isImportDialogOpen} onOpenChange={handleImportDialogChange}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Importar contas</DialogTitle>
+            <DialogDescription>Baixe a planilha modelo, preencha e envie o arquivo para cadastrar várias contas de uma vez.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/30 p-3">
+              <FileSpreadsheet className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1 text-sm">
+                <p className="font-medium">Planilha modelo</p>
+                <p className="text-xs text-muted-foreground">Colunas: {importColumns.join(', ')}.</p>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={handleDownloadTemplate}>
+                <Download className="h-4 w-4" />
+                Baixar modelo
+              </Button>
+            </div>
+
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-background p-6 text-center text-sm transition hover:border-primary/50">
+              <UploadCloud className="h-6 w-6 text-muted-foreground" />
+              <span className="font-medium">{importFileName || 'Selecionar planilha (.xlsx, .xls, .csv)'}</span>
+              <span className="text-xs text-muted-foreground">Clique para escolher o arquivo preenchido.</span>
+              <input type="file" accept=".xlsx,.xls,.csv" className="sr-only" onChange={handleImportFile} />
+            </label>
+
+            {importError ? <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{importError}</div> : null}
+            {importResult ? <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">{importResult}</div> : null}
+
+            {importRows.length ? (
+              <div className="space-y-3">
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="rounded-md border border-border bg-background p-3 text-center">
+                    <p className="text-xs uppercase text-muted-foreground">Lidas</p>
+                    <p className="text-base font-semibold">{importRows.length}</p>
+                  </div>
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-center">
+                    <p className="text-xs uppercase text-emerald-700">Válidas</p>
+                    <p className="text-base font-semibold text-emerald-800">{validImportRows.length}</p>
+                  </div>
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-center">
+                    <p className="text-xs uppercase text-amber-700">Com erro</p>
+                    <p className="text-base font-semibold text-amber-800">{invalidImportRows}</p>
+                  </div>
+                </div>
+
+                <div className="max-h-56 overflow-y-auto rounded-md border border-border">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-muted/60">
+                      <tr className="text-left text-muted-foreground">
+                        <th className="px-2 py-2 font-medium">Linha</th>
+                        <th className="px-2 py-2 font-medium">Descrição</th>
+                        <th className="px-2 py-2 font-medium">Valor</th>
+                        <th className="px-2 py-2 font-medium">Situação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importRows.slice(0, 100).map((row) => (
+                        <tr key={row.line} className="border-t border-border">
+                          <td className="px-2 py-1.5">{row.line}</td>
+                          <td className="px-2 py-1.5">{row.values.description || <span className="text-muted-foreground">—</span>}</td>
+                          <td className="px-2 py-1.5">{formatCurrency(row.values.amount)}</td>
+                          <td className="px-2 py-1.5">
+                            {row.errors.length ? (
+                              <StatusBadge tone="danger">{row.errors.join(', ')}</StatusBadge>
+                            ) : (
+                              <StatusBadge tone="success">OK</StatusBadge>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => handleImportDialogChange(false)} disabled={isImporting}>
+              Fechar
+            </Button>
+            <Button type="button" onClick={() => void handleImportSubmit()} disabled={isImporting || !validImportRows.length}>
+              <UploadCloud className="h-4 w-4" />
+              {isImporting ? 'Importando...' : `Importar ${validImportRows.length || ''} conta(s)`}
             </Button>
           </DialogFooter>
         </DialogContent>

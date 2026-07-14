@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Calculator,
   CalendarDays,
   Landmark,
   Search,
@@ -58,7 +59,8 @@ const shortMonthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago',
 const chartColors = ['#0f766e', '#2563eb', '#d97706', '#be123c', '#7c3aed', '#0891b2', '#65a30d', '#c2410c'];
 const currentDate = new Date();
 const currentYear = String(currentDate.getFullYear());
-const currentMonth = `${currentYear}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+const currentMonthNum = String(currentDate.getMonth() + 1).padStart(2, '0');
+const ALL_OPTION = 'all';
 
 type MonthSummary = {
   monthKey: string;
@@ -83,6 +85,7 @@ type TechnicianFinancialSummary = {
   name: string;
   serviceCount: number;
   revenue: number;
+  calculationBase: number;
   payrollCost: number;
   profit: number;
   margin: number;
@@ -126,17 +129,6 @@ function formatChartPercent(value: unknown) {
   return formatPercent(Number(value ?? 0));
 }
 
-function formatCompetenceLabel(value: string) {
-  const [year, month] = value.split('-');
-  const monthNumber = Number(month);
-
-  if (!year || !month || !monthNames[monthNumber - 1]) {
-    return value || 'Sem competência';
-  }
-
-  return `${month.padStart(2, '0')}/${year} - ${monthNames[monthNumber - 1]}`;
-}
-
 function getServiceCompetence(service: Service) {
   return resolveCompetenceMonth(service.competence_month, service.date_performed);
 }
@@ -147,28 +139,6 @@ function getPayrollCost(payroll: Payroll) {
 
 function calcMargin(profit: number, revenue: number) {
   return revenue > 0 ? roundCurrency((profit / revenue) * 100) : 0;
-}
-
-function createRawMonthSummary(monthKey: string): RawMonthSummary {
-  const monthNumber = Number(monthKey.slice(5, 7));
-
-  return {
-    monthKey,
-    monthLabel: shortMonthNames[monthNumber - 1] ?? monthKey,
-    serviceRevenue: 0,
-    revenue: 0,
-    payrollCost: 0,
-    expenses: 0,
-    profit: 0,
-    margin: 0,
-    services: 0,
-    payrolls: 0,
-    employeeIds: new Set<string>(),
-  };
-}
-
-function getMonthKeys(year: string) {
-  return Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`);
 }
 
 function finalizeMonthSummary(raw: RawMonthSummary): MonthSummary {
@@ -188,31 +158,15 @@ function finalizeMonthSummary(raw: RawMonthSummary): MonthSummary {
   };
 }
 
-function createEmptyMonth(monthKey: string): MonthSummary {
-  return finalizeMonthSummary(createRawMonthSummary(monthKey));
-}
-
-function sumMonthlyData(rows: MonthSummary[]) {
-  const revenue = roundCurrency(rows.reduce((total, row) => total + row.revenue, 0));
-  const serviceRevenue = roundCurrency(rows.reduce((total, row) => total + row.serviceRevenue, 0));
-  const payrollCost = roundCurrency(rows.reduce((total, row) => total + row.payrollCost, 0));
-  const expenses = roundCurrency(rows.reduce((total, row) => total + row.expenses, 0));
-  const profit = roundCurrency(revenue - expenses);
-
-  return {
-    revenue,
-    serviceRevenue,
-    payrollCost,
-    expenses,
-    profit,
-    margin: calcMargin(profit, revenue),
-    services: rows.reduce((total, row) => total + row.services, 0),
-    payrolls: rows.reduce((total, row) => total + row.payrolls, 0),
-  };
-}
-
 function getMetricTone(value: number): 'success' | 'danger' {
   return value >= 0 ? 'success' : 'danger';
+}
+
+const DEFAULT_COMMISSION_PERCENTAGE = 25;
+
+function getCommissionPercentage(technician?: Technician | null) {
+  const value = Number(technician?.commission_percentage ?? 0);
+  return value > 0 ? value : DEFAULT_COMMISSION_PERCENTAGE;
 }
 
 export default function AdminFaturamentoPage() {
@@ -223,7 +177,8 @@ export default function AdminFaturamentoPage() {
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [dataError, setDataError] = useState('');
   const [selectedYear, setSelectedYear] = useState(currentYear);
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthNum);
+  const [selectedTechnicianId, setSelectedTechnicianId] = useState('all');
   const [employeeQuery, setEmployeeQuery] = useState('');
 
   useEffect(() => {
@@ -292,6 +247,46 @@ export default function AdminFaturamentoPage() {
     [activeTechnicianIds, payroll],
   );
 
+  const technicianOptions = useMemo(
+    () =>
+      technicians
+        .filter((technician) => technician.status === 'active')
+        .slice()
+        .sort((left, right) => left.name.localeCompare(right.name, 'pt-BR')),
+    [technicians],
+  );
+
+  const commissionPercentageMap = useMemo(
+    () => new Map(technicians.map((technician) => [technician.id, getCommissionPercentage(technician)])),
+    [technicians],
+  );
+
+  useEffect(() => {
+    if (selectedTechnicianId !== 'all' && !activeTechnicianIds.has(selectedTechnicianId)) {
+      setSelectedTechnicianId('all');
+    }
+  }, [activeTechnicianIds, selectedTechnicianId]);
+
+  // Escopo do dashboard: quando um técnico é escolhido, todas as métricas,
+  // gráficos e rankings passam a considerar apenas os dados dele.
+  const scopedServices = useMemo(
+    () => (selectedTechnicianId === 'all' ? activeServices : activeServices.filter((service) => service.technician_id === selectedTechnicianId)),
+    [activeServices, selectedTechnicianId],
+  );
+  const scopedPayroll = useMemo(
+    () => (selectedTechnicianId === 'all' ? activePayroll : activePayroll.filter((item) => item.technician_id === selectedTechnicianId)),
+    [activePayroll, selectedTechnicianId],
+  );
+
+  function calculateBaseFromServices(list: Service[]) {
+    return roundCurrency(
+      list.reduce(
+        (total, service) => total + moneyValue(service.value) * ((commissionPercentageMap.get(service.technician_id) ?? DEFAULT_COMMISSION_PERCENTAGE) / 100),
+        0,
+      ),
+    );
+  }
+
   const yearOptions = useMemo(() => {
     const values = new Set<string>([currentYear]);
 
@@ -308,63 +303,105 @@ export default function AdminFaturamentoPage() {
   }, [activePayroll, activeServices]);
 
   useEffect(() => {
-    if (!yearOptions.includes(selectedYear)) {
+    if (selectedYear !== ALL_OPTION && !yearOptions.includes(selectedYear)) {
       setSelectedYear(yearOptions[0] ?? currentYear);
     }
   }, [selectedYear, yearOptions]);
-
-  useEffect(() => {
-    if (!selectedMonth.startsWith(`${selectedYear}-`)) {
-      setSelectedMonth(selectedYear === currentYear ? currentMonth : `${selectedYear}-12`);
-    }
-  }, [selectedMonth, selectedYear]);
 
   const technicianNameMap = useMemo(() => {
     return new Map(technicians.map((technician) => [technician.id, technician.name]));
   }, [technicians]);
 
-  const monthlyData = useMemo(() => {
-    const months = new Map(getMonthKeys(selectedYear).map((monthKey) => [monthKey, createRawMonthSummary(monthKey)]));
+  const matchesYear = (competence: string) => selectedYear === ALL_OPTION || competence.slice(0, 4) === selectedYear;
+  const matchesMonth = (competence: string) => selectedMonth === ALL_OPTION || competence.slice(5, 7) === selectedMonth;
 
-    activeServices.forEach((service) => {
-      const competence = getServiceCompetence(service);
-      const summary = months.get(competence);
+  // Escopo por ano (todos os meses) — alimenta os cards anuais e o gráfico de evolução.
+  const yearScopedServices = useMemo(
+    () => scopedServices.filter((service) => matchesYear(getServiceCompetence(service))),
+    [scopedServices, selectedYear],
+  );
+  const yearScopedPayroll = useMemo(
+    () => scopedPayroll.filter((item) => matchesYear(item.competence_month)),
+    [scopedPayroll, selectedYear],
+  );
+
+  // Escopo do período (ano + mês) — alimenta os cards do período, composições e rankings.
+  const periodServices = useMemo(
+    () => yearScopedServices.filter((service) => matchesMonth(getServiceCompetence(service))),
+    [yearScopedServices, selectedMonth],
+  );
+  const periodPayroll = useMemo(
+    () => yearScopedPayroll.filter((item) => matchesMonth(item.competence_month)),
+    [yearScopedPayroll, selectedMonth],
+  );
+
+  function aggregate(servicesList: Service[], payrollList: Payroll[]) {
+    const serviceRevenue = roundCurrency(servicesList.reduce((total, service) => total + moneyValue(service.value), 0));
+    const payrollCost = roundCurrency(payrollList.reduce((total, item) => total + getPayrollCost(item), 0));
+    const profit = roundCurrency(serviceRevenue - payrollCost);
+    const employeeIds = new Set<string>();
+    servicesList.forEach((service) => service.technician_id && employeeIds.add(service.technician_id));
+    payrollList.forEach((item) => item.technician_id && employeeIds.add(item.technician_id));
+
+    return {
+      serviceRevenue,
+      revenue: serviceRevenue,
+      payrollCost,
+      expenses: payrollCost,
+      profit,
+      margin: calcMargin(profit, serviceRevenue),
+      services: servicesList.length,
+      payrolls: payrollList.length,
+      employees: employeeIds.size,
+    };
+  }
+
+  // Gráfico de evolução: 12 meses do ano selecionado (ou somados entre todos os anos).
+  const monthlyData = useMemo<MonthSummary[]>(() => {
+    const buckets = Array.from({ length: 12 }, (_, index) => ({
+      monthKey: String(index + 1).padStart(2, '0'),
+      monthLabel: shortMonthNames[index],
+      serviceRevenue: 0,
+      revenue: 0,
+      payrollCost: 0,
+      expenses: 0,
+      profit: 0,
+      margin: 0,
+      services: 0,
+      payrolls: 0,
+      employeeIds: new Set<string>(),
+    }));
+    const byMonth = new Map(buckets.map((bucket) => [bucket.monthKey, bucket]));
+
+    yearScopedServices.forEach((service) => {
+      const summary = byMonth.get(getServiceCompetence(service).slice(5, 7));
       if (!summary) return;
-
       summary.serviceRevenue += moneyValue(service.value);
       summary.services += 1;
       if (service.technician_id) summary.employeeIds.add(service.technician_id);
     });
 
-    activePayroll.forEach((item) => {
-      const summary = months.get(item.competence_month);
+    yearScopedPayroll.forEach((item) => {
+      const summary = byMonth.get(item.competence_month.slice(5, 7));
       if (!summary) return;
-
       summary.payrollCost += getPayrollCost(item);
       summary.payrolls += 1;
       if (item.technician_id) summary.employeeIds.add(item.technician_id);
     });
 
-    return Array.from(months.values()).map(finalizeMonthSummary);
-  }, [activePayroll, activeServices, selectedYear]);
+    return buckets.map(finalizeMonthSummary);
+  }, [yearScopedPayroll, yearScopedServices]);
 
-  const selectedMonthData = monthlyData.find((row) => row.monthKey === selectedMonth) ?? createEmptyMonth(selectedMonth);
-  const annualData = useMemo(() => sumMonthlyData(monthlyData), [monthlyData]);
+  const periodData = useMemo(() => aggregate(periodServices, periodPayroll), [periodServices, periodPayroll]);
+  const annualData = useMemo(() => aggregate(yearScopedServices, yearScopedPayroll), [yearScopedServices, yearScopedPayroll]);
 
-  const servicesInMonth = useMemo(
-    () => activeServices.filter((service) => getServiceCompetence(service) === selectedMonth),
-    [activeServices, selectedMonth],
-  );
-
-  const payrollInMonth = useMemo(
-    () => activePayroll.filter((item) => item.competence_month === selectedMonth),
-    [activePayroll, selectedMonth],
-  );
+  const monthlyCalculationBase = useMemo(() => calculateBaseFromServices(periodServices), [periodServices, commissionPercentageMap]);
+  const annualCalculationBase = useMemo(() => calculateBaseFromServices(yearScopedServices), [yearScopedServices, commissionPercentageMap]);
 
   const typeRevenueData = useMemo<TypeRevenueSummary[]>(() => {
     const groups = new Map<string, TypeRevenueSummary>();
 
-    servicesInMonth.forEach((service) => {
+    periodServices.forEach((service) => {
       const key = service.service_type || 'Sem tipo';
       const current = groups.get(key) ?? { name: key, revenue: 0, count: 0 };
       current.revenue = roundCurrency(current.revenue + moneyValue(service.value));
@@ -375,7 +412,7 @@ export default function AdminFaturamentoPage() {
     return Array.from(groups.values())
       .sort((left, right) => right.revenue - left.revenue)
       .slice(0, 8);
-  }, [servicesInMonth]);
+  }, [periodServices]);
 
   const technicianRows = useMemo<TechnicianFinancialSummary[]>(() => {
     const rows = new Map<string, TechnicianFinancialSummary>();
@@ -386,6 +423,7 @@ export default function AdminFaturamentoPage() {
         name: technicianNameMap.get(id) || fallbackName || 'Funcionário sem nome',
         serviceCount: 0,
         revenue: 0,
+        calculationBase: 0,
         payrollCost: 0,
         profit: 0,
         margin: 0,
@@ -394,14 +432,16 @@ export default function AdminFaturamentoPage() {
       return row;
     }
 
-    servicesInMonth.forEach((service) => {
+    periodServices.forEach((service) => {
       const id = service.technician_id || normalizeText(service.technician_name || 'sem-funcionario');
       const row = getRow(id, service.technician_name || service.technician_id);
+      const percentage = commissionPercentageMap.get(service.technician_id) ?? DEFAULT_COMMISSION_PERCENTAGE;
       row.serviceCount += 1;
       row.revenue = roundCurrency(row.revenue + moneyValue(service.value));
+      row.calculationBase = roundCurrency(row.calculationBase + moneyValue(service.value) * (percentage / 100));
     });
 
-    payrollInMonth.forEach((item) => {
+    periodPayroll.forEach((item) => {
       const row = getRow(item.technician_id, technicianNameMap.get(item.technician_id) || item.technician_id);
       row.payrollCost = roundCurrency(row.payrollCost + getPayrollCost(item));
     });
@@ -420,25 +460,39 @@ export default function AdminFaturamentoPage() {
         if (right.revenue !== left.revenue) return right.revenue - left.revenue;
         return right.payrollCost - left.payrollCost;
       });
-  }, [employeeQuery, payrollInMonth, servicesInMonth, technicianNameMap]);
+  }, [commissionPercentageMap, employeeQuery, periodPayroll, periodServices, technicianNameMap]);
 
   const costComposition = useMemo(() => {
     return [
-      { name: 'Folha', value: selectedMonthData.payrollCost },
+      { name: 'Folha', value: periodData.payrollCost },
     ].filter((item) => item.value > 0);
-  }, [selectedMonthData.payrollCost]);
+  }, [periodData.payrollCost]);
 
   const revenueComposition = useMemo(() => {
     return [
-      { name: 'Serviços', value: selectedMonthData.serviceRevenue },
+      { name: 'Serviços', value: periodData.serviceRevenue },
     ].filter((item) => item.value > 0);
-  }, [selectedMonthData.serviceRevenue]);
+  }, [periodData.serviceRevenue]);
 
-  const payrollShare = selectedMonthData.revenue > 0 ? (selectedMonthData.payrollCost / selectedMonthData.revenue) * 100 : 0;
-  const expenseShare = selectedMonthData.revenue > 0 ? (selectedMonthData.expenses / selectedMonthData.revenue) * 100 : 0;
-  const monthlyAverageTicket = selectedMonthData.services > 0 ? selectedMonthData.serviceRevenue / selectedMonthData.services : 0;
+  const payrollShare = periodData.revenue > 0 ? (periodData.payrollCost / periodData.revenue) * 100 : 0;
+  const expenseShare = periodData.revenue > 0 ? (periodData.expenses / periodData.revenue) * 100 : 0;
+  const periodAverageTicket = periodData.services > 0 ? periodData.serviceRevenue / periodData.services : 0;
   const annualAverageTicket = annualData.services > 0 ? annualData.serviceRevenue / annualData.services : 0;
-  const hasAnyData = activeServices.length || activePayroll.length;
+  const hasAnyData = scopedServices.length || scopedPayroll.length;
+  const selectedTechnicianName =
+    selectedTechnicianId === 'all'
+      ? 'Todos os técnicos'
+      : technicianNameMap.get(selectedTechnicianId) || 'Técnico selecionado';
+  const monthLabel = selectedMonth === ALL_OPTION ? 'Todos os meses' : monthNames[Number(selectedMonth) - 1];
+  const yearLabel = selectedYear === ALL_OPTION ? 'Todos os anos' : `Ano ${selectedYear}`;
+  const periodLabel =
+    selectedMonth !== ALL_OPTION && selectedYear !== ALL_OPTION
+      ? `${selectedMonth}/${selectedYear} - ${monthNames[Number(selectedMonth) - 1]}`
+      : selectedMonth !== ALL_OPTION
+        ? `${monthNames[Number(selectedMonth) - 1]} (todos os anos)`
+        : selectedYear !== ALL_OPTION
+          ? `Ano ${selectedYear}`
+          : 'Todos os períodos';
 
   if (loading || isDataLoading || !user) {
     return <LoadingState />;
@@ -452,24 +506,25 @@ export default function AdminFaturamentoPage() {
         description="Faturamento de serviços, custo de folha e lucro por mês e por ano."
       >
         <div className="flex flex-wrap gap-2">
-          <StatusBadge tone="info">{formatCompetenceLabel(selectedMonth)}</StatusBadge>
-          <StatusBadge tone={annualData.profit >= 0 ? 'success' : 'danger'}>Ano {selectedYear}</StatusBadge>
+          <StatusBadge tone="info">{monthLabel}</StatusBadge>
+          <StatusBadge tone={annualData.profit >= 0 ? 'success' : 'danger'}>{yearLabel}</StatusBadge>
+          <StatusBadge tone={selectedTechnicianId === 'all' ? 'neutral' : 'success'}>{selectedTechnicianName}</StatusBadge>
         </div>
       </PageHeader>
 
       {dataError ? <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{dataError}</div> : null}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-        <MetricCard title="Faturamento mensal" value={formatCurrency(selectedMonthData.revenue)} hint="Receita de serviços" icon={TrendingUp} tone="success" />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
+        <MetricCard title="Faturamento (período)" value={formatCurrency(periodData.revenue)} hint={monthLabel} icon={TrendingUp} tone="success" />
         <MetricCard
-          title="Lucro mensal"
-          value={formatCurrency(selectedMonthData.profit)}
-          hint={`Margem ${formatPercent(selectedMonthData.margin)}`}
+          title="Lucro (período)"
+          value={formatCurrency(periodData.profit)}
+          hint={`Margem ${formatPercent(periodData.margin)}`}
           icon={Landmark}
-          tone={getMetricTone(selectedMonthData.profit)}
+          tone={getMetricTone(periodData.profit)}
           accentText
         />
-        <MetricCard title="Faturamento anual" value={formatCurrency(annualData.revenue)} hint={`${formatNumber(annualData.services)} OS no ano`} icon={CalendarDays} />
+        <MetricCard title="Faturamento anual" value={formatCurrency(annualData.revenue)} hint={`${formatNumber(annualData.services)} OS · ${yearLabel}`} icon={CalendarDays} />
         <MetricCard
           title="Lucro anual"
           value={formatCurrency(annualData.profit)}
@@ -478,24 +533,39 @@ export default function AdminFaturamentoPage() {
           tone={getMetricTone(annualData.profit)}
           accentText
         />
-        <MetricCard title="Custo da folha" value={formatCurrency(selectedMonthData.payrollCost)} hint={`${formatNumber(selectedMonthData.payrolls)} fechamento(s)`} icon={WalletCards} tone="warning" />
-        <MetricCard title="Ticket médio" value={formatCurrency(monthlyAverageTicket)} hint={`Ano: ${formatCurrency(annualAverageTicket)}`} icon={Wrench} />
+        <MetricCard title="Custo da folha" value={formatCurrency(periodData.payrollCost)} hint={`${formatNumber(periodData.payrolls)} fechamento(s)`} icon={WalletCards} tone="warning" />
+        <MetricCard title="Ticket médio" value={formatCurrency(periodAverageTicket)} hint={`${yearLabel}: ${formatCurrency(annualAverageTicket)}`} icon={Wrench} />
+        <MetricCard title="Base de cálculo (período)" value={formatCurrency(monthlyCalculationBase)} hint={`${yearLabel}: ${formatCurrency(annualCalculationBase)}`} icon={Calculator} />
       </div>
 
       <div className="mt-5">
-        <DataPanel title="Período de análise" description="Escolha o ano para os gráficos e o mês para os rankings e composições.">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,0.55fr)_minmax(0,0.7fr)_1fr] md:items-end">
+        <DataPanel title="Período de análise" description="Filtre por técnico, ano e mês. Use &quot;Todos&quot; para ver o consolidado. Os gráficos de evolução mostram o ano inteiro; os demais painéis seguem o período escolhido.">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] xl:items-end">
+            <div className="grid gap-3 sm:grid-cols-3">
+            <label className="text-sm">
+              <span className="mb-1.5 block font-medium">Técnico</span>
+              <select
+                value={selectedTechnicianId}
+                onChange={(event) => setSelectedTechnicianId(event.target.value)}
+                className="min-h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+              >
+                <option value="all">Todos os técnicos</option>
+                {technicianOptions.map((technician) => (
+                  <option key={technician.id} value={technician.id}>
+                    {technician.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <label className="text-sm">
               <span className="mb-1.5 block font-medium">Ano</span>
               <select
                 value={selectedYear}
-                onChange={(event) => {
-                  const year = event.target.value;
-                  setSelectedYear(year);
-                  setSelectedMonth(year === currentYear ? currentMonth : `${year}-12`);
-                }}
+                onChange={(event) => setSelectedYear(event.target.value)}
                 className="min-h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
               >
+                <option value={ALL_OPTION}>Todos os anos</option>
                 {yearOptions.map((year) => (
                   <option key={year} value={year}>
                     {year}
@@ -511,13 +581,15 @@ export default function AdminFaturamentoPage() {
                 onChange={(event) => setSelectedMonth(event.target.value)}
                 className="min-h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
               >
-                {getMonthKeys(selectedYear).map((monthKey, index) => (
-                  <option key={monthKey} value={monthKey}>
-                    {String(index + 1).padStart(2, '0')}/{selectedYear} - {monthNames[index]}
+                <option value={ALL_OPTION}>Todos os meses</option>
+                {monthNames.map((month, index) => (
+                  <option key={month} value={String(index + 1).padStart(2, '0')}>
+                    {month}
                   </option>
                 ))}
               </select>
             </label>
+            </div>
 
             <div className="grid gap-2 text-sm sm:grid-cols-3">
               <div className="rounded-md border border-border bg-background p-3">
@@ -529,8 +601,8 @@ export default function AdminFaturamentoPage() {
                 <p className="mt-1 text-base font-semibold">{formatPercent(expenseShare)}</p>
               </div>
               <div className="rounded-md border border-border bg-background p-3">
-                <p className="text-xs uppercase text-muted-foreground">Funcionários no mês</p>
-                <p className="mt-1 text-base font-semibold">{formatNumber(selectedMonthData.employees)}</p>
+                <p className="text-xs uppercase text-muted-foreground">Funcionários no período</p>
+                <p className="mt-1 text-base font-semibold">{formatNumber(periodData.employees)}</p>
               </div>
             </div>
           </div>
@@ -543,8 +615,8 @@ export default function AdminFaturamentoPage() {
         </div>
       ) : null}
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.4fr_0.8fr]">
-        <DataPanel title="Evolução mensal" description="Faturamento, custos e lucro do ano selecionado.">
+      <div className="mt-5 grid gap-5 lg:grid-cols-[1.5fr_0.9fr]">
+        <DataPanel title="Evolução mensal" description={`Faturamento, custos e lucro mês a mês · ${yearLabel}.`}>
           <div className="h-86">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={monthlyData} margin={{ left: -10, right: 12, top: 10, bottom: 0 }}>
@@ -561,7 +633,7 @@ export default function AdminFaturamentoPage() {
           </div>
         </DataPanel>
 
-        <DataPanel title="Composição do mês" description="Origem do faturamento e custo de folha da competência.">
+        <DataPanel title="Composição do período" description={`Origem do faturamento e custo de folha · ${periodLabel}.`}>
           <div className="grid gap-4">
             <div>
               <p className="mb-2 text-sm font-medium">Faturamento</p>
@@ -608,7 +680,7 @@ export default function AdminFaturamentoPage() {
         </DataPanel>
       </div>
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-2">
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
         <DataPanel title="Margem de lucro" description="Percentual de lucro sobre o faturamento mensal.">
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
@@ -623,7 +695,7 @@ export default function AdminFaturamentoPage() {
           </div>
         </DataPanel>
 
-        <DataPanel title="Faturamento por tipo de serviço" description={`Top tipos em ${formatCompetenceLabel(selectedMonth)}.`}>
+        <DataPanel title="Faturamento por tipo de serviço" description={`Top tipos · ${periodLabel}.`}>
           {typeRevenueData.length ? (
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
@@ -646,30 +718,31 @@ export default function AdminFaturamentoPage() {
         </DataPanel>
       </div>
 
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.45fr_0.75fr]">
+      <div className="mt-5 grid gap-5 lg:grid-cols-[1.5fr_0.8fr]">
         <DataPanel
           title="Resultado por funcionário"
-          description="Faturamento gerado, custo de folha e lucro bruto no mês selecionado."
+          description="Faturamento gerado, base de cálculo, custo de folha e lucro bruto no período selecionado."
           action={
-            <div className="flex min-h-10 items-center gap-2 rounded-md border border-border bg-background px-3">
+            <div className="flex min-h-10 w-full items-center gap-2 rounded-md border border-border bg-background px-3 sm:w-auto">
               <Search className="h-4 w-4 text-muted-foreground" />
               <input
                 value={employeeQuery}
                 onChange={(event) => setEmployeeQuery(event.target.value)}
                 placeholder="Buscar funcionário"
-                className="w-48 bg-transparent text-sm outline-none"
+                className="w-full bg-transparent text-sm outline-none sm:w-48"
               />
             </div>
           }
         >
           {technicianRows.length ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-160 text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
                     <th className="py-3 pr-4 font-medium">Funcionário</th>
                     <th className="py-3 pr-4 font-medium">OS</th>
                     <th className="py-3 pr-4 font-medium">Faturamento</th>
+                    <th className="py-3 pr-4 font-medium">Base de cálculo</th>
                     <th className="py-3 pr-4 font-medium">Folha</th>
                     <th className="py-3 pr-4 font-medium">Lucro bruto</th>
                     <th className="py-3 font-medium">Margem</th>
@@ -681,6 +754,7 @@ export default function AdminFaturamentoPage() {
                       <td className="py-3 pr-4 font-medium">{row.name}</td>
                       <td className="py-3 pr-4">{formatNumber(row.serviceCount)}</td>
                       <td className="py-3 pr-4 text-emerald-700">{formatCurrency(row.revenue)}</td>
+                      <td className="py-3 pr-4">{formatCurrency(row.calculationBase)}</td>
                       <td className="py-3 pr-4 text-amber-700">{formatCurrency(row.payrollCost)}</td>
                       <td className={`py-3 pr-4 font-semibold ${row.profit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{formatCurrency(row.profit)}</td>
                       <td className="py-3">
@@ -692,23 +766,23 @@ export default function AdminFaturamentoPage() {
               </table>
             </div>
           ) : (
-            <EmptyState icon={Users} title="Sem funcionários no recorte" description="Não há OS ou folha no mês selecionado para montar o ranking." />
+            <EmptyState icon={Users} title="Sem funcionários no recorte" description="Não há OS ou folha no período selecionado para montar o ranking." />
           )}
         </DataPanel>
 
-        <DataPanel title="Leitura rápida" description="Indicadores gerenciais da competência.">
+        <DataPanel title="Leitura rápida" description={`Indicadores gerenciais · ${periodLabel}.`}>
           <div className="space-y-3 text-sm">
             <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-background p-3">
               <span className="text-muted-foreground">Receita de serviços</span>
-              <strong>{formatCurrency(selectedMonthData.serviceRevenue)}</strong>
+              <strong>{formatCurrency(periodData.serviceRevenue)}</strong>
             </div>
             <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-background p-3">
               <span className="text-muted-foreground">Custo de folha</span>
-              <strong>{formatCurrency(selectedMonthData.payrollCost)}</strong>
+              <strong>{formatCurrency(periodData.payrollCost)}</strong>
             </div>
             <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-background p-3">
               <span className="text-muted-foreground">OS lançadas</span>
-              <strong>{formatNumber(selectedMonthData.services)}</strong>
+              <strong>{formatNumber(periodData.services)}</strong>
             </div>
           </div>
         </DataPanel>
