@@ -159,39 +159,60 @@ export async function GET(request: NextRequest) {
       const escalaCache = new Map<string, PortoEscalaDay[]>();
       let budgetExceeded = false;
 
-      technicianLoop:
+      // Match each technician's services once up front (name-prefix match doesn't depend on date).
+      const technicianServicesByQra = new Map<string, { technician: Technician; services: PortoServiceRow[] }>();
       for (const { qra, technician } of resolved) {
-        if (timeBudgetExceeded()) {
-          budgetExceeded = true;
-          break technicianLoop;
-        }
         // Prefer the admin-set Porto name hint (lib/types.ts Technician.porto_name_hint) when
         // present — the registered `name` sometimes doesn't match how Porto displays the person
         // (nickname, abbreviation, etc), and there's no stable ID in the search results to match
         // on instead (see servicos.ts).
         const nameSource = (technician.porto_name_hint || technician.name).trim();
         const namePrefix = nameSource.toUpperCase().slice(0, 8);
-        const technicianServices = allServices.filter((service) => service.technicianNameFragment.toUpperCase().startsWith(namePrefix));
-
-        if (!technicianServices.length) {
+        const services = allServices.filter((service) => service.technicianNameFragment.toUpperCase().startsWith(namePrefix));
+        if (!services.length) {
           details.push({ qra, technician_id: technician.id, action: 'no_services' });
           continue;
         }
+        technicianServicesByQra.set(qra, { technician, services });
+      }
 
-        // Group this technician's services by their programmed date (the day the work happened).
-        const servicesByDate = new Map<string, PortoServiceRow[]>();
-        for (const service of technicianServices) {
+      // Group into date -> [technician's services that day], then walk dates most-recent-first.
+      // Each (technician, date) detail fetch costs two real page loads against a slow legacy
+      // portal (confirmed live: a first full-month catch-up can burn the whole time budget on a
+      // single technician's handful of days), so a run can easily get cut off before finishing.
+      // Processing most-recent-first means whatever gets cut off is the oldest, least
+      // time-sensitive data, and every technician gets a shot at today/yesterday instead of only
+      // whichever technician happens to be first in Porto's own listing order.
+      const byDate = new Map<string, Array<{ qra: string; technician: Technician; services: PortoServiceRow[] }>>();
+      for (const [qra, { technician, services }] of technicianServicesByQra) {
+        const byDateForTechnician = new Map<string, PortoServiceRow[]>();
+        for (const service of services) {
           const dateKey = brDateToKey(service.dataProgramada);
           if (!dateKey) continue;
-          const list = servicesByDate.get(dateKey) ?? [];
+          const list = byDateForTechnician.get(dateKey) ?? [];
           list.push(service);
-          servicesByDate.set(dateKey, list);
+          byDateForTechnician.set(dateKey, list);
+        }
+        for (const [dateKey, servicesForDay] of byDateForTechnician) {
+          const list = byDate.get(dateKey) ?? [];
+          list.push({ qra, technician, services: servicesForDay });
+          byDate.set(dateKey, list);
+        }
+      }
+
+      const sortedDateKeys = Array.from(byDate.keys()).sort().reverse();
+
+      dateLoop:
+      for (const dateKey of sortedDateKeys) {
+        if (timeBudgetExceeded()) {
+          budgetExceeded = true;
+          break dateLoop;
         }
 
-        for (const [dateKey, servicesForDay] of servicesByDate) {
+        for (const { qra, technician, services: servicesForDay } of byDate.get(dateKey)!) {
           if (timeBudgetExceeded()) {
             budgetExceeded = true;
-            break technicianLoop;
+            break dateLoop;
           }
 
           const dedupKey = `${technician.id}::${dateKey}`;
@@ -207,7 +228,7 @@ export async function GET(request: NextRequest) {
           for (const service of servicesForDay) {
             if (timeBudgetExceeded()) {
               budgetExceeded = true;
-              break technicianLoop;
+              break dateLoop;
             }
             // A single flaky service page (stuck modal, navigation hiccup on Porto's legacy JSF
             // app — confirmed live: a leftover RichFaces error modal blocked every subsequent
