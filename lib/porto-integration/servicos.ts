@@ -21,7 +21,6 @@ export type PortoDateRange = { startDateKey: string; endDateKey: string };
 
 const SEARCH_MENU_ID = 'PDP-00089';
 const SEARCH_URL = 'https://wwws.portoseguro.com.br/integracoesportaldeprestadores/click/ConServCons.xhtml?portal=2';
-const SERVICE_CODE_PATTERN = /^(\d{5,8})\/(\d{2})$/;
 const MAX_RANGE_DAYS = 15; // matches the site's own client-side cap (see runServiceSearch)
 
 function toBrDate(dateKey: string) {
@@ -77,28 +76,40 @@ export async function searchServicosByDateRange(page: Page, range: PortoDateRang
   return parseServiceRowsFromHtml(html);
 }
 
+const ONCLICK_CODE_PATTERN = /onclick="changeUrlAW\(this,\s*(\d+),\s*(\d+)/i;
+const NAME_CELL_PATTERN = /<!--\s*Nome Tratamento\s*-->\s*<td[^>]*>([\s\S]*?)<\/td>/i;
+const DATE_SPAN_PATTERN = /cap_dataProgramadaAtendimento"[^>]*>([\s\S]*?)<\/span>/i;
+
+/**
+ * Validated live against a real 15-day range result (402 rows): the row's other all-caps cells
+ * (Sigla Empresa like "SERVICOS"/"PORTO SEGURO", Tipo Serviço) also match a naive "all-caps text
+ * cell" heuristic and were being picked up ahead of the real technician name — silently breaking
+ * every name-based match. The table's own HTML comments (`<!-- Nome Tratamento -->` etc) are
+ * reliable, stable anchors for each column instead of guessing by content shape; the service code
+ * itself is read from the `onclick="changeUrlAW(this, ano, numero, ...)"` attribute, not the cell
+ * text, for the same reason.
+ */
 function parseServiceRowsFromHtml(html: string): PortoServiceRow[] {
   const rows: PortoServiceRow[] = [];
   const rowMatches = html.split(/<tr[\s>]/i).slice(1);
 
   for (const rawRow of rowMatches) {
-    const cellTexts = Array.from(rawRow.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)).map((match) =>
-      match[1].replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim(),
-    );
+    const codeMatch = rawRow.match(ONCLICK_CODE_PATTERN);
+    if (!codeMatch) continue;
 
-    const codeCell = cellTexts.find((text) => SERVICE_CODE_PATTERN.test(text));
-    if (!codeCell) continue;
+    const [, anoServico, numeroServico] = codeMatch;
 
-    const [, numeroServico, anoServico] = codeCell.match(SERVICE_CODE_PATTERN)!;
-    const dateCell = cellTexts.find((text) => /^\d{2}\/\d{2}\/\d{4}$/.test(text)) ?? '';
-    const nameCell = cellTexts.find((text) => /^[A-ZÀ-Ú\s]{4,40}$/.test(text)) ?? '';
+    const nameMatch = rawRow.match(NAME_CELL_PATTERN);
+    const technicianNameFragment = nameMatch
+      ? nameMatch[1].replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
+      : '';
 
-    rows.push({
-      numeroServico,
-      anoServico,
-      technicianNameFragment: nameCell,
-      dataProgramada: dateCell,
-    });
+    const dateMatch = rawRow.match(DATE_SPAN_PATTERN);
+    const dataProgramada = dateMatch ? dateMatch[1].trim() : '';
+
+    if (!technicianNameFragment) continue;
+
+    rows.push({ numeroServico, anoServico, technicianNameFragment, dataProgramada });
   }
 
   return rows;
