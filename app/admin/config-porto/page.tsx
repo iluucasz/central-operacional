@@ -74,7 +74,7 @@ export default function ConfigPortoPage() {
   const [saveError, setSaveError] = useState('');
 
   const [isTestingLogin, setIsTestingLogin] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string; screenshotUrl?: string | null } | null>(null);
 
   async function loadConfig() {
     setIsDataLoading(true);
@@ -136,7 +136,7 @@ export default function ConfigPortoPage() {
       const response = await fetch('/api/porto-config/test-login', { method: 'POST' });
       const data = await response.json();
       if (!response.ok) {
-        setTestResult({ success: false, message: data.error || 'Falha ao testar login.' });
+        setTestResult({ success: false, message: data.error || 'Falha ao testar login.', screenshotUrl: data.screenshotUrl });
         return;
       }
       setTestResult({ success: true, message: data.message || 'Login realizado com sucesso.' });
@@ -230,7 +230,17 @@ export default function ConfigPortoPage() {
             {testResult ? (
               <div className={`flex items-start gap-2 rounded-md border p-3 text-sm ${testResult.success ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>
                 {testResult.success ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0" />}
-                <span>{testResult.message}</span>
+                <span>
+                  {testResult.message}
+                  {testResult.screenshotUrl ? (
+                    <>
+                      {' '}
+                      <a href={testResult.screenshotUrl} target="_blank" rel="noreferrer" className="underline">
+                        Ver screenshot da tentativa
+                      </a>
+                    </>
+                  ) : null}
+                </span>
               </div>
             ) : null}
           </form>

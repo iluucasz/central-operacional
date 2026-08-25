@@ -15,7 +15,7 @@ const NOTIFICATIONS_CHECK_URL =
   '&javax.portlet.begCacheTok=com.vignette.cachetoken' +
   '&javax.portlet.endCacheTok=com.vignette.cachetoken';
 
-async function verifyPortoSession(page: Page): Promise<boolean> {
+async function verifyPortoSession(page: Page): Promise<{ ok: boolean; status: number | null; bodySnippet: string }> {
   const response = await page
     .request.post(NOTIFICATIONS_CHECK_URL, {
       headers: {
@@ -26,10 +26,14 @@ async function verifyPortoSession(page: Page): Promise<boolean> {
     })
     .catch(() => null);
 
-  if (!response || !response.ok()) return false;
+  if (!response) return { ok: false, status: null, bodySnippet: '(sem resposta)' };
 
   const text = await response.text().catch(() => '');
-  return /^\{"count"/.test(text.trim());
+  return {
+    ok: response.ok() && /^\{"count"/.test(text.trim()),
+    status: response.status(),
+    bodySnippet: text.slice(0, 200),
+  };
 }
 
 /**
@@ -70,8 +74,9 @@ export async function loginToPorto(page: Page, credentials: { cpf: string; passw
 
   await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
 
-  const isLoggedIn = await verifyPortoSession(page);
-  if (!isLoggedIn) {
-    throw new PortoLoginError('Login no Porto falhou — verifique CPF e senha, ou o portal pode ter mudado.');
+  const session = await verifyPortoSession(page);
+  if (!session.ok) {
+    const diagnostics = `url=${page.url()} status=${session.status} body="${session.bodySnippet}"`;
+    throw new PortoLoginError(`Login no Porto falhou — verifique CPF e senha, ou o portal pode ter mudado. (${diagnostics})`);
   }
 }
