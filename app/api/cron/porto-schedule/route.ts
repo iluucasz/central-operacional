@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveCronCaller } from '@/lib/cron-auth';
 import { decryptPortoPassword } from '@/lib/porto-crypto';
-import { launchPortoBrowser } from '@/lib/porto-integration/browser';
+import { launchAuthenticatedPortoSession } from '@/lib/porto-integration/browser';
 import { getEscalaForCurrentMonth } from '@/lib/porto-integration/escala';
-import { loginToPorto, PortoLoginError } from '@/lib/porto-integration/login';
+import { PortoLoginError } from '@/lib/porto-integration/login';
 import { listSocorristas } from '@/lib/porto-integration/socorristas';
 import { resolveTechnicianByQra } from '@/lib/porto-integration/technician-match';
 import { finishSyncLog, getPortoConfig, recordScheduleCheck, recordScheduleImportResult, startSyncLog } from '@/lib/porto-sync-log';
@@ -72,12 +72,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const password = decryptPortoPassword(config.encrypted_password as string);
-    const { browser, context } = await launchPortoBrowser();
+    const { browser, page } = await launchAuthenticatedPortoSession({ cpf: config.cpf as string, password });
 
     try {
-      const page = await context.newPage();
-      await loginToPorto(page, { cpf: config.cpf as string, password });
-
       if (alreadyImportedThisMonth) {
         // Lightweight path: just confirm the portal still responds and the escala for a reference
         // technician still resolves, without a full multi-technician scrape.
