@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { runHoursJob } from '../lib/porto-jobs/run-hours-job';
 import { runScheduleJob } from '../lib/porto-jobs/run-schedule-job';
+import { startWorkerServer } from './server';
 
 function log(...args: unknown[]) {
   console.log(`[${new Date().toISOString()}]`, ...args);
@@ -46,4 +47,8 @@ if (runArg) {
   cron.schedule('0 23 * * *', runHours, { timezone: 'UTC' });
   cron.schedule('0 6 * * *', runSchedule, { timezone: 'UTC' });
   log('Porto worker iniciado. Horas: 23:00 UTC diariamente. Escala: 06:00 UTC diariamente.');
+
+  // Everything the admin UI triggers on demand (test-login, técnico match, manual job runs) is
+  // now served from here too — the Vercel routes are thin proxies (see server.ts).
+  startWorkerServer();
 }

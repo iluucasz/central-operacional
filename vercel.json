@@ -1,6 +1,0 @@
-{
-  "crons": [
-    { "path": "/api/cron/porto-hours", "schedule": "0 23 * * *" },
-    { "path": "/api/cron/porto-schedule", "schedule": "0 6 * * *" }
-  ]
-}

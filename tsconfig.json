@@ -37,6 +37,8 @@
   ],
   "exclude": [
     "node_modules",
-    "worker"
+    "worker",
+    "lib/porto-integration",
+    "lib/porto-jobs"
   ]
 }
