@@ -60,6 +60,18 @@ export async function ensurePortoConfigSchema() {
         ALTER TABLE technicians
         ADD COLUMN IF NOT EXISTS porto_name_hint TEXT
       `;
+
+      // Which date range a run actually swept — surfaced in the "Histórico de execuções" modal so
+      // a past run (especially a manual test targeting a specific day) is inspectable after the
+      // fact, not just live while it's running.
+      await sql`
+        ALTER TABLE porto_sync_log
+        ADD COLUMN IF NOT EXISTS range_start DATE
+      `;
+      await sql`
+        ALTER TABLE porto_sync_log
+        ADD COLUMN IF NOT EXISTS range_end DATE
+      `;
     })().catch((error) => {
       portoConfigSchemaReady = null;
       throw error;

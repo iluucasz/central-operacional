@@ -118,7 +118,19 @@ type PortoSyncLog = {
   technicians_processed: number;
   rows_written: number;
   error_message: string | null;
+  details: PortoJobDetail[] | null;
+  range_start: string | null;
+  range_end: string | null;
 };
+
+function summarizeDetails(details: PortoJobDetail[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const detail of details) {
+    const action = typeof detail.action === 'string' ? detail.action : 'unknown';
+    counts[action] = (counts[action] ?? 0) + 1;
+  }
+  return counts;
+}
 
 const inputClassName = 'min-h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring';
 
@@ -279,6 +291,21 @@ export default function ConfigPortoPage() {
       setRunningJob(null);
       loadConfig();
     }
+  }
+
+  function handleOpenHistoryLog(log: PortoSyncLog) {
+    setJobModalJobType(log.job_type);
+    setJobModalOpen(true);
+    const details = log.details ?? [];
+    setJobResult({
+      status: log.status,
+      technicians_processed: log.technicians_processed,
+      rows_written: log.rows_written,
+      range: log.range_start ? { start: log.range_start, end: log.range_end || log.range_start } : undefined,
+      summary: details.length ? summarizeDetails(details) : undefined,
+      details,
+      error: log.error_message || undefined,
+    });
   }
 
   async function handleOpenMatch() {
@@ -579,7 +606,11 @@ export default function ConfigPortoPage() {
                 </thead>
                 <tbody>
                   {logs.map((log) => (
-                    <tr key={log.id} className="border-b border-border last:border-0">
+                    <tr
+                      key={log.id}
+                      onClick={() => runningJob === null && handleOpenHistoryLog(log)}
+                      className={`border-b border-border last:border-0 ${runningJob === null ? 'cursor-pointer hover:bg-secondary/40' : ''}`}
+                    >
                       <td className="py-2 pr-4">{jobTypeLabel(log.job_type)}</td>
                       <td className="py-2 pr-4 text-muted-foreground">{formatDateTime(log.started_at)}</td>
                       <td className="py-2 pr-4">{statusLabel(log.status)}</td>
@@ -599,10 +630,14 @@ export default function ConfigPortoPage() {
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
-              Teste — {jobModalJobType === 'hours' ? 'Apontamento de horas' : 'Escala'}
+              {jobModalJobType === 'hours' ? 'Apontamento de horas' : 'Escala'}
             </DialogTitle>
             <DialogDescription>
-              Simulação real contra o Portal do Prestador. Nada foi gravado em escala ou horas.
+              {jobResult?.status === 'dry_run'
+                ? 'Simulação real contra o Portal do Prestador. Nada foi gravado em escala ou horas.'
+                : runningJob
+                  ? 'Simulação real contra o Portal do Prestador. Nada foi gravado em escala ou horas.'
+                  : 'Execução registrada — dados abaixo são os que foram (ou seriam) processados nessa rodada.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -633,7 +668,7 @@ export default function ConfigPortoPage() {
                   <p className="text-lg font-semibold text-foreground">{jobResult.technicians_processed ?? '-'}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground">Linhas que seriam gravadas</p>
+                  <p className="text-muted-foreground">{jobResult.status === 'dry_run' ? 'Linhas que seriam gravadas' : 'Linhas gravadas'}</p>
                   <p className="text-lg font-semibold text-foreground">{jobResult.would_write ?? jobResult.rows_written ?? '-'}</p>
                 </div>
                 {jobResult.range ? (

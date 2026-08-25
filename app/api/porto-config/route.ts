@@ -61,7 +61,8 @@ export async function GET(request: NextRequest) {
     const [rows, logs] = await Promise.all([
       sql`SELECT * FROM porto_config WHERE id = 1`,
       sql`
-        SELECT id, job_type, started_at, finished_at, status, technicians_processed, rows_written, error_message
+        SELECT id, job_type, started_at, finished_at, status, technicians_processed, rows_written,
+               error_message, details, range_start, range_end
         FROM porto_sync_log
         ORDER BY started_at DESC
         LIMIT ${SYNC_LOG_LIMIT}

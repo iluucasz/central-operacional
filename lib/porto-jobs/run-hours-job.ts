@@ -351,6 +351,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           technicians_processed: techniciansProcessed,
           rows_written: importedCount,
           details,
+          range,
         });
         return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, partial: budgetExceeded, range, summary, details };
       }
@@ -362,6 +363,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         technicians_processed: techniciansProcessed,
         rows_written: rowsWritten,
         details,
+        range,
       });
 
       return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, partial: budgetExceeded, range, summary, details };

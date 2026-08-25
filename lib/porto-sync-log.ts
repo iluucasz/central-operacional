@@ -29,6 +29,7 @@ export async function finishSyncLog(
     rows_written?: number;
     details?: unknown;
     error_message?: string | null;
+    range?: { start: string; end: string };
   },
 ) {
   await sql`
@@ -38,7 +39,9 @@ export async function finishSyncLog(
         technicians_processed = ${result.technicians_processed ?? 0},
         rows_written = ${result.rows_written ?? 0},
         details = ${result.details ? JSON.stringify(result.details) : null},
-        error_message = ${result.error_message ?? null}
+        error_message = ${result.error_message ?? null},
+        range_start = ${result.range?.start ?? null},
+        range_end = ${result.range?.end ?? null}
     WHERE id = ${id}
   `;
 }
