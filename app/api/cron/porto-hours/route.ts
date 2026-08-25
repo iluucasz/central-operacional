@@ -209,7 +209,24 @@ export async function GET(request: NextRequest) {
               budgetExceeded = true;
               break technicianLoop;
             }
-            const detail = await getServicoDetail(page, dayRange, { anoServico: service.anoServico, numeroServico: service.numeroServico });
+            // A single flaky service page (stuck modal, navigation hiccup on Porto's legacy JSF
+            // app — confirmed live: a leftover RichFaces error modal blocked every subsequent
+            // click for the rest of the run) shouldn't abort the whole month's import. Log it and
+            // keep going instead of letting one bad service take down everything already computed.
+            let detail;
+            try {
+              detail = await getServicoDetail(page, dayRange, { anoServico: service.anoServico, numeroServico: service.numeroServico });
+            } catch (detailError) {
+              details.push({
+                qra,
+                technician_id: technician.id,
+                action: 'service_detail_failed',
+                date: dateKey,
+                numeroServico: service.numeroServico,
+                error: detailError instanceof Error ? detailError.message.slice(0, 300) : String(detailError),
+              });
+              continue;
+            }
             for (const timestamp of detail.timestamps) {
               if (!timestamp.startsWith(brDate)) continue;
               const timeOnly = timestamp.split(' ')[1];

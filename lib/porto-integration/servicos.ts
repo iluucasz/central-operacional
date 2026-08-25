@@ -40,6 +40,7 @@ function toBrDate(dateKey: string) {
  */
 async function runServiceSearch(page: Page, range: PortoDateRange): Promise<Frame> {
   const frame = await openPortalFrame(page, SEARCH_MENU_ID, SEARCH_URL);
+  await dismissBlockingModal(frame);
   const brStart = toBrDate(range.startDateKey);
   const brEnd = toBrDate(clampRangeEnd(range));
 
@@ -53,6 +54,25 @@ async function runServiceSearch(page: Page, range: PortoDateRange): Promise<Fram
   ]);
 
   return frame;
+}
+
+/**
+ * Porto's RichFaces app occasionally leaves an error modal open after a flaky request (session
+ * hiccup, server-side validation error, etc). Confirmed live: a Playwright click failed with
+ * `locator.click: Timeout 30000ms exceeded`, whose log showed the click target correctly resolved
+ * but blocked by `#form-erro-modal\:modal-erroDiv` (a RichFaces modal mask) "intercepting pointer
+ * events" — and since nothing ever dismissed it, every subsequent click for the rest of that run
+ * failed the same way. Force-hides any such leftover modal defensively before interacting with the
+ * page, so one glitch doesn't cascade into blocking everything downstream.
+ */
+async function dismissBlockingModal(frame: Frame): Promise<void> {
+  await frame
+    .evaluate(() => {
+      document.querySelectorAll('[id*="modal-erro"]').forEach((el) => {
+        (el as HTMLElement).style.display = 'none';
+      });
+    })
+    .catch(() => {});
 }
 
 function clampRangeEnd(range: PortoDateRange): string {
@@ -132,6 +152,7 @@ function parseServiceRowsFromHtml(html: string): PortoServiceRow[] {
  */
 export async function getServicoDetail(page: Page, range: PortoDateRange, params: { anoServico: string; numeroServico: string }): Promise<PortoServiceDetail> {
   const frame = await runServiceSearch(page, range);
+  await dismissBlockingModal(frame);
   const link = frame.locator(`a[onclick*="changeUrlAW(this, ${params.anoServico}, ${params.numeroServico}"]`).first();
 
   if (!(await link.count())) {

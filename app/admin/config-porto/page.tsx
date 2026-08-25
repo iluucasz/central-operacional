@@ -50,6 +50,8 @@ function jobDetailActionLabel(action: string | undefined) {
       return 'Só checagem — mês já importado';
     case 'time_budget_exceeded_stopping_early':
       return 'Execução parou por limite de tempo (continua na próxima)';
+    case 'service_detail_failed':
+      return 'Falha ao abrir detalhe de um serviço (pulado)';
     default:
       return action || '-';
   }
