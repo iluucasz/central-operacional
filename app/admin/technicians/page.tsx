@@ -41,6 +41,7 @@ import { useAppSession } from '@/hooks/use-app-session';
 
 const initialFormData = {
   qra: '',
+  porto_name_hint: '',
   name: '',
   email: '',
   password: '',
@@ -60,6 +61,7 @@ function createInitialFormData(): TechnicianFormData {
 function createFormDataFromTechnician(technician: Technician): TechnicianFormData {
   return {
     qra: technician.qra || '',
+    porto_name_hint: technician.porto_name_hint || '',
     name: technician.name,
     email: technician.email || '',
     password: '',
@@ -359,6 +361,28 @@ export default function TechniciansPage() {
                           }
                           className={inputClassName}
                         />
+                      </label>
+
+                      <label className="text-sm md:col-span-2">
+                        <span className="mb-1.5 block font-medium">Nome no Porto (opcional)</span>
+                        <input
+                          type="text"
+                          value={formData.porto_name_hint}
+                          onChange={(event) =>
+                            setFormData((current) => ({
+                              ...current,
+                              porto_name_hint: event.target.value,
+                            }))
+                          }
+                          placeholder="Só preencha se o nome cadastrado aqui for diferente do exibido no Porto"
+                          className={inputClassName}
+                        />
+                        <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+                          Usado pra achar o apontamento de horas desse técnico no Portal do
+                          Prestador (Porto Seguro), quando o nome cadastrado aqui não bate com o
+                          nome exibido lá (apelido, nome social, etc). Deixe em branco pra usar o
+                          nome acima.
+                        </p>
                       </label>
 
                       <label className="text-sm">

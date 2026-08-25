@@ -18,6 +18,9 @@ export interface Technician {
   id: string
   user_id?: string
   qra?: string
+  /** Nome (ou trecho dele) como aparece nas buscas de serviço do Porto — usado pra casar serviços
+   * com o técnico quando o nome cadastrado no sistema é diferente do exibido lá. */
+  porto_name_hint?: string
   name: string
   email?: string
   commission_percentage: number

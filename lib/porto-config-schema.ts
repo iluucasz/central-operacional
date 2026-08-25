@@ -51,6 +51,15 @@ export async function ensurePortoConfigSchema() {
         ALTER TABLE work_hours
         ADD COLUMN IF NOT EXISTS source VARCHAR(16) NOT NULL DEFAULT 'manual'
       `;
+
+      // Manual override for matching a technician to their name as it appears in Porto's service
+      // search results (which only exposes a free-text name, not the QRA) — the automatic
+      // name-prefix match against `technicians.name` can miss when the registered name differs
+      // from how Porto displays it (nickname, abbreviation, etc).
+      await sql`
+        ALTER TABLE technicians
+        ADD COLUMN IF NOT EXISTS porto_name_hint TEXT
+      `;
     })().catch((error) => {
       portoConfigSchemaReady = null;
       throw error;

@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 import { NextRequest, NextResponse } from 'next/server';
 import { hashPassword, verifyAuth } from '@/lib/auth';
+import { ensurePortoConfigSchema } from '@/lib/porto-config-schema';
 
 const sql = neon(process.env.DATABASE_URL!);
 
@@ -33,6 +34,7 @@ async function insertTechnicianRecord({
   baseSalary,
   vaAllowance,
   vrAllowance,
+  portoNameHint,
 }: {
   userId: string | null;
   qra: string | null;
@@ -42,18 +44,20 @@ async function insertTechnicianRecord({
   baseSalary: unknown;
   vaAllowance: unknown;
   vrAllowance: unknown;
+  portoNameHint: string | null;
 }) {
   const result = await sql`
     INSERT INTO technicians (
       user_id, qra, name, email, commission_percentage,
-      base_salary, va_allowance, vr_allowance
+      base_salary, va_allowance, vr_allowance, porto_name_hint
     )
     VALUES (
       ${userId}, ${qra || null}, ${name}, ${email},
       ${positiveNumberOrDefault(commissionPercentage, 25)},
       ${positiveNumberOrDefault(baseSalary, 2664.53)},
       ${positiveNumberOrDefault(vaAllowance, 249)},
-      ${positiveNumberOrDefault(vrAllowance, 783)}
+      ${positiveNumberOrDefault(vrAllowance, 783)},
+      ${portoNameHint || null}
     )
     RETURNING *
   `;
@@ -71,8 +75,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    await ensurePortoConfigSchema();
+
     const technicians = await sql`
-      SELECT id, qra, name, email, commission_percentage, base_salary, 
+      SELECT id, qra, porto_name_hint, name, email, commission_percentage, base_salary,
              va_allowance, vr_allowance, status, created_at
       FROM technicians
       ORDER BY name ASC
@@ -109,6 +115,7 @@ export async function POST(request: NextRequest) {
       base_salary,
       va_allowance,
       vr_allowance,
+      porto_name_hint,
     } = await request.json();
 
     if (!name || !email || !password) {
@@ -117,6 +124,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    await ensurePortoConfigSchema();
 
     const existingUsers = await sql`
       SELECT u.id, u.role, t.id AS technician_id
@@ -151,6 +160,7 @@ export async function POST(request: NextRequest) {
         baseSalary: base_salary,
         vaAllowance: va_allowance,
         vrAllowance: vr_allowance,
+        portoNameHint: porto_name_hint,
       });
 
       return NextResponse.json(technician, { status: 201 });
@@ -175,6 +185,7 @@ export async function POST(request: NextRequest) {
       baseSalary: base_salary,
       vaAllowance: va_allowance,
       vrAllowance: vr_allowance,
+      portoNameHint: porto_name_hint,
     });
 
     return NextResponse.json(technician, { status: 201 });
@@ -231,6 +242,7 @@ export async function PATCH(request: NextRequest) {
       base_salary,
       va_allowance,
       vr_allowance,
+      porto_name_hint,
       status,
     } = await request.json();
 
@@ -240,6 +252,8 @@ export async function PATCH(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    await ensurePortoConfigSchema();
 
     const existingTechnicians = await sql`
       SELECT id, user_id
@@ -320,6 +334,7 @@ export async function PATCH(request: NextRequest) {
       SET
         user_id = ${userId},
         qra = ${qra || null},
+        porto_name_hint = ${porto_name_hint || null},
         name = ${name},
         email = ${email},
         commission_percentage = ${Number(commission_percentage) > 0 ? commission_percentage : 25},

@@ -147,7 +147,12 @@ export async function GET(request: NextRequest) {
       const escalaCache = new Map<string, PortoEscalaDay[]>();
 
       for (const { qra, technician } of resolved) {
-        const namePrefix = technician.name.trim().toUpperCase().slice(0, 8);
+        // Prefer the admin-set Porto name hint (lib/types.ts Technician.porto_name_hint) when
+        // present — the registered `name` sometimes doesn't match how Porto displays the person
+        // (nickname, abbreviation, etc), and there's no stable ID in the search results to match
+        // on instead (see servicos.ts).
+        const nameSource = (technician.porto_name_hint || technician.name).trim();
+        const namePrefix = nameSource.toUpperCase().slice(0, 8);
         const technicianServices = allServices.filter((service) => service.technicianNameFragment.toUpperCase().startsWith(namePrefix));
 
         if (!technicianServices.length) {
