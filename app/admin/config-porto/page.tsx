@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import { CheckCircle2, Clock3, FlaskConical, KeyRound, Loader2, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, FlaskConical, KeyRound, Loader2, Users, XCircle } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { LoadingState } from '@/components/loading-state';
@@ -78,6 +78,26 @@ type PortoConfig = {
   updated_at: string | null;
 };
 
+type PortoSocorristaRow = {
+  qra: string;
+  name: string;
+  cpf?: string;
+  status: string;
+};
+
+type MatchTechnician = {
+  id: string;
+  qra: string | null;
+  porto_name_hint: string | null;
+  name: string;
+  email: string;
+  commission_percentage: number;
+  base_salary: number;
+  va_allowance: number;
+  vr_allowance: number;
+  status: string;
+};
+
 type PortoSyncLog = {
   id: string;
   job_type: 'hours' | 'schedule';
@@ -134,6 +154,15 @@ export default function ConfigPortoPage() {
   const [jobModalOpen, setJobModalOpen] = useState(false);
   const [jobModalJobType, setJobModalJobType] = useState<'hours' | 'schedule' | null>(null);
   const [jobResult, setJobResult] = useState<PortoJobResult | null>(null);
+
+  const [matchModalOpen, setMatchModalOpen] = useState(false);
+  const [isMatchLoading, setIsMatchLoading] = useState(false);
+  const [matchError, setMatchError] = useState('');
+  const [matchSaveMessage, setMatchSaveMessage] = useState('');
+  const [isSavingMatches, setIsSavingMatches] = useState(false);
+  const [portoSocorristas, setPortoSocorristas] = useState<PortoSocorristaRow[]>([]);
+  const [matchTechnicians, setMatchTechnicians] = useState<MatchTechnician[]>([]);
+  const [matchSelections, setMatchSelections] = useState<Record<string, string>>({});
 
   async function loadConfig() {
     setIsDataLoading(true);
@@ -229,6 +258,103 @@ export default function ConfigPortoPage() {
     } finally {
       setRunningJob(null);
       loadConfig();
+    }
+  }
+
+  async function handleOpenMatch() {
+    setMatchModalOpen(true);
+    setIsMatchLoading(true);
+    setMatchError('');
+    setMatchSaveMessage('');
+    setPortoSocorristas([]);
+    setMatchTechnicians([]);
+    setMatchSelections({});
+    try {
+      const response = await fetch('/api/porto-config/socorristas', { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Falha ao buscar técnicos do Porto.');
+      }
+      const socorristas: PortoSocorristaRow[] = data.socorristas ?? [];
+      const technicians: MatchTechnician[] = data.technicians ?? [];
+      setPortoSocorristas(socorristas);
+      setMatchTechnicians(technicians);
+
+      const initialSelections: Record<string, string> = {};
+      for (const socorrista of socorristas) {
+        const matched = technicians.find((technician) => technician.qra === socorrista.qra);
+        initialSelections[socorrista.qra] = matched?.id ?? '';
+      }
+      setMatchSelections(initialSelections);
+    } catch (error) {
+      setMatchError(error instanceof Error ? error.message : 'Falha ao buscar técnicos do Porto.');
+    } finally {
+      setIsMatchLoading(false);
+    }
+  }
+
+  async function patchTechnicianMatch(technician: MatchTechnician, overrides: { qra: string | null; porto_name_hint: string | null }) {
+    const response = await fetch(`/api/technicians?id=${technician.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        qra: overrides.qra,
+        porto_name_hint: overrides.porto_name_hint,
+        name: technician.name,
+        email: technician.email,
+        commission_percentage: technician.commission_percentage,
+        base_salary: technician.base_salary,
+        va_allowance: technician.va_allowance,
+        vr_allowance: technician.vr_allowance,
+        status: technician.status,
+      }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || `Falha ao salvar match para o técnico ${technician.name}.`);
+    }
+  }
+
+  async function handleSaveMatches() {
+    setIsSavingMatches(true);
+    setMatchError('');
+    setMatchSaveMessage('');
+    try {
+      // Guard against the same local technician being picked for two different Porto QRAs — only
+      // the last save would "win", silently dropping the other match.
+      const selectedIds = Object.values(matchSelections).filter(Boolean);
+      const duplicateId = selectedIds.find((id, index) => selectedIds.indexOf(id) !== index);
+      if (duplicateId) {
+        const duplicateTechnician = matchTechnicians.find((technician) => technician.id === duplicateId);
+        throw new Error(`"${duplicateTechnician?.name ?? 'Um técnico'}" foi selecionado para mais de um QRA do Porto — corrija antes de salvar.`);
+      }
+
+      let savedCount = 0;
+      for (const socorrista of portoSocorristas) {
+        const previousTechnician = matchTechnicians.find((technician) => technician.qra === socorrista.qra);
+        const selectedId = matchSelections[socorrista.qra] || '';
+        const alreadyMatched = (previousTechnician?.id || '') === selectedId;
+        if (alreadyMatched) continue;
+
+        if (!selectedId) {
+          if (previousTechnician) {
+            await patchTechnicianMatch(previousTechnician, { qra: null, porto_name_hint: previousTechnician.porto_name_hint });
+            savedCount++;
+          }
+          continue;
+        }
+
+        const technician = matchTechnicians.find((item) => item.id === selectedId);
+        if (!technician) continue;
+        await patchTechnicianMatch(technician, { qra: socorrista.qra, porto_name_hint: socorrista.name });
+        savedCount++;
+      }
+
+      setMatchSaveMessage(savedCount ? `${savedCount} match(es) salvo(s) com sucesso.` : 'Nenhuma mudança para salvar.');
+    } catch (error) {
+      setMatchError(error instanceof Error ? error.message : 'Falha ao salvar matches.');
+    } finally {
+      setIsSavingMatches(false);
     }
   }
 
@@ -372,7 +498,16 @@ export default function ConfigPortoPage() {
               {runningJob === 'schedule' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
               Testar escala
             </Button>
+            <Button type="button" variant="outline" onClick={handleOpenMatch} disabled={runningJob !== null}>
+              <Users className="h-4 w-4" />
+              Match de técnicos
+            </Button>
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            &quot;Match de técnicos&quot; faz login real no Porto, lista os QRAs de lá e deixa você
+            confirmar manualmente qual técnico do sistema é cada um — corrige o &quot;Sem técnico
+            correspondente&quot; que aparece nos testes acima.
+          </p>
         </DataPanel>
       </div>
 
@@ -482,6 +617,83 @@ export default function ConfigPortoPage() {
               )}
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={matchModalOpen} onOpenChange={setMatchModalOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Match de técnicos</DialogTitle>
+            <DialogDescription>
+              Login real no Portal do Prestador para listar os QRAs cadastrados lá. Escolha qual
+              técnico do sistema corresponde a cada um e salve — isso atualiza o QRA e o nome usado
+              na busca de serviços de cada técnico.
+            </DialogDescription>
+          </DialogHeader>
+
+          {isMatchLoading ? (
+            <div className="flex flex-col items-center gap-3 py-10 text-sm text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              <p>Fazendo login e buscando técnicos no Porto...</p>
+            </div>
+          ) : matchError ? (
+            <div className="flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{matchError}</span>
+            </div>
+          ) : portoSocorristas.length ? (
+            <div className="flex flex-col gap-4">
+              {matchSaveMessage ? <p className="text-sm text-emerald-700">{matchSaveMessage}</p> : null}
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-xs uppercase text-muted-foreground">
+                      <th className="py-2 pr-4">QRA</th>
+                      <th className="py-2 pr-4">Nome no Porto</th>
+                      <th className="py-2 pr-4">Status</th>
+                      <th className="py-2">Técnico no sistema</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {portoSocorristas.map((socorrista) => (
+                      <tr key={socorrista.qra} className="border-b border-border last:border-0">
+                        <td className="py-2 pr-4">{socorrista.qra}</td>
+                        <td className="py-2 pr-4">{socorrista.name}</td>
+                        <td className="py-2 pr-4 text-muted-foreground">{socorrista.status || '-'}</td>
+                        <td className="py-2">
+                          <select
+                            className={inputClassName}
+                            value={matchSelections[socorrista.qra] ?? ''}
+                            onChange={(event) =>
+                              setMatchSelections((previous) => ({ ...previous, [socorrista.qra]: event.target.value }))
+                            }
+                          >
+                            <option value="">-- sem correspondência --</option>
+                            {matchTechnicians.map((technician) => (
+                              <option key={technician.id} value={technician.id}>
+                                {technician.name}
+                                {technician.qra && technician.qra !== socorrista.qra ? ` (QRA atual: ${technician.qra})` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div>
+                <Button type="button" onClick={handleSaveMatches} disabled={isSavingMatches}>
+                  {isSavingMatches ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Salvar matches
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Nenhum técnico encontrado no Porto.</p>
+          )}
         </DialogContent>
       </Dialog>
     </AppShell>
