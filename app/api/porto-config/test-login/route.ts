@@ -9,18 +9,18 @@ export const runtime = 'nodejs';
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
-  const auth = await verifyAuth(request);
-  if (!auth || auth.role !== 'admin') {
-    return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
-  }
-
-  const config = await getPortoConfig();
-  if (!config || !config.cpf || !config.encrypted_password) {
-    return NextResponse.json({ error: 'Configure CPF e senha antes de testar.' }, { status: 400 });
-  }
-
   let browser: Awaited<ReturnType<typeof launchPortoBrowser>>['browser'] | undefined;
   try {
+    const auth = await verifyAuth(request);
+    if (!auth || auth.role !== 'admin') {
+      return NextResponse.json({ error: 'Não autorizado' }, { status: 401 });
+    }
+
+    const config = await getPortoConfig();
+    if (!config || !config.cpf || !config.encrypted_password) {
+      return NextResponse.json({ error: 'Configure CPF e senha antes de testar.' }, { status: 400 });
+    }
+
     const password = decryptPortoPassword(config.encrypted_password as string);
     const launched = await launchPortoBrowser();
     browser = launched.browser;
@@ -30,12 +30,12 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ message: 'Login realizado com sucesso no Portal do Prestador.' });
   } catch (error) {
-    const message = error instanceof PortoLoginError ? error.message : 'Falha ao testar login no Porto.';
+    const message = error instanceof PortoLoginError ? error.message : `Falha ao testar login no Porto: ${error instanceof Error ? error.message : String(error)}`;
     console.error('[porto-config/test-login] error:', error);
     return NextResponse.json({ error: message }, { status: 400 });
   } finally {
     if (browser) {
-      await browser.close();
+      await browser.close().catch(() => {});
     }
   }
 }
