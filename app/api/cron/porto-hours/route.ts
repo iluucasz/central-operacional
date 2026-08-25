@@ -88,7 +88,19 @@ function diffHours(startTime: string, endTime: string) {
  * service detail pages for (technician, date) pairs that already have a `source='porto'` row in
  * `work_hours` — only genuinely new days do the expensive per-service detail lookup.
  */
+// Fixing the technician-name column bug (servicos.ts) meant matches actually work now, which
+// exposed a real risk: a full month catch-up can involve far more per-service detail fetches
+// (each one a fresh search + click, see servicos.ts) than a single invocation can finish inside
+// Vercel's maxDuration. Rather than let the platform kill the function mid-flight (which returns
+// a raw non-JSON error page instead of a clean response), the loop below checks elapsed time and
+// stops itself early, leaving whatever's left for the next run to pick up via the existing
+// already-imported skip check.
+const TIME_BUDGET_MS = 240_000; // ~40s margin under maxDuration=280s for browser.close() + response
+
 export async function GET(request: NextRequest) {
+  const startedAt = Date.now();
+  const timeBudgetExceeded = () => Date.now() - startedAt > TIME_BUDGET_MS;
+
   const caller = await resolveCronCaller(request);
   if (!caller.authorized) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -145,8 +157,14 @@ export async function GET(request: NextRequest) {
       }
 
       const escalaCache = new Map<string, PortoEscalaDay[]>();
+      let budgetExceeded = false;
 
+      technicianLoop:
       for (const { qra, technician } of resolved) {
+        if (timeBudgetExceeded()) {
+          budgetExceeded = true;
+          break technicianLoop;
+        }
         // Prefer the admin-set Porto name hint (lib/types.ts Technician.porto_name_hint) when
         // present — the registered `name` sometimes doesn't match how Porto displays the person
         // (nickname, abbreviation, etc), and there's no stable ID in the search results to match
@@ -171,6 +189,11 @@ export async function GET(request: NextRequest) {
         }
 
         for (const [dateKey, servicesForDay] of servicesByDate) {
+          if (timeBudgetExceeded()) {
+            budgetExceeded = true;
+            break technicianLoop;
+          }
+
           const dedupKey = `${technician.id}::${dateKey}`;
           if (existingDates.has(dedupKey)) {
             details.push({ qra, technician_id: technician.id, action: 'already_imported', date: dateKey });
@@ -182,6 +205,10 @@ export async function GET(request: NextRequest) {
 
           let latestCompletion: string | null = null;
           for (const service of servicesForDay) {
+            if (timeBudgetExceeded()) {
+              budgetExceeded = true;
+              break technicianLoop;
+            }
             const detail = await getServicoDetail(page, dayRange, { anoServico: service.anoServico, numeroServico: service.numeroServico });
             for (const timestamp of detail.timestamps) {
               if (!timestamp.startsWith(brDate)) continue;
@@ -245,18 +272,25 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      if (budgetExceeded) {
+        details.push({
+          action: 'time_budget_exceeded_stopping_early',
+          note: 'Execução parou antes do limite de tempo da function. Os dias/técnicos restantes serão processados na próxima execução (nada é perdido — dias já gravados continuam marcados como importados).',
+        });
+      }
+
       if (dryRun) {
-        details.unshift({ dry_run: true, manual: caller.manual, would_write: importedCount, range: `${monthStartKey}..${todayKey}` });
+        details.unshift({ dry_run: true, manual: caller.manual, would_write: importedCount, range: `${monthStartKey}..${todayKey}`, partial: budgetExceeded });
         await finishSyncLog(logId, {
           status: 'dry_run',
           technicians_processed: techniciansProcessed,
           rows_written: importedCount,
           details,
         });
-        return NextResponse.json({ status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, details });
+        return NextResponse.json({ status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, partial: budgetExceeded, details });
       }
 
-      const overallStatus = importedCount ? 'success' : 'partial';
+      const overallStatus = budgetExceeded ? 'partial' : importedCount ? 'success' : 'partial';
       await recordHoursImportResult({ status: overallStatus });
       await finishSyncLog(logId, {
         status: overallStatus,
@@ -265,7 +299,7 @@ export async function GET(request: NextRequest) {
         details,
       });
 
-      return NextResponse.json({ status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, details });
+      return NextResponse.json({ status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, partial: budgetExceeded, details });
     } finally {
       await browser.close();
     }

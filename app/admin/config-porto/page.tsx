@@ -48,6 +48,8 @@ function jobDetailActionLabel(action: string | undefined) {
       return 'Falha ao buscar escala (usou 08:00 como aproximação)';
     case 'check_only':
       return 'Só checagem — mês já importado';
+    case 'time_budget_exceeded_stopping_early':
+      return 'Execução parou por limite de tempo (continua na próxima)';
     default:
       return action || '-';
   }
@@ -209,7 +211,16 @@ export default function ConfigPortoPage() {
     setJobModalOpen(true);
     try {
       const response = await fetch(`/api/cron/porto-${jobType === 'hours' ? 'hours' : 'schedule'}`);
-      const data = await response.json();
+      const rawText = await response.text();
+      let data: PortoJobResult;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        // The route itself always returns JSON — a non-JSON body means the platform (Vercel)
+        // cut the invocation off before our own response was sent, e.g. a timeout.
+        setJobResult({ status: 'error', error: `A execução não terminou a tempo ou falhou na Vercel (resposta não veio em JSON, status ${response.status}). Veja os logs da function para detalhes.` });
+        return;
+      }
       setJobResult(data);
     } catch (error) {
       setJobResult({ status: 'error', error: error instanceof Error ? error.message : 'Falha ao rodar o teste.' });
