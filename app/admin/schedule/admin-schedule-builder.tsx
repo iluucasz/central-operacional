@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { CalendarDays, Clock3, Download, FileText, Plus, Search, Trash2, Upload, Users, WandSparkles } from 'lucide-react';
+import { CalendarDays, ChevronDown, Clock3, Download, FileText, Plus, Search, Trash2, Upload, Users, WandSparkles } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
@@ -19,6 +19,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { compactName, formatDate, formatHours, formatTime, formatTimeRange, normalizeText } from '@/lib/formatters';
 import {
   createDateKey,
@@ -3366,27 +3372,52 @@ export function AdminScheduleBuilderPage() {
         title="Montagem da escala"
         description="Monte a escala diária, semanal, mensal ou anual com regras por dia, horários específicos, revezamentos, recorrências fixas, folgas gerais e ajustes individuais por técnico."
       >
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" onClick={() => handleAttendanceDialogChange(true)}>
             <Clock3 className="h-4 w-4" />
             Apontar horas
           </Button>
-          <Button type="button" variant="outline" onClick={openAttendanceImportDialog}>
-            <Upload className="h-4 w-4" />
-            Subir horas por planilha
-          </Button>
-          <Button type="button" variant="outline" onClick={handleDownloadAttendanceImportTemplate}>
-            <Download className="h-4 w-4" />
-            Baixar modelo XLSX
-          </Button>
-          <Button type="button" variant="outline" onClick={handleExportSpreadsheet}>
-            <Download className="h-4 w-4" />
-            Planilha
-          </Button>
-          <Button type="button" variant="outline" onClick={handleExportPdf}>
-            <FileText className="h-4 w-4" />
-            PDF
-          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline">
+                <Upload className="h-4 w-4" />
+                Importar horas
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={openAttendanceImportDialog}>
+                <Upload className="h-4 w-4" />
+                Subir horas por planilha
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleDownloadAttendanceImportTemplate}>
+                <Download className="h-4 w-4" />
+                Baixar modelo XLSX
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button type="button" variant="outline">
+                <Download className="h-4 w-4" />
+                Exportar
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={handleExportSpreadsheet}>
+                <Download className="h-4 w-4" />
+                Planilha
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleExportPdf}>
+                <FileText className="h-4 w-4" />
+                PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <Button type="button" onClick={() => setIsFormDialogOpen(true)}>
             <WandSparkles className="h-4 w-4" />
             Montar escala

@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  ShieldCheck,
   TrendingUp,
   Users,
   WalletCards,
@@ -42,6 +43,7 @@ const adminLinks: NavItem[] = [
   { href: '/admin/faturamento', label: 'Faturamento', icon: TrendingUp },
   { href: '/admin/financeiro', label: 'Controle de Despesas', icon: Landmark },
   { href: '/admin/library', label: 'Biblioteca', icon: BookOpen },
+  { href: '/admin/config-porto', label: 'Config. Porto', icon: ShieldCheck },
 ];
 
 const technicianLinks: NavItem[] = [

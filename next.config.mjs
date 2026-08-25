@@ -6,6 +6,7 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  serverExternalPackages: ['playwright-core', '@sparticuz/chromium'],
 }
 
 export default nextConfig

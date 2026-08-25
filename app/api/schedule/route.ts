@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
+import { replaceGeneratedScheduleRows } from '@/lib/schedule-write-service';
 import {
   buildPersistedSchedule,
   getScheduleRange,
@@ -424,60 +425,14 @@ export async function PUT(request: NextRequest) {
 
     const { startDate, endDate } = getScheduleRange(parsedInput.period_mode, parsedInput.year, parsedInput.month, parsedInput.date);
 
-    const preservedRows = await sql.query(
-      `
-        SELECT technician_id, date
-        FROM schedule
-        WHERE technician_id = ANY($1)
-          AND date >= $2
-          AND date <= $3
-          AND (
-            status = 'completed'
-            OR notes LIKE 'Apontamento manual:%'
-          )
-      `,
-      [targetTechnicianIds, startDate, endDate],
-    );
+    const generatedRows = buildPersistedSchedule(parsedInput, targetTechnicianIds);
 
-    const preservedKeys = new Set(
-      preservedRows.map((row) => `${String(row.technician_id)}::${String(row.date).slice(0, 10)}`),
-    );
-
-    const generatedRows = buildPersistedSchedule(parsedInput, targetTechnicianIds).filter(
-      (row) => !preservedKeys.has(`${row.technician_id}::${row.date}`),
-    );
-
-    const persistedSchedules = await sql.query(
-      `
-        WITH deleted AS (
-          DELETE FROM schedule
-          WHERE technician_id = ANY($1)
-            AND date >= $2
-            AND date <= $3
-            AND status <> 'completed'
-            AND COALESCE(notes, '') NOT LIKE 'Apontamento manual:%'
-          RETURNING 1
-        ),
-        input_rows AS (
-          SELECT *
-          FROM jsonb_to_recordset($4::jsonb) AS item(
-            technician_id uuid,
-            date date,
-            start_time time,
-            end_time time,
-            status schedule_status,
-            notes text
-          )
-        )
-        INSERT INTO schedule (
-          technician_id, date, start_time, end_time, status, notes
-        )
-        SELECT technician_id, date, start_time, end_time, status, notes
-        FROM input_rows
-        RETURNING id, technician_id, date, start_time, end_time, status, notes, created_at
-      `,
-      [targetTechnicianIds, startDate, endDate, JSON.stringify(generatedRows)],
-    );
+    const { inserted: persistedSchedules, preservedCount } = await replaceGeneratedScheduleRows({
+      technicianIds: targetTechnicianIds,
+      startDate,
+      endDate,
+      rows: generatedRows,
+    });
 
     return NextResponse.json(
       {
@@ -486,7 +441,7 @@ export async function PUT(request: NextRequest) {
           startDate,
           endDate,
           technicians: targetTechnicianIds.length,
-          preservedCompleted: preservedKeys.size,
+          preservedCompleted: preservedCount,
           inserted: persistedSchedules.length,
         },
       },

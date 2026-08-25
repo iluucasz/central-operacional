@@ -1,25 +1,9 @@
 import { neon } from '@neondatabase/serverless';
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
+import { applyWorkHourEntries, getActiveTechnicianIds, getIsoWeekNumber, type AttendanceStatus, type WorkHourEntry } from '@/lib/work-hours-service';
 
 const sql = neon(process.env.DATABASE_URL!);
-
-type WorkHourEntry = {
-  technician_id: string;
-  date: string;
-  start_time: string;
-  end_time: string;
-  planned_start_time: string;
-  planned_end_time: string;
-  hours_worked: number;
-  week_number: number;
-  month: number;
-  year: number;
-  attendance_status: AttendanceStatus;
-  notes: string;
-};
-
-type AttendanceStatus = 'worked' | 'day_off' | 'missed' | 'justified';
 
 function isValidTime(value: unknown) {
   return typeof value === 'string' && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(value);
@@ -36,14 +20,6 @@ function isValidDateKey(value: unknown) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00Z`).getTime());
 }
 
-function getIsoWeekNumber(dateKey: string) {
-  const date = new Date(`${dateKey}T00:00:00Z`);
-  const day = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() + 4 - day);
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-}
-
 function parseHours(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 24 ? Number(parsed.toFixed(2)) : null;
@@ -51,33 +27,6 @@ function parseHours(value: unknown) {
 
 function isAttendanceStatus(value: unknown): value is AttendanceStatus {
   return value === 'worked' || value === 'day_off' || value === 'missed' || value === 'justified';
-}
-
-function getScheduleStatusForAttendance(status: AttendanceStatus) {
-  return status === 'worked' ? 'completed' : 'cancelled';
-}
-
-function getAttendanceLabel(status: AttendanceStatus) {
-  if (status === 'day_off') return 'folga';
-  if (status === 'missed') return 'falta';
-  if (status === 'justified') return 'justificado';
-  return 'trabalhou';
-}
-
-function buildAttendanceNote(entry: WorkHourEntry) {
-  const cleanNotes = entry.notes.trim();
-  const base = `Apontamento manual: ${getAttendanceLabel(entry.attendance_status)}; previsto=${entry.planned_start_time}-${entry.planned_end_time}`;
-
-  return cleanNotes ? `${base}; obs=${cleanNotes}` : base;
-}
-
-async function getActiveTechnicianIds(technicianIds: string[]) {
-  if (!technicianIds.length) {
-    return new Set<string>();
-  }
-
-  const rows = await sql.query("SELECT id FROM technicians WHERE status = 'active' AND id = ANY($1)", [technicianIds]);
-  return new Set(rows.map((row) => String(row.id)));
 }
 
 export async function GET(request: NextRequest) {
@@ -189,61 +138,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Nenhum apontamento válido informado.' }, { status: 400 });
       }
 
-      const activeTechnicianIds = await getActiveTechnicianIds(Array.from(new Set(parsedEntries.map((entry) => entry.technician_id))));
-      const entriesForActiveTechnicians = parsedEntries.filter((entry) => activeTechnicianIds.has(entry.technician_id));
+      const { workHours, schedules, count, skippedInactive } = await applyWorkHourEntries(parsedEntries, { source: 'manual' });
 
-      if (!entriesForActiveTechnicians.length) {
+      if (!count) {
         return NextResponse.json({ error: 'Nenhum apontamento para tecnico ativo foi informado.' }, { status: 400 });
       }
 
-      const saved = [];
-      const schedules = [];
-
-      for (const entry of entriesForActiveTechnicians) {
-        await sql`
-          DELETE FROM work_hours
-          WHERE technician_id = ${entry.technician_id}
-            AND date = ${entry.date}
-        `;
-
-        if (entry.attendance_status === 'worked') {
-          const inserted = await sql`
-            INSERT INTO work_hours (
-              technician_id, date, start_time, end_time, hours_worked,
-              week_number, month, year
-            )
-            VALUES (
-              ${entry.technician_id}, ${entry.date}, ${entry.start_time}, ${entry.end_time}, ${entry.hours_worked},
-              ${entry.week_number}, ${entry.month}, ${entry.year}
-            )
-            RETURNING *
-          `;
-
-          saved.push(inserted[0]);
-        }
-
-        await sql`
-          DELETE FROM schedule
-          WHERE technician_id = ${entry.technician_id}
-            AND date = ${entry.date}
-        `;
-
-        const scheduleStatus = getScheduleStatusForAttendance(entry.attendance_status);
-        const scheduleNote = buildAttendanceNote(entry);
-        const scheduleRow = await sql`
-          INSERT INTO schedule (
-            technician_id, date, start_time, end_time, status, notes
-          )
-          VALUES (
-            ${entry.technician_id}, ${entry.date}, ${entry.start_time}, ${entry.end_time}, ${scheduleStatus}, ${scheduleNote}
-          )
-          RETURNING *
-        `;
-
-        schedules.push(scheduleRow[0]);
-      }
-
-      return NextResponse.json({ workHours: saved, schedules, count: entriesForActiveTechnicians.length, skippedInactive: parsedEntries.length - entriesForActiveTechnicians.length }, { status: 201 });
+      return NextResponse.json({ workHours, schedules, count, skippedInactive }, { status: 201 });
     }
 
     const {
