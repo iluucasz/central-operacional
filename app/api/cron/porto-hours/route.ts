@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isValidCronRequest } from '@/lib/cron-auth';
+import { resolveCronCaller } from '@/lib/cron-auth';
 import { decryptPortoPassword } from '@/lib/porto-crypto';
 import { getEscalaForCurrentMonth } from '@/lib/porto-integration/escala';
 import { launchPortoBrowser } from '@/lib/porto-integration/browser';
@@ -53,15 +53,20 @@ function diffHours(startTime: string, endTime: string) {
  * disabling it, since this feeds payroll-affecting data.
  */
 export async function GET(request: NextRequest) {
-  if (!isValidCronRequest(request)) {
+  const caller = await resolveCronCaller(request);
+  if (!caller.authorized) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const config = await getPortoConfig();
-  if (!config || !config.automation_enabled || !config.encrypted_password || !config.cpf) {
+  const missingCredentials = !config || !config.encrypted_password || !config.cpf;
+  // Manual test clicks (admin session, not CRON_SECRET) work even with automation off — that's
+  // the whole point of letting an admin try it before committing to turning the real thing on.
+  if (missingCredentials || (!caller.manual && !config.automation_enabled)) {
     const logId = await startSyncLog('hours');
-    await finishSyncLog(logId, { status: 'skipped', error_message: 'Automação desligada ou credenciais não configuradas.' });
-    return NextResponse.json({ status: 'skipped' });
+    const errorMessage = missingCredentials ? 'Credenciais não configuradas.' : 'Automação desligada.';
+    await finishSyncLog(logId, { status: 'skipped', error_message: errorMessage });
+    return NextResponse.json({ status: 'skipped', error: errorMessage });
   }
 
   const logId = await startSyncLog('hours');
@@ -69,7 +74,8 @@ export async function GET(request: NextRequest) {
   let techniciansProcessed = 0;
   let importedCount = 0;
   let rowsWritten = 0;
-  const dryRun = config.dry_run_only !== false;
+  // Manual test runs never write real data, regardless of the dry_run_only toggle.
+  const dryRun = caller.manual || config.dry_run_only !== false;
 
   try {
     const password = decryptPortoPassword(config.encrypted_password as string);
@@ -165,14 +171,14 @@ export async function GET(request: NextRequest) {
       }
 
       if (dryRun) {
-        details.unshift({ dry_run: true, would_write: importedCount });
+        details.unshift({ dry_run: true, manual: caller.manual, would_write: importedCount });
         await finishSyncLog(logId, {
           status: 'dry_run',
           technicians_processed: techniciansProcessed,
           rows_written: importedCount,
           details,
         });
-        return NextResponse.json({ status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount });
+        return NextResponse.json({ status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, details });
       }
 
       const overallStatus = importedCount ? 'success' : 'partial';
@@ -184,15 +190,19 @@ export async function GET(request: NextRequest) {
         details,
       });
 
-      return NextResponse.json({ status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten });
+      return NextResponse.json({ status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, details });
     } finally {
       await browser.close();
     }
   } catch (error) {
     const message = error instanceof PortoLoginError ? error.message : 'Erro inesperado ao importar horas do Porto.';
     console.error('[cron/porto-hours] error:', error);
-    await recordHoursImportResult({ status: 'error', error: message });
+    // Only the real scheduled run's bookkeeping should reflect an error — a failed manual test
+    // shouldn't make the admin panel think today's real automated import failed.
+    if (!caller.manual) {
+      await recordHoursImportResult({ status: 'error', error: message });
+    }
     await finishSyncLog(logId, { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, details, error_message: message });
-    return NextResponse.json({ status: 'error', error: message }, { status: 500 });
+    return NextResponse.json({ status: 'error', error: message, details }, { status: 500 });
   }
 }

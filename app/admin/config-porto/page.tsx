@@ -1,14 +1,62 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
-import { CheckCircle2, KeyRound, Loader2, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, FlaskConical, KeyRound, Loader2, XCircle } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { LoadingState } from '@/components/loading-state';
 import { PageHeader } from '@/components/page-header';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { useAppSession } from '@/hooks/use-app-session';
+
+type PortoJobDetail = Record<string, unknown> & { qra?: string; action?: string };
+
+type PortoJobResult = {
+  status: string;
+  technicians_processed?: number;
+  would_write?: number;
+  rows_written?: number;
+  details?: PortoJobDetail[];
+  error?: string;
+};
+
+function jobDetailActionLabel(action: string | undefined) {
+  switch (action) {
+    case 'imported':
+    case 'would_import':
+      return 'Importado';
+    case 'skipped_no_match':
+      return 'Sem técnico correspondente no sistema';
+    case 'no_services':
+      return 'Nenhum serviço encontrado hoje';
+    case 'no_completion_time':
+      return 'Sem horário de conclusão encontrado';
+    case 'invalid_hours':
+      return 'Horas calculadas inválidas';
+    case 'escala_fetch_failed':
+    case 'escala_fetch_failed_fallback_0800':
+      return 'Falha ao buscar escala (usou 08:00 como aproximação)';
+    case 'check_only':
+      return 'Só checagem — mês já importado';
+    default:
+      return action || '-';
+  }
+}
+
+function formatDetailExtra(detail: PortoJobDetail) {
+  const { qra, action, technician_id, ...rest } = detail;
+  const entries = Object.entries(rest).filter(([, v]) => v !== undefined && v !== null && v !== '');
+  if (!entries.length) return '-';
+  return entries.map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join('; ');
+}
 
 type PortoConfig = {
   cpf: string;
@@ -75,6 +123,11 @@ export default function ConfigPortoPage() {
 
   const [isTestingLogin, setIsTestingLogin] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; screenshotUrl?: string | null } | null>(null);
+
+  const [runningJob, setRunningJob] = useState<'hours' | 'schedule' | null>(null);
+  const [jobModalOpen, setJobModalOpen] = useState(false);
+  const [jobModalJobType, setJobModalJobType] = useState<'hours' | 'schedule' | null>(null);
+  const [jobResult, setJobResult] = useState<PortoJobResult | null>(null);
 
   async function loadConfig() {
     setIsDataLoading(true);
@@ -144,6 +197,23 @@ export default function ConfigPortoPage() {
       setTestResult({ success: false, message: 'Falha ao testar login.' });
     } finally {
       setIsTestingLogin(false);
+    }
+  }
+
+  async function handleRunTestJob(jobType: 'hours' | 'schedule') {
+    setRunningJob(jobType);
+    setJobModalJobType(jobType);
+    setJobResult(null);
+    setJobModalOpen(true);
+    try {
+      const response = await fetch(`/api/cron/porto-${jobType === 'hours' ? 'hours' : 'schedule'}`);
+      const data = await response.json();
+      setJobResult(data);
+    } catch (error) {
+      setJobResult({ status: 'error', error: error instanceof Error ? error.message : 'Falha ao rodar o teste.' });
+    } finally {
+      setRunningJob(null);
+      loadConfig();
     }
   }
 
@@ -273,6 +343,24 @@ export default function ConfigPortoPage() {
       </div>
 
       <div className="mt-4">
+        <DataPanel
+          title="Testes manuais"
+          description="Roda o job inteiro (login, busca, cálculo) sem gravar nada em escala/horas — só mostra o que seria feito. Não conta pro limite de 1x/dia do agendamento automático, pode clicar quantas vezes quiser."
+        >
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => handleRunTestJob('hours')} disabled={runningJob !== null}>
+              {runningJob === 'hours' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+              Testar apontamento de horas
+            </Button>
+            <Button type="button" variant="outline" onClick={() => handleRunTestJob('schedule')} disabled={runningJob !== null}>
+              {runningJob === 'schedule' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+              Testar escala
+            </Button>
+          </div>
+        </DataPanel>
+      </div>
+
+      <div className="mt-4">
         <DataPanel title="Histórico de execuções" description="Últimas execuções registradas pela automação.">
           {logs.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nenhuma execução registrada ainda.</p>
@@ -306,6 +394,80 @@ export default function ConfigPortoPage() {
           )}
         </DataPanel>
       </div>
+
+      <Dialog open={jobModalOpen} onOpenChange={setJobModalOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              Teste — {jobModalJobType === 'hours' ? 'Apontamento de horas' : 'Escala'}
+            </DialogTitle>
+            <DialogDescription>
+              Simulação real contra o Portal do Prestador. Nada foi gravado em escala ou horas.
+            </DialogDescription>
+          </DialogHeader>
+
+          {runningJob ? (
+            <div className="flex flex-col items-center gap-3 py-10 text-sm text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              <p>Rodando login, busca e cálculo no Porto... isso pode levar até 1 minuto.</p>
+            </div>
+          ) : jobResult ? (
+            <div className="flex flex-col gap-4">
+              <div className={`flex items-start gap-2 rounded-md border p-3 text-sm ${jobResult.status === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : jobResult.status === 'skipped' ? 'border-border bg-secondary/40 text-muted-foreground' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+                {jobResult.status === 'error' ? (
+                  <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                ) : jobResult.status === 'skipped' ? (
+                  <Clock3 className="mt-0.5 h-4 w-4 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                )}
+                <span>
+                  {statusLabel(jobResult.status)}
+                  {jobResult.error ? ` — ${jobResult.error}` : ''}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-4 text-sm">
+                <div>
+                  <p className="text-muted-foreground">Técnicos processados</p>
+                  <p className="text-lg font-semibold text-foreground">{jobResult.technicians_processed ?? '-'}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Linhas que seriam gravadas</p>
+                  <p className="text-lg font-semibold text-foreground">{jobResult.would_write ?? jobResult.rows_written ?? '-'}</p>
+                </div>
+              </div>
+
+              {jobResult.details && jobResult.details.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-xs uppercase text-muted-foreground">
+                        <th className="py-2 pr-4">QRA</th>
+                        <th className="py-2 pr-4">Resultado</th>
+                        <th className="py-2">Detalhes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {jobResult.details
+                        .filter((detail) => detail.qra)
+                        .map((detail, index) => (
+                          <tr key={`${detail.qra}-${index}`} className="border-b border-border last:border-0">
+                            <td className="py-2 pr-4">{detail.qra}</td>
+                            <td className="py-2 pr-4">{jobDetailActionLabel(detail.action)}</td>
+                            <td className="py-2 text-muted-foreground">{formatDetailExtra(detail)}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Nenhum técnico processado nesse teste.</p>
+              )}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

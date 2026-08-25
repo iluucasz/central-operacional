@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isValidCronRequest } from '@/lib/cron-auth';
+import { resolveCronCaller } from '@/lib/cron-auth';
 import { decryptPortoPassword } from '@/lib/porto-crypto';
 import { launchPortoBrowser } from '@/lib/porto-integration/browser';
 import { getEscalaForCurrentMonth } from '@/lib/porto-integration/escala';
@@ -36,19 +36,25 @@ function getMonthDateRange() {
 }
 
 export async function GET(request: NextRequest) {
-  if (!isValidCronRequest(request)) {
+  const caller = await resolveCronCaller(request);
+  if (!caller.authorized) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const config = await getPortoConfig();
-  if (!config || !config.automation_enabled || !config.encrypted_password || !config.cpf) {
+  const missingCredentials = !config || !config.encrypted_password || !config.cpf;
+  if (missingCredentials || (!caller.manual && !config.automation_enabled)) {
     const logId = await startSyncLog('schedule');
-    await finishSyncLog(logId, { status: 'skipped', error_message: 'Automação desligada ou credenciais não configuradas.' });
-    return NextResponse.json({ status: 'skipped' });
+    const errorMessage = missingCredentials ? 'Credenciais não configuradas.' : 'Automação desligada.';
+    await finishSyncLog(logId, { status: 'skipped', error_message: errorMessage });
+    return NextResponse.json({ status: 'skipped', error: errorMessage });
   }
 
   const currentMonthKey = getCurrentMonthKey();
-  const alreadyImportedThisMonth = config.last_schedule_import_month === currentMonthKey && config.last_schedule_import_status === 'success';
+  // Manual test clicks always run the full preview — an admin clicking "testar" wants to see what
+  // would actually be imported, not the lightweight "already done this month" shortcut.
+  const alreadyImportedThisMonth =
+    !caller.manual && config.last_schedule_import_month === currentMonthKey && config.last_schedule_import_status === 'success';
 
   if (alreadyImportedThisMonth) {
     const lastCheck = config.last_schedule_check_at ? new Date(config.last_schedule_check_at as string).getTime() : 0;
@@ -131,20 +137,20 @@ export async function GET(request: NextRequest) {
         details.push({ qra: socorrista.qra, technician_id: technician.id, action: 'imported', days: escalaDays.length });
       }
 
-      const dryRun = config.dry_run_only !== false;
+      const dryRun = caller.manual || config.dry_run_only !== false;
 
       if (dryRun) {
         // Modo teste: calcula o que seria importado mas não grava, e não marca o mês como
         // importado — senão, ao desligar o modo teste, o import real seria pulado por engano.
         rowsWritten = rows.length;
-        details.unshift({ dry_run: true, would_write: rows.length });
+        details.unshift({ dry_run: true, manual: caller.manual, would_write: rows.length });
         await finishSyncLog(logId, {
           status: 'dry_run',
           technicians_processed: techniciansProcessed,
           rows_written: rowsWritten,
           details,
         });
-        return NextResponse.json({ status: 'dry_run', technicians_processed: techniciansProcessed, would_write: rowsWritten });
+        return NextResponse.json({ status: 'dry_run', technicians_processed: techniciansProcessed, would_write: rowsWritten, details });
       }
 
       if (resolvedTechnicianIds.length && rows.length) {
@@ -166,15 +172,17 @@ export async function GET(request: NextRequest) {
         details,
       });
 
-      return NextResponse.json({ status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten });
+      return NextResponse.json({ status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, details });
     } finally {
       await browser.close();
     }
   } catch (error) {
     const message = error instanceof PortoLoginError ? error.message : 'Erro inesperado ao importar escala do Porto.';
     console.error('[cron/porto-schedule] error:', error);
-    await recordScheduleImportResult({ monthKey: currentMonthKey, status: 'error', error: message });
+    if (!caller.manual) {
+      await recordScheduleImportResult({ monthKey: currentMonthKey, status: 'error', error: message });
+    }
     await finishSyncLog(logId, { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, details, error_message: message });
-    return NextResponse.json({ status: 'error', error: message }, { status: 500 });
+    return NextResponse.json({ status: 'error', error: message, details }, { status: 500 });
   }
 }
