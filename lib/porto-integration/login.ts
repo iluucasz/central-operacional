@@ -55,7 +55,26 @@ export async function loginToPorto(page: Page, credentials: { cpf: string; passw
 
   await page.fill('#cpf', credentials.cpf);
   await page.fill('input[name="password"]', credentials.password);
+
+  // Clicking "entrar" triggers populateWithQRAsForCpf(), an async AJAX call that looks up which
+  // QRA(s) belong to this CPF before the page decides whether to auto-submit (single QRA) or show
+  // a picker modal (multiple QRAs). Waiting for that specific response — instead of an implicit
+  // delay — avoids a race where we check for the modal / consider login done before the site's
+  // own JS has had a chance to act on it.
+  const qraLookupPromise = page
+    .waitForResponse((res) => res.url().includes('/pdp-service/api/public/login/users/qras/'), { timeout: 15000 })
+    .catch(() => null);
+
   await page.click('input.inputEntrar[value="entrar"]');
+
+  const qraResponse = await qraLookupPromise;
+  const qraStatus = qraResponse?.status() ?? null;
+  const qraBody = qraResponse ? await qraResponse.text().catch(() => '') : '';
+
+  // Give the client JS a beat to act on the response (auto-submit or render the modal) before
+  // checking page state — the network response resolving doesn't guarantee the JS callback has
+  // finished running yet.
+  await page.waitForTimeout(1500);
 
   // Accounts linked to a single QRA (the common case) log in directly. If the CPF has more than
   // one QRA, the site shows a selection modal — handled defensively here, but not exercised
@@ -76,7 +95,7 @@ export async function loginToPorto(page: Page, credentials: { cpf: string; passw
 
   const session = await verifyPortoSession(page);
   if (!session.ok) {
-    const diagnostics = `url=${page.url()} status=${session.status} body="${session.bodySnippet}"`;
+    const diagnostics = `url=${page.url()} qraLookup(status=${qraStatus}, body="${qraBody.slice(0, 200)}") modalVisible=${modalVisible} sessionCheck(status=${session.status}, body="${session.bodySnippet}")`;
     throw new PortoLoginError(`Login no Porto falhou — verifique CPF e senha, ou o portal pode ter mudado. (${diagnostics})`);
   }
 }
