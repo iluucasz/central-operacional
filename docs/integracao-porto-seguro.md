@@ -239,3 +239,26 @@ Essas eram as duas únicas heurísticas em aberto — o resto da integração fo
 validado ao vivo nesta sessão e está com alta confiança. Continua recomendado
 rodar alguns dias com o modo de teste (`dry_run_only`) ligado antes de desligar,
 já que essa parte alimenta dado que afeta folha de pagamento.
+
+## Cobertura do job de horas: mês inteiro, não só "hoje" (2026-08-25)
+
+Ajustado após teste em produção: o job de apontamento de horas varre todo dia
+do dia 1 do mês corrente até hoje, em vez de checar só a data de hoje. Isso
+evita perder dias (ex: automação ligada no meio do mês, cron falhou um dia,
+serviço só aparece "Concluído" no dia seguinte).
+
+- A busca de serviço do Porto aceita **período** (`dataInicialInputDate` /
+  `dataFinalInputDate`), não só um dia — usado pra buscar o mês inteiro numa
+  chamada só, agrupando os resultados por técnico e data.
+- **Limite real do próprio site**: o JS deles limita o período a 15 dias (ajusta
+  a data final sozinho se você passar mais que isso) — `lib/porto-integration/servicos.ts`
+  quebra o intervalo em blocos de até 15 dias quando o mês já passou desse
+  tamanho.
+- **Fica barato mesmo cobrindo o mês todo**: antes de buscar o detalhe (caro —
+  1 busca+clique por serviço) de cada dia, o job confere no banco se aquele
+  `(técnico, data)` já tem uma linha `work_hours.source='porto'` — se já tem,
+  pula. Ou seja, a primeira execução depois de ligar a automação faz o trabalho
+  pesado do mês todo; os próximos dias, só o dia novo é processado.
+- A escala de cada técnico (pro horário previsto de início) é buscada uma vez
+  por técnico por execução, não uma vez por dia — reaproveitada pra todos os
+  dias novos daquele técnico na mesma rodada.

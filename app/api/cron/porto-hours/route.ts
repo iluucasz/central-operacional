@@ -1,28 +1,60 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveCronCaller } from '@/lib/cron-auth';
 import { decryptPortoPassword } from '@/lib/porto-crypto';
-import { getEscalaForCurrentMonth } from '@/lib/porto-integration/escala';
+import { getEscalaForCurrentMonth, type PortoEscalaDay } from '@/lib/porto-integration/escala';
 import { launchPortoBrowser } from '@/lib/porto-integration/browser';
 import { loginToPorto, PortoLoginError } from '@/lib/porto-integration/login';
 import { listSocorristas } from '@/lib/porto-integration/socorristas';
-import { getServicoDetail, searchServicosByDate } from '@/lib/porto-integration/servicos';
+import { getServicoDetail, searchServicosByDateRange, type PortoServiceRow } from '@/lib/porto-integration/servicos';
 import { resolveTechnicianByQra } from '@/lib/porto-integration/technician-match';
 import { finishSyncLog, getPortoConfig, recordHoursImportResult, startSyncLog } from '@/lib/porto-sync-log';
-import { applyWorkHourEntries, getIsoWeekNumber, type WorkHourEntry } from '@/lib/work-hours-service';
+import { applyWorkHourEntries, getExistingPortoImportedDates, getIsoWeekNumber, type WorkHourEntry } from '@/lib/work-hours-service';
+import type { Technician } from '@/lib/types';
 
 export const runtime = 'nodejs';
 export const maxDuration = 280;
 
 const MAX_PLAUSIBLE_SHIFT_HOURS = 16;
+const SEARCH_CHUNK_DAYS = 15; // matches the site's own client-side range cap (see servicos.ts)
 
 function getTodayKey() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
+function getMonthStartKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
 function toBrDate(dateKey: string) {
   const [year, month, day] = dateKey.split('-');
   return `${day}/${month}/${year}`;
+}
+
+function brDateToKey(brDate: string): string | null {
+  const match = brDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+  const [, day, month, year] = match;
+  return `${year}-${month}-${day}`;
+}
+
+function addDaysToKey(dateKey: string, days: number) {
+  const date = new Date(`${dateKey}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+/** Splits [startKey, endKey] into chunks of at most SEARCH_CHUNK_DAYS days each. */
+function buildDateChunks(startKey: string, endKey: string): { startDateKey: string; endDateKey: string }[] {
+  const chunks: { startDateKey: string; endDateKey: string }[] = [];
+  let cursor = startKey;
+  while (cursor <= endKey) {
+    const chunkEnd = addDaysToKey(cursor, SEARCH_CHUNK_DAYS - 1);
+    chunks.push({ startDateKey: cursor, endDateKey: chunkEnd > endKey ? endKey : chunkEnd });
+    cursor = addDaysToKey(chunkEnd > endKey ? endKey : chunkEnd, 1);
+  }
+  return chunks;
 }
 
 /** Handles shifts that cross midnight (e.g. 22:00 -> 02:00) by wrapping the end time forward a day. */
@@ -49,8 +81,12 @@ function diffHours(startTime: string, endTime: string) {
  * live) as a stand-in for the real start time, and the latest same-day service completion
  * timestamp as the end time. Accepted: an approximate start time is fine for this use case.
  *
- * Still recommended: review a few days of output in porto_sync_log with dry-run mode on before
- * disabling it, since this feeds payroll-affecting data.
+ * Coverage (2026-08-25, reviewed with the product owner): this job sweeps every day from the 1st
+ * of the current month through today in one run — not just "today" — since Porto's search form
+ * natively supports a date range (capped at 15 days by the site itself, so a month past day 15
+ * needs 2+ search chunks). To keep every run cheap after the first catch-up, it skips re-fetching
+ * service detail pages for (technician, date) pairs that already have a `source='porto'` row in
+ * `work_hours` — only genuinely new days do the expensive per-service detail lookup.
  */
 export async function GET(request: NextRequest) {
   const caller = await resolveCronCaller(request);
@@ -60,8 +96,6 @@ export async function GET(request: NextRequest) {
 
   const config = await getPortoConfig();
   const missingCredentials = !config || !config.encrypted_password || !config.cpf;
-  // Manual test clicks (admin session, not CRON_SECRET) work even with automation off — that's
-  // the whole point of letting an admin try it before committing to turning the real thing on.
   if (missingCredentials || (!caller.manual && !config.automation_enabled)) {
     const logId = await startSyncLog('hours');
     const errorMessage = missingCredentials ? 'Credenciais não configuradas.' : 'Automação desligada.';
@@ -85,11 +119,13 @@ export async function GET(request: NextRequest) {
       const page = await context.newPage();
       await loginToPorto(page, { cpf: config.cpf as string, password });
 
-      const dateKey = getTodayKey();
-      const brDate = toBrDate(dateKey);
-      const socorristas = await listSocorristas(page);
-      const services = await searchServicosByDate(page, dateKey);
+      const monthStartKey = getMonthStartKey();
+      const todayKey = getTodayKey();
 
+      const socorristas = await listSocorristas(page);
+
+      // Resolve all technicians up front so we know which (technician, date) pairs to skip.
+      const resolved: Array<{ qra: string; technician: Technician }> = [];
       for (const socorrista of socorristas) {
         techniciansProcessed++;
         const technician = await resolveTechnicianByQra(socorrista.qra);
@@ -97,81 +133,118 @@ export async function GET(request: NextRequest) {
           details.push({ qra: socorrista.qra, action: 'skipped_no_match' });
           continue;
         }
+        resolved.push({ qra: socorrista.qra, technician });
+      }
 
+      const technicianIds = resolved.map((r) => r.technician.id);
+      const existingDates = await getExistingPortoImportedDates(technicianIds, monthStartKey, todayKey);
+
+      // One search per 15-day chunk covers the whole month-to-date, instead of one per day.
+      const chunks = buildDateChunks(monthStartKey, todayKey);
+      const allServices: PortoServiceRow[] = [];
+      for (const chunk of chunks) {
+        const services = await searchServicosByDateRange(page, chunk);
+        allServices.push(...services);
+      }
+
+      const escalaCache = new Map<string, PortoEscalaDay[]>();
+
+      for (const { qra, technician } of resolved) {
         const namePrefix = technician.name.trim().toUpperCase().slice(0, 8);
-        const technicianServices = services.filter((service) => service.technicianNameFragment.toUpperCase().startsWith(namePrefix));
+        const technicianServices = allServices.filter((service) => service.technicianNameFragment.toUpperCase().startsWith(namePrefix));
 
         if (!technicianServices.length) {
-          details.push({ qra: socorrista.qra, technician_id: technician.id, action: 'no_services' });
+          details.push({ qra, technician_id: technician.id, action: 'no_services' });
           continue;
         }
 
-        // Only consider timestamps that actually fall on the date being processed — a service's
-        // detail page can list timestamps from other stages/days, and comparing bare "HH:MM"
-        // strings across different calendar days would otherwise pick the wrong "latest" time.
-        let latestCompletion: string | null = null;
+        // Group this technician's services by their programmed date (the day the work happened).
+        const servicesByDate = new Map<string, PortoServiceRow[]>();
         for (const service of technicianServices) {
-          const detail = await getServicoDetail(page, dateKey, { anoServico: service.anoServico, numeroServico: service.numeroServico });
-          for (const timestamp of detail.timestamps) {
-            if (!timestamp.startsWith(brDate)) continue;
-            const timeOnly = timestamp.split(' ')[1];
-            if (timeOnly && (!latestCompletion || timeOnly > latestCompletion)) {
-              latestCompletion = timeOnly;
+          const dateKey = brDateToKey(service.dataProgramada);
+          if (!dateKey) continue;
+          const list = servicesByDate.get(dateKey) ?? [];
+          list.push(service);
+          servicesByDate.set(dateKey, list);
+        }
+
+        for (const [dateKey, servicesForDay] of servicesByDate) {
+          const dedupKey = `${technician.id}::${dateKey}`;
+          if (existingDates.has(dedupKey)) {
+            details.push({ qra, technician_id: technician.id, action: 'already_imported', date: dateKey });
+            continue;
+          }
+
+          const brDate = toBrDate(dateKey);
+          const dayRange = { startDateKey: dateKey, endDateKey: dateKey };
+
+          let latestCompletion: string | null = null;
+          for (const service of servicesForDay) {
+            const detail = await getServicoDetail(page, dayRange, { anoServico: service.anoServico, numeroServico: service.numeroServico });
+            for (const timestamp of detail.timestamps) {
+              if (!timestamp.startsWith(brDate)) continue;
+              const timeOnly = timestamp.split(' ')[1];
+              if (timeOnly && (!latestCompletion || timeOnly > latestCompletion)) {
+                latestCompletion = timeOnly;
+              }
             }
           }
+
+          if (!latestCompletion) {
+            details.push({ qra, technician_id: technician.id, action: 'no_completion_time', date: dateKey });
+            continue;
+          }
+
+          let plannedStart = '08:00';
+          try {
+            if (!escalaCache.has(qra)) {
+              escalaCache.set(qra, await getEscalaForCurrentMonth(page, qra));
+            }
+            const escalaDays = escalaCache.get(qra) ?? [];
+            const dayOfMonth = Number(dateKey.slice(8, 10));
+            plannedStart = escalaDays.find((day) => day.day === dayOfMonth)?.startTime ?? '08:00';
+          } catch (escalaError) {
+            details.push({ qra, technician_id: technician.id, action: 'escala_fetch_failed_fallback_0800', date: dateKey, error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
+          }
+
+          const hoursWorked = diffHours(plannedStart, latestCompletion);
+          if (hoursWorked <= 0 || hoursWorked > MAX_PLAUSIBLE_SHIFT_HOURS) {
+            details.push({ qra, technician_id: technician.id, action: 'invalid_hours', date: dateKey, plannedStart, latestCompletion, hoursWorked });
+            continue;
+          }
+
+          const entry: WorkHourEntry = {
+            technician_id: technician.id,
+            date: dateKey,
+            start_time: plannedStart,
+            end_time: latestCompletion,
+            planned_start_time: plannedStart,
+            planned_end_time: latestCompletion,
+            hours_worked: hoursWorked,
+            week_number: getIsoWeekNumber(dateKey),
+            month: Number(dateKey.slice(5, 7)),
+            year: Number(dateKey.slice(0, 4)),
+            attendance_status: 'worked',
+            notes: 'Importado automaticamente do Porto Seguro.',
+          };
+
+          importedCount++;
+
+          if (dryRun) {
+            details.push({ qra, technician_id: technician.id, action: 'would_import', date: dateKey, hoursWorked });
+            continue;
+          }
+
+          // Write per (technician, date) — not batched — so a timeout partway through still
+          // preserves everything computed so far instead of discarding the whole run.
+          const result = await applyWorkHourEntries([entry], { source: 'porto' });
+          rowsWritten += result.count;
+          details.push({ qra, technician_id: technician.id, action: 'imported', date: dateKey, hoursWorked });
         }
-
-        if (!latestCompletion) {
-          details.push({ qra: socorrista.qra, technician_id: technician.id, action: 'no_completion_time' });
-          continue;
-        }
-
-        let plannedStart = '08:00';
-        try {
-          const escalaDays = await getEscalaForCurrentMonth(page, socorrista.qra);
-          const todayDay = Number(dateKey.slice(8, 10));
-          plannedStart = escalaDays.find((day) => day.day === todayDay)?.startTime ?? '08:00';
-        } catch (escalaError) {
-          details.push({ qra: socorrista.qra, technician_id: technician.id, action: 'escala_fetch_failed_fallback_0800', error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
-        }
-
-        const hoursWorked = diffHours(plannedStart, latestCompletion);
-        if (hoursWorked <= 0 || hoursWorked > MAX_PLAUSIBLE_SHIFT_HOURS) {
-          details.push({ qra: socorrista.qra, technician_id: technician.id, action: 'invalid_hours', plannedStart, latestCompletion, hoursWorked });
-          continue;
-        }
-
-        const entry: WorkHourEntry = {
-          technician_id: technician.id,
-          date: dateKey,
-          start_time: plannedStart,
-          end_time: latestCompletion,
-          planned_start_time: plannedStart,
-          planned_end_time: latestCompletion,
-          hours_worked: hoursWorked,
-          week_number: getIsoWeekNumber(dateKey),
-          month: Number(dateKey.slice(5, 7)),
-          year: Number(dateKey.slice(0, 4)),
-          attendance_status: 'worked',
-          notes: 'Importado automaticamente do Porto Seguro.',
-        };
-
-        importedCount++;
-
-        if (dryRun) {
-          details.push({ qra: socorrista.qra, technician_id: technician.id, action: 'would_import', hoursWorked });
-          continue;
-        }
-
-        // Write per technician (not once at the end) so a timeout partway through the loop still
-        // preserves everything computed so far, instead of discarding the whole day's work.
-        const result = await applyWorkHourEntries([entry], { source: 'porto' });
-        rowsWritten += result.count;
-        details.push({ qra: socorrista.qra, technician_id: technician.id, action: 'imported', hoursWorked });
       }
 
       if (dryRun) {
-        details.unshift({ dry_run: true, manual: caller.manual, would_write: importedCount });
+        details.unshift({ dry_run: true, manual: caller.manual, would_write: importedCount, range: `${monthStartKey}..${todayKey}` });
         await finishSyncLog(logId, {
           status: 'dry_run',
           technicians_processed: techniciansProcessed,
@@ -197,8 +270,6 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     const message = error instanceof PortoLoginError ? error.message : 'Erro inesperado ao importar horas do Porto.';
     console.error('[cron/porto-hours] error:', error);
-    // Only the real scheduled run's bookkeeping should reflect an error — a failed manual test
-    // shouldn't make the admin panel think today's real automated import failed.
     if (!caller.manual) {
       await recordHoursImportResult({ status: 'error', error: message });
     }

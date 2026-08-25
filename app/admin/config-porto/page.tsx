@@ -36,7 +36,9 @@ function jobDetailActionLabel(action: string | undefined) {
     case 'skipped_no_match':
       return 'Sem técnico correspondente no sistema';
     case 'no_services':
-      return 'Nenhum serviço encontrado hoje';
+      return 'Nenhum serviço encontrado no período';
+    case 'already_imported':
+      return 'Já importado antes (pulado)';
     case 'no_completion_time':
       return 'Sem horário de conclusão encontrado';
     case 'invalid_hours':
@@ -265,7 +267,8 @@ export default function ConfigPortoPage() {
               <div>
                 <p className="text-sm font-medium text-foreground">Automação ligada</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Apontamento de horas: todo fim de dia. Escala: checagem diária, importa só quando sai uma nova escala mensal.
+                  Apontamento de horas: todo fim de dia, varre o mês inteiro até hoje (pula dias já
+                  importados). Escala: checagem diária, importa só quando sai uma nova escala mensal.
                 </p>
               </div>
               <Switch checked={automationEnabled} onCheckedChange={setAutomationEnabled} />

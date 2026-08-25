@@ -45,6 +45,30 @@ function buildAttendanceNote(entry: WorkHourEntry) {
   return cleanNotes ? `${base}; obs=${cleanNotes}` : base;
 }
 
+/**
+ * Returns the set of "technicianId::date" keys that already have a Porto-imported work_hours row
+ * within the given range — used by the hours-import job to skip re-fetching service detail pages
+ * for days it has already covered, so a full month-to-date sweep stays cheap on every run after
+ * the first catch-up.
+ */
+export async function getExistingPortoImportedDates(technicianIds: string[], startDate: string, endDate: string): Promise<Set<string>> {
+  if (!technicianIds.length) return new Set();
+
+  const rows = await sql.query(
+    `
+      SELECT technician_id, date
+      FROM work_hours
+      WHERE source = 'porto'
+        AND technician_id = ANY($1)
+        AND date >= $2
+        AND date <= $3
+    `,
+    [technicianIds, startDate, endDate],
+  );
+
+  return new Set(rows.map((row) => `${String(row.technician_id)}::${String(row.date).slice(0, 10)}`));
+}
+
 export async function getActiveTechnicianIds(technicianIds: string[]) {
   if (!technicianIds.length) {
     return new Set<string>();

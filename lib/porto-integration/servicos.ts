@@ -5,6 +5,7 @@ export type PortoServiceRow = {
   numeroServico: string;
   anoServico: string;
   technicianNameFragment: string;
+  /** "dd/mm/aaaa" as shown in the results table — the scheduled/programmed date, not necessarily the actual completion date (see getServicoDetail). */
   dataProgramada: string;
 };
 
@@ -16,9 +17,12 @@ export type PortoServiceDetail = {
   latestTimestamp: string | null;
 };
 
+export type PortoDateRange = { startDateKey: string; endDateKey: string };
+
 const SEARCH_MENU_ID = 'PDP-00089';
 const SEARCH_URL = 'https://wwws.portoseguro.com.br/integracoesportaldeprestadores/click/ConServCons.xhtml?portal=2';
 const SERVICE_CODE_PATTERN = /^(\d{5,8})\/(\d{2})$/;
+const MAX_RANGE_DAYS = 15; // matches the site's own client-side cap (see runServiceSearch)
 
 function toBrDate(dateKey: string) {
   const [year, month, day] = dateKey.split('-');
@@ -26,19 +30,23 @@ function toBrDate(dateKey: string) {
 }
 
 /**
- * Opens the service search page and runs a search for the given date. Validated live: the date
- * fields start out hidden inside a `display:none` div until "TIPO DE BUSCA" is set to "Combinada
- * com Cliente" (value "1") — selecting that first is required, otherwise the date inputs are
- * unreachable (an earlier attempt at posting the form directly, bypassing this UI step, failed
- * with a 500 from the server).
+ * Opens the service search page and runs a search for the given date range. Validated live: the
+ * date fields start out hidden inside a `display:none` div until "TIPO DE BUSCA" is set to
+ * "Combinada com Cliente" (value "1") — selecting that first is required, otherwise the date
+ * inputs are unreachable (an earlier attempt at posting the form directly, bypassing this UI
+ * step, failed with a 500 from the server).
+ *
+ * The site's own JS clamps the range to 15 days (adjusts dataFinal on blur if it's further out) —
+ * mirrored here defensively so callers get a predictable range rather than a silently-adjusted one.
  */
-async function runServiceSearch(page: Page, dateKey: string): Promise<Frame> {
+async function runServiceSearch(page: Page, range: PortoDateRange): Promise<Frame> {
   const frame = await openPortalFrame(page, SEARCH_MENU_ID, SEARCH_URL);
-  const brDate = toBrDate(dateKey);
+  const brStart = toBrDate(range.startDateKey);
+  const brEnd = toBrDate(clampRangeEnd(range));
 
   await frame.selectOption('#tipoData', '1');
-  await frame.fill('input[name="dataInicialInputDate"]', brDate);
-  await frame.fill('input[name="dataFinalInputDate"]', brDate);
+  await frame.fill('input[name="dataInicialInputDate"]', brStart);
+  await frame.fill('input[name="dataFinalInputDate"]', brEnd);
 
   await Promise.all([
     frame.waitForNavigation({ waitUntil: 'networkidle', timeout: 20000 }).catch(() => null),
@@ -48,13 +56,23 @@ async function runServiceSearch(page: Page, dateKey: string): Promise<Frame> {
   return frame;
 }
 
+function clampRangeEnd(range: PortoDateRange): string {
+  const start = new Date(`${range.startDateKey}T00:00:00Z`);
+  const end = new Date(`${range.endDateKey}T00:00:00Z`);
+  const maxEnd = new Date(start.getTime() + MAX_RANGE_DAYS * 86400000);
+  return end.getTime() > maxEnd.getTime() ? maxEnd.toISOString().slice(0, 10) : range.endDateKey;
+}
+
 /**
- * Searches services attended on a given date. Validated live: the resulting table lists service
- * order codes as visible "NNNNNNN/AA" text inside `<a onclick="changeUrlAW(this, ano, numero, ...)">`
- * links — the same NNNNNNN/AA text is used here to extract numeroServico/anoServico per row.
+ * Searches every service attended within a date range in one page load (the search form natively
+ * supports a period, not just a single day — used here to sweep "start of month through today" in
+ * one call instead of one search per day). Validated live: the resulting table lists service order
+ * codes as visible "NNNNNNN/AA" text inside `<a onclick="changeUrlAW(this, ano, numero, ...)">`
+ * links — the same NNNNNNN/AA text is used here to extract numeroServico/anoServico per row, along
+ * with each row's own programmed date so callers can group results by day.
  */
-export async function searchServicosByDate(page: Page, dateKey: string): Promise<PortoServiceRow[]> {
-  const frame = await runServiceSearch(page, dateKey);
+export async function searchServicosByDateRange(page: Page, range: PortoDateRange): Promise<PortoServiceRow[]> {
+  const frame = await runServiceSearch(page, range);
   const html = await frame.content();
   return parseServiceRowsFromHtml(html);
 }
@@ -88,7 +106,7 @@ function parseServiceRowsFromHtml(html: string): PortoServiceRow[] {
 
 /**
  * Fetches a service's detail and extracts its completion timestamp. Validated live end-to-end:
- * re-runs the search for `dateKey` (detail pages reject direct URL navigation with "Acesso
+ * re-runs the same range search (detail pages reject direct URL navigation with "Acesso
  * proibido", same as escala.ts — they only work when reached via a real click from the search
  * results), then clicks the specific result whose `onclick="changeUrlAW(this, anoServico,
  * numeroServico, ...)"` matches. Confirmed against production: extracted timestamps for service
@@ -96,14 +114,13 @@ function parseServiceRowsFromHtml(html: string): PortoServiceRow[] {
  *
  * Known trade-off: re-running the full search per call means N services cost N searches, not 1 —
  * clicking a result navigates the frame away, so getting "back" to a fresh results list is only
- * reliable by re-searching rather than trusting iframe back-navigation. Acceptable at this
- * account's scale (~12 technicians, a handful of services/day) within the 280s function budget;
- * the caller (app/api/cron/porto-hours/route.ts) also writes each technician's result immediately
- * rather than batching, so a timeout here loses at most the technicians not yet processed, not
- * the whole day's already-computed entries.
+ * reliable by re-searching rather than trusting iframe back-navigation. The caller
+ * (app/api/cron/porto-hours/route.ts) keeps this bounded by only fetching detail for
+ * (technician, date) combinations not already imported, so a month-long range stays cheap on
+ * every run after the first catch-up.
  */
-export async function getServicoDetail(page: Page, dateKey: string, params: { anoServico: string; numeroServico: string }): Promise<PortoServiceDetail> {
-  const frame = await runServiceSearch(page, dateKey);
+export async function getServicoDetail(page: Page, range: PortoDateRange, params: { anoServico: string; numeroServico: string }): Promise<PortoServiceDetail> {
+  const frame = await runServiceSearch(page, range);
   const link = frame.locator(`a[onclick*="changeUrlAW(this, ${params.anoServico}, ${params.numeroServico}"]`).first();
 
   if (!(await link.count())) {
