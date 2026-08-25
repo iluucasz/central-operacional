@@ -21,6 +21,12 @@ export type HoursJobOptions = {
    * full completion.
    */
   timeBudgetMs?: number;
+  /**
+   * Overrides the default "1st of the month through today" sweep — used by the admin UI's manual
+   * test button to check a specific day/range instead of always paying for the whole month. Never
+   * honored for unattended cron runs (see route.ts), only for manual: true calls.
+   */
+  dateRange?: { startDateKey: string; endDateKey: string };
 };
 
 export type HoursJobResult = {
@@ -30,8 +36,20 @@ export type HoursJobResult = {
   would_write?: number;
   partial?: boolean;
   error?: string;
+  range?: { start: string; end: string };
+  /** Count of detail entries per `action`, so "12 processed, 2 written" is explained at a glance. */
+  summary?: Record<string, number>;
   details: Array<Record<string, unknown>>;
 };
+
+function summarizeDetails(details: Array<Record<string, unknown>>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const detail of details) {
+    const action = typeof detail.action === 'string' ? detail.action : 'unknown';
+    counts[action] = (counts[action] ?? 0) + 1;
+  }
+  return counts;
+}
 
 function getTodayKey() {
   const now = new Date();
@@ -134,8 +152,8 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
     const { browser, page } = await launchAuthenticatedPortoSession({ cpf: config.cpf as string, password });
 
     try {
-      const monthStartKey = getMonthStartKey();
-      const todayKey = getTodayKey();
+      const monthStartKey = options.dateRange?.startDateKey ?? getMonthStartKey();
+      const todayKey = options.dateRange?.endDateKey ?? getTodayKey();
 
       const socorristas = await listSocorristas(page);
 
@@ -145,7 +163,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         techniciansProcessed++;
         const technician = await resolveTechnicianByQra(socorrista.qra);
         if (!technician) {
-          details.push({ qra: socorrista.qra, action: 'skipped_no_match' });
+          details.push({ qra: socorrista.qra, porto_name: socorrista.name, action: 'skipped_no_match' });
           continue;
         }
         resolved.push({ qra: socorrista.qra, technician });
@@ -176,7 +194,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         const namePrefix = nameSource.toUpperCase().slice(0, 8);
         const services = allServices.filter((service) => service.technicianNameFragment.toUpperCase().startsWith(namePrefix));
         if (!services.length) {
-          details.push({ qra, technician_id: technician.id, action: 'no_services' });
+          details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'no_services' });
           continue;
         }
         technicianServicesByQra.set(qra, { technician, services });
@@ -223,7 +241,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
 
           const dedupKey = `${technician.id}::${dateKey}`;
           if (existingDates.has(dedupKey)) {
-            details.push({ qra, technician_id: technician.id, action: 'already_imported', date: dateKey });
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'already_imported', date: dateKey });
             continue;
           }
 
@@ -247,6 +265,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
               details.push({
                 qra,
                 technician_id: technician.id,
+                technician_name: technician.name,
                 action: 'service_detail_failed',
                 date: dateKey,
                 numeroServico: service.numeroServico,
@@ -264,7 +283,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           }
 
           if (!latestCompletion) {
-            details.push({ qra, technician_id: technician.id, action: 'no_completion_time', date: dateKey });
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'no_completion_time', date: dateKey });
             continue;
           }
 
@@ -277,12 +296,12 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             const dayOfMonth = Number(dateKey.slice(8, 10));
             plannedStart = escalaDays.find((day) => day.day === dayOfMonth)?.startTime ?? '08:00';
           } catch (escalaError) {
-            details.push({ qra, technician_id: technician.id, action: 'escala_fetch_failed_fallback_0800', date: dateKey, error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'escala_fetch_failed_fallback_0800', date: dateKey, error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
           }
 
           const hoursWorked = diffHours(plannedStart, latestCompletion);
           if (hoursWorked <= 0 || hoursWorked > MAX_PLAUSIBLE_SHIFT_HOURS) {
-            details.push({ qra, technician_id: technician.id, action: 'invalid_hours', date: dateKey, plannedStart, latestCompletion, hoursWorked });
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'invalid_hours', date: dateKey, plannedStart, latestCompletion, hoursWorked });
             continue;
           }
 
@@ -304,7 +323,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           importedCount++;
 
           if (dryRun) {
-            details.push({ qra, technician_id: technician.id, action: 'would_import', date: dateKey, hoursWorked });
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'would_import', date: dateKey, hoursWorked });
             continue;
           }
 
@@ -312,7 +331,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           // preserves everything computed so far instead of discarding the whole run.
           const result = await applyWorkHourEntries([entry], { source: 'porto' });
           rowsWritten += result.count;
-          details.push({ qra, technician_id: technician.id, action: 'imported', date: dateKey, hoursWorked });
+          details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'imported', date: dateKey, hoursWorked });
         }
       }
 
@@ -323,15 +342,17 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         });
       }
 
+      const range = { start: monthStartKey, end: todayKey };
+      const summary = summarizeDetails(details);
+
       if (dryRun) {
-        details.unshift({ dry_run: true, manual: options.manual, would_write: importedCount, range: `${monthStartKey}..${todayKey}`, partial: budgetExceeded });
         await finishSyncLog(logId, {
           status: 'dry_run',
           technicians_processed: techniciansProcessed,
           rows_written: importedCount,
           details,
         });
-        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, partial: budgetExceeded, details };
+        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, partial: budgetExceeded, range, summary, details };
       }
 
       const overallStatus = budgetExceeded ? 'partial' : importedCount ? 'success' : 'partial';
@@ -343,7 +364,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         details,
       });
 
-      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, partial: budgetExceeded, details };
+      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, partial: budgetExceeded, range, summary, details };
     } finally {
       await browser.close();
     }
@@ -354,6 +375,6 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       await recordHoursImportResult({ status: 'error', error: message });
     }
     await finishSyncLog(logId, { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, details, error_message: message });
-    return { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, error: message, details };
+    return { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, error: message, summary: summarizeDetails(details), details };
   }
 }

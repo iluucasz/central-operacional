@@ -22,8 +22,18 @@ export type ScheduleJobResult = {
   would_write?: number;
   action?: 'check_only';
   error?: string;
+  summary?: Record<string, number>;
   details: Array<Record<string, unknown>>;
 };
+
+function summarizeDetails(details: Array<Record<string, unknown>>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const detail of details) {
+    const action = typeof detail.action === 'string' ? detail.action : 'unknown';
+    counts[action] = (counts[action] ?? 0) + 1;
+  }
+  return counts;
+}
 
 function getCurrentMonthKey() {
   const now = new Date();
@@ -109,7 +119,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         techniciansProcessed++;
         const technician = await resolveTechnicianByQra(socorrista.qra);
         if (!technician) {
-          details.push({ qra: socorrista.qra, action: 'skipped_no_match' });
+          details.push({ qra: socorrista.qra, porto_name: socorrista.name, action: 'skipped_no_match' });
           continue;
         }
 
@@ -119,7 +129,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         } catch (escalaError) {
           // A navigation hiccup for one technician shouldn't abort the whole month's import —
           // log it and move on; the shortfall is visible via technicians_processed vs. days count.
-          details.push({ qra: socorrista.qra, technician_id: technician.id, action: 'escala_fetch_failed', error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
+          details.push({ qra: socorrista.qra, technician_id: technician.id, technician_name: technician.name, action: 'escala_fetch_failed', error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
           continue;
         }
 
@@ -141,7 +151,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
           });
         }
 
-        details.push({ qra: socorrista.qra, technician_id: technician.id, action: 'imported', days: escalaDays.length });
+        details.push({ qra: socorrista.qra, technician_id: technician.id, technician_name: technician.name, action: 'imported', days: escalaDays.length });
       }
 
       const dryRun = options.manual || config.dry_run_only !== false;
@@ -150,14 +160,13 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         // Modo teste: calcula o que seria importado mas não grava, e não marca o mês como
         // importado — senão, ao desligar o modo teste, o import real seria pulado por engano.
         rowsWritten = rows.length;
-        details.unshift({ dry_run: true, manual: options.manual, would_write: rows.length });
         await finishSyncLog(logId, {
           status: 'dry_run',
           technicians_processed: techniciansProcessed,
           rows_written: rowsWritten,
           details,
         });
-        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: rowsWritten, details };
+        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: rowsWritten, summary: summarizeDetails(details), details };
       }
 
       if (resolvedTechnicianIds.length && rows.length) {
@@ -179,7 +188,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         details,
       });
 
-      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, details };
+      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, summary: summarizeDetails(details), details };
     } finally {
       await browser.close();
     }
@@ -190,6 +199,6 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
       await recordScheduleImportResult({ monthKey: currentMonthKey, status: 'error', error: message });
     }
     await finishSyncLog(logId, { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, details, error_message: message });
-    return { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, error: message, details };
+    return { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, error: message, summary: summarizeDetails(details), details };
   }
 }

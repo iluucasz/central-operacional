@@ -17,13 +17,20 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { useAppSession } from '@/hooks/use-app-session';
 
-type PortoJobDetail = Record<string, unknown> & { qra?: string; action?: string };
+type PortoJobDetail = Record<string, unknown> & {
+  qra?: string;
+  action?: string;
+  technician_name?: string;
+  porto_name?: string;
+};
 
 type PortoJobResult = {
   status: string;
   technicians_processed?: number;
   would_write?: number;
   rows_written?: number;
+  range?: { start: string; end: string };
+  summary?: Record<string, number>;
   details?: PortoJobDetail[];
   error?: string;
 };
@@ -58,10 +65,14 @@ function jobDetailActionLabel(action: string | undefined) {
 }
 
 function formatDetailExtra(detail: PortoJobDetail) {
-  const { qra, action, technician_id, ...rest } = detail;
+  const { qra, action, technician_id, technician_name, porto_name, ...rest } = detail;
   const entries = Object.entries(rest).filter(([, v]) => v !== undefined && v !== null && v !== '');
   if (!entries.length) return '-';
   return entries.map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join('; ');
+}
+
+function actionSummaryLabel(action: string, count: number) {
+  return `${jobDetailActionLabel(action)}: ${count}`;
 }
 
 type PortoConfig = {
@@ -149,6 +160,9 @@ export default function ConfigPortoPage() {
 
   const [isTestingLogin, setIsTestingLogin] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; screenshotUrl?: string | null } | null>(null);
+
+  const [testStartDate, setTestStartDate] = useState('');
+  const [testEndDate, setTestEndDate] = useState('');
 
   const [runningJob, setRunningJob] = useState<'hours' | 'schedule' | null>(null);
   const [jobModalOpen, setJobModalOpen] = useState(false);
@@ -241,7 +255,13 @@ export default function ConfigPortoPage() {
     setJobResult(null);
     setJobModalOpen(true);
     try {
-      const response = await fetch(`/api/cron/porto-${jobType === 'hours' ? 'hours' : 'schedule'}`);
+      const params = new URLSearchParams();
+      if (jobType === 'hours' && testStartDate) {
+        params.set('start', testStartDate);
+        params.set('end', testEndDate || testStartDate);
+      }
+      const query = params.toString();
+      const response = await fetch(`/api/cron/porto-${jobType === 'hours' ? 'hours' : 'schedule'}${query ? `?${query}` : ''}`);
       const rawText = await response.text();
       let data: PortoJobResult;
       try {
@@ -489,6 +509,35 @@ export default function ConfigPortoPage() {
           title="Testes manuais"
           description="Roda o job inteiro (login, busca, cálculo) sem gravar nada em escala/horas — só mostra o que seria feito. Não conta pro limite de 1x/dia do agendamento automático, pode clicar quantas vezes quiser."
         >
+          <div className="mb-3 flex flex-wrap items-end gap-3">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-foreground">De (apontamento de horas)</label>
+              <input
+                type="date"
+                value={testStartDate}
+                onChange={(event) => setTestStartDate(event.target.value)}
+                className={inputClassName}
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-foreground">Até</label>
+              <input
+                type="date"
+                value={testEndDate}
+                onChange={(event) => setTestEndDate(event.target.value)}
+                disabled={!testStartDate}
+                className={inputClassName}
+              />
+            </div>
+            {testStartDate ? (
+              <Button type="button" variant="ghost" onClick={() => { setTestStartDate(''); setTestEndDate(''); }}>
+                Limpar (voltar pro mês inteiro)
+              </Button>
+            ) : (
+              <p className="pb-2.5 text-xs text-muted-foreground">Em branco = mês inteiro até hoje (padrão).</p>
+            )}
+          </div>
+
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={() => handleRunTestJob('hours')} disabled={runningJob !== null}>
               {runningJob === 'hours' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
@@ -587,7 +636,23 @@ export default function ConfigPortoPage() {
                   <p className="text-muted-foreground">Linhas que seriam gravadas</p>
                   <p className="text-lg font-semibold text-foreground">{jobResult.would_write ?? jobResult.rows_written ?? '-'}</p>
                 </div>
+                {jobResult.range ? (
+                  <div>
+                    <p className="text-muted-foreground">Período checado</p>
+                    <p className="text-lg font-semibold text-foreground">
+                      {jobResult.range.start === jobResult.range.end ? jobResult.range.start : `${jobResult.range.start} a ${jobResult.range.end}`}
+                    </p>
+                  </div>
+                ) : null}
               </div>
+
+              {jobResult.summary && Object.keys(jobResult.summary).length ? (
+                <div className="flex flex-wrap gap-x-4 gap-y-1 rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+                  {Object.entries(jobResult.summary).map(([action, count]) => (
+                    <span key={action}>{actionSummaryLabel(action, count)}</span>
+                  ))}
+                </div>
+              ) : null}
 
               {jobResult.details && jobResult.details.length ? (
                 <div className="overflow-x-auto">
@@ -595,6 +660,7 @@ export default function ConfigPortoPage() {
                     <thead>
                       <tr className="border-b border-border text-xs uppercase text-muted-foreground">
                         <th className="py-2 pr-4">QRA</th>
+                        <th className="py-2 pr-4">Técnico</th>
                         <th className="py-2 pr-4">Resultado</th>
                         <th className="py-2">Detalhes</th>
                       </tr>
@@ -605,6 +671,7 @@ export default function ConfigPortoPage() {
                         .map((detail, index) => (
                           <tr key={`${detail.qra}-${index}`} className="border-b border-border last:border-0">
                             <td className="py-2 pr-4">{detail.qra}</td>
+                            <td className="py-2 pr-4">{detail.technician_name || (detail.porto_name ? `${detail.porto_name} (Porto)` : '-')}</td>
                             <td className="py-2 pr-4">{jobDetailActionLabel(detail.action)}</td>
                             <td className="py-2 text-muted-foreground">{formatDetailExtra(detail)}</td>
                           </tr>
