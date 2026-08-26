@@ -357,8 +357,9 @@ export function PortoRunWizard() {
                         : 'Atenção: a automação está desligada em Config. Porto.'}
                     </p>
                     <p className="mt-1">
-                      Apontamento de horas: todo dia às 23:00 (20:00 horário de Brasília), varre o mês inteiro até hoje e pula dias já
-                      importados. Escala: checagem diária às 06:00 (03:00 BRT), importa automaticamente só quando sai uma escala nova.
+                      Apontamento de horas: todo dia às 23:00 (horário de Brasília), varre o mês inteiro até hoje e pula dias já
+                      importados. Escala: checagem diária às 03:00 (horário de Brasília), importa automaticamente só quando sai uma escala
+                      nova.
                     </p>
                     <p className="mt-1">
                       Use este assistente só quando quiser forçar uma execução agora — por exemplo, pra ver um resultado sem esperar o

@@ -41,12 +41,15 @@ if (runArg) {
   }
   job().then(() => process.exit(0));
 } else {
-  // Same schedule as the original vercel.json crons (kept in UTC for consistency): hours at
-  // 23:00 UTC (20:00 BRT), schedule at 06:00 UTC (03:00 BRT). No maxDuration here — each run
-  // goes to full completion instead of needing the Vercel route's time-budget cutoff.
-  cron.schedule('0 23 * * *', runHours, { timezone: 'UTC' });
-  cron.schedule('0 6 * * *', runSchedule, { timezone: 'UTC' });
-  log('Porto worker iniciado. Horas: 23:00 UTC diariamente. Escala: 06:00 UTC diariamente.');
+  // Expressed directly in Brasília time (America/Sao_Paulo) rather than a fixed UTC offset — a
+  // real IANA timezone handles any future DST policy change correctly, a hardcoded UTC hour
+  // wouldn't. Hours moved to fire at 23:00 BRT exactly (was 23:00 UTC = 20:00 BRT); schedule stays
+  // at the same real-world moment as before (03:00 BRT = 06:00 UTC), just expressed natively
+  // instead of converted. No maxDuration here — each run goes to full completion instead of
+  // needing the Vercel route's time-budget cutoff.
+  cron.schedule('0 23 * * *', runHours, { timezone: 'America/Sao_Paulo' });
+  cron.schedule('0 3 * * *', runSchedule, { timezone: 'America/Sao_Paulo' });
+  log('Porto worker iniciado. Horas: 23:00 (Brasília) diariamente. Escala: 03:00 (Brasília) diariamente.');
 
   // Everything the admin UI triggers on demand (test-login, técnico match, manual job runs) is
   // now served from here too — the Vercel routes are thin proxies (see server.ts).
