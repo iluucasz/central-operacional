@@ -33,6 +33,7 @@ type PortoJobResult = {
   summary?: Record<string, number>;
   details?: PortoJobDetail[];
   error?: string;
+  logId?: string;
 };
 
 function jobDetailActionLabel(action: string | undefined) {
@@ -133,6 +134,9 @@ function summarizeDetails(details: PortoJobDetail[]): Record<string, number> {
 }
 
 const inputClassName = 'min-h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring';
+
+const JOB_POLL_INTERVAL_MS = 4000;
+const JOB_POLL_MAX_MS = 30 * 60 * 1000; // generous ceiling for a full-month sweep with no server-side time limit
 
 function formatDateTime(value: string | null) {
   if (!value) return '-';
@@ -261,6 +265,53 @@ export default function ConfigPortoPage() {
     }
   }
 
+  function logToJobResult(log: PortoSyncLog): PortoJobResult {
+    const details = log.details ?? [];
+    return {
+      status: log.status,
+      technicians_processed: log.technicians_processed,
+      rows_written: log.rows_written,
+      range: log.range_start ? { start: log.range_start, end: log.range_end || log.range_start } : undefined,
+      summary: details.length ? summarizeDetails(details) : undefined,
+      details,
+      error: log.error_message || undefined,
+    };
+  }
+
+  function handleOpenHistoryLog(log: PortoSyncLog) {
+    setJobModalJobType(log.job_type);
+    setJobModalOpen(true);
+    setJobResult(logToJobResult(log));
+  }
+
+  // The worker answers a job trigger immediately (status: 'started') instead of waiting for the
+  // whole run — a full month sweep runs well past what a synchronous wait through Vercel could
+  // ever tolerate (confirmed live: 504 after exactly 280s). This polls porto_sync_log (already
+  // returned by /api/porto-config) for that specific run until it leaves 'running'.
+  async function pollJobLog(logId: string) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < JOB_POLL_MAX_MS) {
+      await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+      try {
+        const response = await fetch('/api/porto-config');
+        const data = await response.json();
+        const freshLogs: PortoSyncLog[] = data.logs ?? [];
+        setLogs(freshLogs);
+        const match = freshLogs.find((log) => log.id === logId);
+        if (match && match.status !== 'running') {
+          setJobResult(logToJobResult(match));
+          return;
+        }
+      } catch {
+        // transient hiccup while polling — just try again next tick
+      }
+    }
+    setJobResult({
+      status: 'error',
+      error: 'A execução continua rodando na VPS, mas parei de acompanhar por aqui depois de 30 minutos. Confira o resultado mais tarde clicando na linha correspondente no histórico de execuções.',
+    });
+  }
+
   async function handleRunTestJob(jobType: 'hours' | 'schedule') {
     setRunningJob(jobType);
     setJobModalJobType(jobType);
@@ -284,6 +335,12 @@ export default function ConfigPortoPage() {
         setJobResult({ status: 'error', error: `A execução não terminou a tempo ou falhou na Vercel (resposta não veio em JSON, status ${response.status}). Veja os logs da function para detalhes.` });
         return;
       }
+
+      if (data.status === 'started' && data.logId) {
+        await pollJobLog(data.logId);
+        return;
+      }
+
       setJobResult(data);
     } catch (error) {
       setJobResult({ status: 'error', error: error instanceof Error ? error.message : 'Falha ao rodar o teste.' });
@@ -291,21 +348,6 @@ export default function ConfigPortoPage() {
       setRunningJob(null);
       loadConfig();
     }
-  }
-
-  function handleOpenHistoryLog(log: PortoSyncLog) {
-    setJobModalJobType(log.job_type);
-    setJobModalOpen(true);
-    const details = log.details ?? [];
-    setJobResult({
-      status: log.status,
-      technicians_processed: log.technicians_processed,
-      rows_written: log.rows_written,
-      range: log.range_start ? { start: log.range_start, end: log.range_end || log.range_start } : undefined,
-      summary: details.length ? summarizeDetails(details) : undefined,
-      details,
-      error: log.error_message || undefined,
-    });
   }
 
   async function handleOpenMatch() {
@@ -644,7 +686,7 @@ export default function ConfigPortoPage() {
           {runningJob ? (
             <div className="flex flex-col items-center gap-3 py-10 text-sm text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin" />
-              <p>Rodando login, busca e cálculo no Porto... isso pode levar até 1 minuto.</p>
+              <p>Rodando login, busca e cálculo no Porto... um período maior (ex: mês inteiro) pode levar vários minutos. A execução continua na VPS mesmo se você fechar essa janela — depois é só clicar na linha correspondente em &quot;Histórico de execuções&quot;.</p>
             </div>
           ) : jobResult ? (
             <div className="flex flex-col gap-4">

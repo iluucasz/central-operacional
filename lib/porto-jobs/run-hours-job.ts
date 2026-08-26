@@ -27,6 +27,13 @@ export type HoursJobOptions = {
    * honored for unattended cron runs (see route.ts), only for manual: true calls.
    */
   dateRange?: { startDateKey: string; endDateKey: string };
+  /**
+   * Fires the moment the sync_log row exists (before the slow part starts) — lets a caller that
+   * can't/shouldn't block for the whole run (the worker's HTTP server, answering a Vercel proxy
+   * that has its own much shorter timeout) respond immediately with the logId and let the job keep
+   * running server-side, instead of the caller's own request timing out.
+   */
+  onStarted?: (logId: string) => void;
 };
 
 export type HoursJobResult = {
@@ -134,12 +141,14 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
   const missingCredentials = !config || !config.encrypted_password || !config.cpf;
   if (missingCredentials || (!options.manual && !config.automation_enabled)) {
     const logId = await startSyncLog('hours');
+    options.onStarted?.(logId);
     const errorMessage = missingCredentials ? 'Credenciais não configuradas.' : 'Automação desligada.';
     await finishSyncLog(logId, { status: 'skipped', error_message: errorMessage });
     return { status: 'skipped', technicians_processed: 0, error: errorMessage, details: [] };
   }
 
   const logId = await startSyncLog('hours');
+  options.onStarted?.(logId);
   const details: Array<Record<string, unknown>> = [];
   let techniciansProcessed = 0;
   let importedCount = 0;

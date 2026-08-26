@@ -27,6 +27,16 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(payload);
 }
 
+/** Guards a response against being sent twice (e.g. onStarted firing, then the job also settling). */
+function onceResponder(res: ServerResponse) {
+  let responded = false;
+  return (status: number, body: unknown) => {
+    if (responded) return;
+    responded = true;
+    sendJson(res, status, body);
+  };
+}
+
 async function handleTestLogin(res: ServerResponse) {
   const config = await getPortoConfig();
   if (!config || !config.cpf || !config.encrypted_password) {
@@ -80,13 +90,36 @@ async function handleRunHours(url: URL, res: ServerResponse) {
   const start = url.searchParams.get('start');
   const end = url.searchParams.get('end');
   const dateRange = start ? { startDateKey: start, endDateKey: end || start } : undefined;
-  const result = await runHoursJob({ manual: true, dateRange });
-  sendJson(res, result.status === 'error' ? 500 : 200, result);
+
+  // Doesn't await the job — a full month sweep can run well past the Vercel proxy's own
+  // maxDuration (confirmed live: 504 after exactly 280s waiting on this call). Responds the
+  // instant the sync_log row exists so the caller never blocks on the actual scrape; the job
+  // keeps running here regardless (this process is a long-lived daemon, not a one-shot request
+  // handler) and writes its result to porto_sync_log as it always did — the admin UI polls that.
+  const respondOnce = onceResponder(res);
+  runHoursJob({
+    manual: true,
+    dateRange,
+    onStarted: (logId) => respondOnce(202, { status: 'started', logId }),
+  })
+    .then((result) => respondOnce(result.status === 'error' ? 500 : 200, result))
+    .catch((error) => {
+      console.error('[worker/server] hours job failed before it could start:', error);
+      respondOnce(500, { status: 'error', error: error instanceof Error ? error.message : String(error) });
+    });
 }
 
 async function handleRunSchedule(res: ServerResponse) {
-  const result = await runScheduleJob({ manual: true });
-  sendJson(res, result.status === 'error' ? 500 : 200, result);
+  const respondOnce = onceResponder(res);
+  runScheduleJob({
+    manual: true,
+    onStarted: (logId) => respondOnce(202, { status: 'started', logId }),
+  })
+    .then((result) => respondOnce(result.status === 'error' ? 500 : 200, result))
+    .catch((error) => {
+      console.error('[worker/server] schedule job failed before it could start:', error);
+      respondOnce(500, { status: 'error', error: error instanceof Error ? error.message : String(error) });
+    });
 }
 
 /**

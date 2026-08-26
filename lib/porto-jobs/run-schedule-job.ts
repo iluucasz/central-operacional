@@ -13,6 +13,13 @@ const RECHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export type ScheduleJobOptions = {
   /** Manual test runs (admin UI button) always run the full preview, never write real data. */
   manual: boolean;
+  /**
+   * Fires the moment the sync_log row exists (before the slow part starts) — lets a caller that
+   * can't/shouldn't block for the whole run (the worker's HTTP server, answering a Vercel proxy
+   * that has its own much shorter timeout) respond immediately with the logId and let the job keep
+   * running server-side, instead of the caller's own request timing out.
+   */
+  onStarted?: (logId: string) => void;
 };
 
 export type ScheduleJobResult = {
@@ -65,6 +72,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
   const missingCredentials = !config || !config.encrypted_password || !config.cpf;
   if (missingCredentials || (!options.manual && !config.automation_enabled)) {
     const logId = await startSyncLog('schedule');
+    options.onStarted?.(logId);
     const errorMessage = missingCredentials ? 'Credenciais não configuradas.' : 'Automação desligada.';
     await finishSyncLog(logId, { status: 'skipped', error_message: errorMessage });
     return { status: 'skipped', technicians_processed: 0, error: errorMessage, details: [] };
@@ -80,12 +88,14 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
     const lastCheck = config.last_schedule_check_at ? new Date(config.last_schedule_check_at as string).getTime() : 0;
     if (Date.now() - lastCheck < RECHECK_INTERVAL_MS) {
       const logId = await startSyncLog('schedule');
+      options.onStarted?.(logId);
       await finishSyncLog(logId, { status: 'skipped', error_message: 'Mês já importado e checado recentemente.' });
       return { status: 'skipped', technicians_processed: 0, details: [] };
     }
   }
 
   const logId = await startSyncLog('schedule');
+  options.onStarted?.(logId);
   const details: Array<Record<string, unknown>> = [];
   let techniciansProcessed = 0;
   let rowsWritten = 0;
