@@ -14,4 +14,10 @@ COPY worker ./worker
 # — the VPS isn't a serverless runtime, so @sparticuz/chromium's binary is never used here.
 RUN npx playwright install --with-deps chromium
 
-CMD ["npx", "tsx", "worker/index.ts"]
+# Compiled with the real TypeScript compiler, not run live through tsx/esbuild — confirmed live
+# that esbuild's transform injects a `__name(...)` helper call into functions that
+# frame.evaluate()/page.evaluate() then ship into the browser as raw source text via .toString(),
+# where that helper doesn't exist ("ReferenceError: __name is not defined"). tsc doesn't do this.
+RUN npx tsc -p worker/tsconfig.json
+
+CMD ["node", "dist/worker/index.js"]

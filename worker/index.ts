@@ -27,7 +27,7 @@ async function runSchedule() {
   }
 }
 
-// `docker exec <container> npx tsx worker/index.ts --run=hours` (or --run=schedule) runs a
+// `docker exec <container> node dist/worker/index.js --run=hours` (or --run=schedule) runs a
 // one-off job and exits, reusing the same image/Chromium install — for on-demand verification
 // without disturbing the main scheduler daemon (`cron.schedule` below keeps a process alive
 // forever, so mixing the two in one invocation would leave the one-off `docker exec` hanging).

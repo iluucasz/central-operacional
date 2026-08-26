@@ -15,5 +15,8 @@ node_modules
 .DS_Store
 *.tsbuildinfo
 
+# worker/tsconfig.json compiles to ../dist (repo root) — Docker-only build output, never committed
+/dist/
+
 # Local DB backups (contain real production data — never commit)
 backups/
