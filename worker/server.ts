@@ -90,6 +90,9 @@ async function handleRunHours(url: URL, res: ServerResponse) {
   const start = url.searchParams.get('start');
   const end = url.searchParams.get('end');
   const dateRange = start ? { startDateKey: start, endDateKey: end || start } : undefined;
+  // ?write=1 is the "Rodar agora" real-run escape hatch — everything else (the diagnostic test
+  // button) stays forced dry-run regardless of the dry_run_only config, same as before.
+  const forceWrite = url.searchParams.get('write') === '1';
 
   // Doesn't await the job — a full month sweep can run well past the Vercel proxy's own
   // maxDuration (confirmed live: 504 after exactly 280s waiting on this call). Responds the
@@ -100,6 +103,7 @@ async function handleRunHours(url: URL, res: ServerResponse) {
   runHoursJob({
     manual: true,
     dateRange,
+    forceWrite,
     onStarted: (logId) => respondOnce(202, { status: 'started', logId }),
   })
     .then((result) => respondOnce(result.status === 'error' ? 500 : 200, result))
@@ -109,10 +113,12 @@ async function handleRunHours(url: URL, res: ServerResponse) {
     });
 }
 
-async function handleRunSchedule(res: ServerResponse) {
+async function handleRunSchedule(url: URL, res: ServerResponse) {
+  const forceWrite = url.searchParams.get('write') === '1';
   const respondOnce = onceResponder(res);
   runScheduleJob({
     manual: true,
+    forceWrite,
     onStarted: (logId) => respondOnce(202, { status: 'started', logId }),
   })
     .then((result) => respondOnce(result.status === 'error' ? 500 : 200, result))
@@ -151,7 +157,7 @@ export function startWorkerServer() {
           return;
         }
         if (req.method === 'GET' && url.pathname === '/run/schedule') {
-          await handleRunSchedule(res);
+          await handleRunSchedule(url, res);
           return;
         }
         if (req.method === 'POST' && url.pathname === '/test-login') {

@@ -16,8 +16,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // "Rodar agora" real-run escape hatch (writes actual data) — only ever forwarded for an
+  // authenticated admin session, never for the (currently unused) CRON_SECRET path.
+  const query = caller.manual && request.nextUrl.searchParams.get('write') === '1' ? '?write=1' : '';
+
   try {
-    const { status, body } = await callPortoWorker('/run/schedule');
+    const { status, body } = await callPortoWorker(`/run/schedule${query}`);
     return NextResponse.json(body, { status });
   } catch (error) {
     console.error('[cron/porto-schedule] proxy error:', error);

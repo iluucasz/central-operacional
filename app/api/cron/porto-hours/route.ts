@@ -25,6 +25,11 @@ export async function GET(request: NextRequest) {
     params.set('start', start);
     params.set('end', end && DATE_KEY_PATTERN.test(end) ? end : start);
   }
+  // "Rodar agora" real-run escape hatch (writes actual data) — only ever forwarded for an
+  // authenticated admin session, never for the (currently unused) CRON_SECRET path.
+  if (caller.manual && request.nextUrl.searchParams.get('write') === '1') {
+    params.set('write', '1');
+  }
 
   try {
     const query = params.toString();

@@ -34,6 +34,13 @@ export type HoursJobOptions = {
    * running server-side, instead of the caller's own request timing out.
    */
   onStarted?: (logId: string) => void;
+  /**
+   * Explicit escape hatch for an admin-triggered "Rodar agora" (run for real, on demand) action —
+   * unlike a diagnostic manual test, this writes real data even though manual is true. Never set
+   * this from a generic "test" code path; only from an action the admin unambiguously understands
+   * writes real rows.
+   */
+  forceWrite?: boolean;
 };
 
 export type HoursJobResult = {
@@ -154,7 +161,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
   let importedCount = 0;
   let rowsWritten = 0;
   // Manual test runs never write real data, regardless of the dry_run_only toggle.
-  const dryRun = options.manual || config.dry_run_only !== false;
+  const dryRun = options.forceWrite ? false : options.manual || config.dry_run_only !== false;
 
   try {
     const password = decryptPortoPassword(config.encrypted_password as string);

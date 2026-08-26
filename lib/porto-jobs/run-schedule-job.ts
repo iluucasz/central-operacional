@@ -20,6 +20,13 @@ export type ScheduleJobOptions = {
    * running server-side, instead of the caller's own request timing out.
    */
   onStarted?: (logId: string) => void;
+  /**
+   * Explicit escape hatch for an admin-triggered "Rodar agora" (run for real, on demand) action —
+   * unlike a diagnostic manual test, this writes real data even though manual is true. Never set
+   * this from a generic "test" code path; only from an action the admin unambiguously understands
+   * writes real rows.
+   */
+  forceWrite?: boolean;
 };
 
 export type ScheduleJobResult = {
@@ -164,7 +171,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         details.push({ qra: socorrista.qra, technician_id: technician.id, technician_name: technician.name, action: 'imported', days: escalaDays.length });
       }
 
-      const dryRun = options.manual || config.dry_run_only !== false;
+      const dryRun = options.forceWrite ? false : options.manual || config.dry_run_only !== false;
 
       if (dryRun) {
         // Modo teste: calcula o que seria importado mas não grava, e não marca o mês como
