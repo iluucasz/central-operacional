@@ -304,13 +304,20 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           }
 
           let plannedStart = '08:00';
+          let plannedEnd = latestCompletion;
           try {
             if (!escalaCache.has(qra)) {
               escalaCache.set(qra, await getEscalaForCurrentMonth(page, qra));
             }
             const escalaDays = escalaCache.get(qra) ?? [];
             const dayOfMonth = Number(dateKey.slice(8, 10));
-            plannedStart = escalaDays.find((day) => day.day === dayOfMonth)?.startTime ?? '08:00';
+            const escalaDay = escalaDays.find((day) => day.day === dayOfMonth);
+            plannedStart = escalaDay?.startTime ?? '08:00';
+            // The scheduled end of shift, not the actual completion time — otherwise "previsto"
+            // in the schedule UI (admin-schedule-builder.tsx's getScheduleTimeLabel) always shows
+            // the exact same value as the real time next to it, which is meaningless. Falls back
+            // to the completion time only when the escala genuinely has no end time recorded.
+            plannedEnd = escalaDay?.endTime ?? latestCompletion;
           } catch (escalaError) {
             details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'escala_fetch_failed_fallback_0800', date: dateKey, error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
           }
@@ -327,7 +334,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             start_time: plannedStart,
             end_time: latestCompletion,
             planned_start_time: plannedStart,
-            planned_end_time: latestCompletion,
+            planned_end_time: plannedEnd,
             hours_worked: hoursWorked,
             week_number: getIsoWeekNumber(dateKey),
             month: Number(dateKey.slice(5, 7)),
