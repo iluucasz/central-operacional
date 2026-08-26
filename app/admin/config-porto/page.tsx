@@ -16,65 +16,20 @@ import {
 } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { useAppSession } from '@/hooks/use-app-session';
-
-type PortoJobDetail = Record<string, unknown> & {
-  qra?: string;
-  action?: string;
-  technician_name?: string;
-  porto_name?: string;
-};
-
-type PortoJobResult = {
-  status: string;
-  technicians_processed?: number;
-  would_write?: number;
-  rows_written?: number;
-  range?: { start: string; end: string };
-  summary?: Record<string, number>;
-  details?: PortoJobDetail[];
-  error?: string;
-  logId?: string;
-};
-
-function jobDetailActionLabel(action: string | undefined) {
-  switch (action) {
-    case 'imported':
-    case 'would_import':
-      return 'Importado';
-    case 'skipped_no_match':
-      return 'Sem técnico correspondente no sistema';
-    case 'no_services':
-      return 'Nenhum serviço encontrado no período';
-    case 'already_imported':
-      return 'Já importado antes (pulado)';
-    case 'no_completion_time':
-      return 'Sem horário de conclusão encontrado';
-    case 'invalid_hours':
-      return 'Horas calculadas inválidas';
-    case 'escala_fetch_failed':
-    case 'escala_fetch_failed_fallback_0800':
-      return 'Falha ao buscar escala (usou 08:00 como aproximação)';
-    case 'check_only':
-      return 'Só checagem — mês já importado';
-    case 'time_budget_exceeded_stopping_early':
-      return 'Execução parou por limite de tempo (continua na próxima)';
-    case 'service_detail_failed':
-      return 'Falha ao abrir detalhe de um serviço (pulado)';
-    default:
-      return action || '-';
-  }
-}
-
-function formatDetailExtra(detail: PortoJobDetail) {
-  const { qra, action, technician_id, technician_name, porto_name, ...rest } = detail;
-  const entries = Object.entries(rest).filter(([, v]) => v !== undefined && v !== null && v !== '');
-  if (!entries.length) return '-';
-  return entries.map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join('; ');
-}
-
-function actionSummaryLabel(action: string, count: number) {
-  return `${jobDetailActionLabel(action)}: ${count}`;
-}
+import {
+  actionSummaryLabel,
+  formatDateTime,
+  formatDetailExtra,
+  jobDetailActionLabel,
+  jobTypeLabel,
+  logToJobResult,
+  pollJobLog,
+  statusLabel,
+  summarizeDetails,
+  type PortoJobDetail,
+  type PortoJobResult,
+  type PortoSyncLog,
+} from '@/lib/porto-ui-helpers';
 
 type PortoConfig = {
   cpf: string;
@@ -110,54 +65,7 @@ type MatchTechnician = {
   status: string;
 };
 
-type PortoSyncLog = {
-  id: string;
-  job_type: 'hours' | 'schedule';
-  started_at: string;
-  finished_at: string | null;
-  status: string;
-  technicians_processed: number;
-  rows_written: number;
-  error_message: string | null;
-  details: PortoJobDetail[] | null;
-  range_start: string | null;
-  range_end: string | null;
-};
-
-function summarizeDetails(details: PortoJobDetail[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const detail of details) {
-    const action = typeof detail.action === 'string' ? detail.action : 'unknown';
-    counts[action] = (counts[action] ?? 0) + 1;
-  }
-  return counts;
-}
-
 const inputClassName = 'min-h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring';
-
-const JOB_POLL_INTERVAL_MS = 4000;
-const JOB_POLL_MAX_MS = 30 * 60 * 1000; // generous ceiling for a full-month sweep with no server-side time limit
-
-function formatDateTime(value: string | null) {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
-  return date.toLocaleString('pt-BR');
-}
-
-function statusLabel(status: string | null) {
-  if (status === 'success') return 'Sucesso';
-  if (status === 'partial') return 'Parcial';
-  if (status === 'error') return 'Erro';
-  if (status === 'skipped') return 'Ignorado (automação desligada)';
-  if (status === 'running') return 'Em execução';
-  if (status === 'dry_run') return 'Modo teste (simulado, nada gravado)';
-  return '-';
-}
-
-function jobTypeLabel(jobType: string) {
-  return jobType === 'hours' ? 'Apontamento de horas' : 'Escala';
-}
 
 export default function ConfigPortoPage() {
   const { user, loading } = useAppSession();
@@ -265,51 +173,10 @@ export default function ConfigPortoPage() {
     }
   }
 
-  function logToJobResult(log: PortoSyncLog): PortoJobResult {
-    const details = log.details ?? [];
-    return {
-      status: log.status,
-      technicians_processed: log.technicians_processed,
-      rows_written: log.rows_written,
-      range: log.range_start ? { start: log.range_start, end: log.range_end || log.range_start } : undefined,
-      summary: details.length ? summarizeDetails(details) : undefined,
-      details,
-      error: log.error_message || undefined,
-    };
-  }
-
   function handleOpenHistoryLog(log: PortoSyncLog) {
     setJobModalJobType(log.job_type);
     setJobModalOpen(true);
     setJobResult(logToJobResult(log));
-  }
-
-  // The worker answers a job trigger immediately (status: 'started') instead of waiting for the
-  // whole run — a full month sweep runs well past what a synchronous wait through Vercel could
-  // ever tolerate (confirmed live: 504 after exactly 280s). This polls porto_sync_log (already
-  // returned by /api/porto-config) for that specific run until it leaves 'running'.
-  async function pollJobLog(logId: string) {
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < JOB_POLL_MAX_MS) {
-      await new Promise((resolve) => setTimeout(resolve, JOB_POLL_INTERVAL_MS));
-      try {
-        const response = await fetch('/api/porto-config');
-        const data = await response.json();
-        const freshLogs: PortoSyncLog[] = data.logs ?? [];
-        setLogs(freshLogs);
-        const match = freshLogs.find((log) => log.id === logId);
-        if (match && match.status !== 'running') {
-          setJobResult(logToJobResult(match));
-          return;
-        }
-      } catch {
-        // transient hiccup while polling — just try again next tick
-      }
-    }
-    setJobResult({
-      status: 'error',
-      error: 'A execução continua rodando na VPS, mas parei de acompanhar por aqui depois de 30 minutos. Confira o resultado mais tarde clicando na linha correspondente no histórico de execuções.',
-    });
   }
 
   async function handleRunTestJob(jobType: 'hours' | 'schedule') {
@@ -337,7 +204,13 @@ export default function ConfigPortoPage() {
       }
 
       if (data.status === 'started' && data.logId) {
-        await pollJobLog(data.logId);
+        // The worker answers a job trigger immediately instead of waiting for the whole run — a
+        // full month sweep runs well past what a synchronous wait through Vercel could ever
+        // tolerate (confirmed live: 504 after exactly 280s). Poll porto_sync_log until it's done.
+        await pollJobLog(data.logId, (result, _log, freshLogs) => {
+          setJobResult(result);
+          if (freshLogs.length) setLogs(freshLogs);
+        });
         return;
       }
 

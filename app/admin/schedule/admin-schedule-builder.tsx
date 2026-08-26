@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { compactName, formatDate, formatHours, formatTime, formatTimeRange, normalizeText } from '@/lib/formatters';
+import { PortoRunWizard } from './porto-run-wizard';
 import {
   createDateKey,
   enumerateDateKeys,
@@ -3422,6 +3423,8 @@ export function AdminScheduleBuilderPage() {
             <WandSparkles className="h-4 w-4" />
             Montar escala
           </Button>
+
+          <PortoRunWizard />
         </div>
       </PageHeader>
 
