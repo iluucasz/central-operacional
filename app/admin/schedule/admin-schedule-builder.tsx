@@ -179,6 +179,7 @@ interface HourBankDetailRow {
   technician_id: string;
   technician_name: string;
   status_label: string;
+  schedule_status?: Schedule['status'];
   planned_start_time: string;
   planned_end_time: string;
   actual_start_time: string;
@@ -1175,6 +1176,7 @@ export function AdminScheduleBuilderPage() {
   const [hourBankPeriodMode, setHourBankPeriodMode] = useState<HourBankPeriodMode>('month');
   const [hourBankDate, setHourBankDate] = useState(() => createDateInputValue(new Date()));
   const [hourBankMonth, setHourBankMonth] = useState(() => createMonthInputValue(new Date()));
+  const [hourBankDetailTechnicianId, setHourBankDetailTechnicianId] = useState('all');
   const [builderDialog, setBuilderDialog] = useState<ScheduleBuilderDialog>(null);
   const [activeDayRuleKey, setActiveDayRuleKey] = useState<ScheduleDayRuleKey | null>(null);
   const [formData, setFormData] = useState<ScheduleBuilderForm>(createInitialBuilderForm);
@@ -1607,6 +1609,7 @@ export function AdminScheduleBuilderPage() {
         technician_id: technicianId,
         technician_name: technicianName,
         status_label: workHour ? 'Trabalhou' : getScheduleDisplayLabel(entry),
+        schedule_status: entry?.status,
         planned_start_time: plannedTimes.startTime,
         planned_end_time: plannedTimes.endTime,
         actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, '') : '',
@@ -1618,6 +1621,10 @@ export function AdminScheduleBuilderPage() {
       };
     }).sort((left, right) => left.date.localeCompare(right.date) || left.technician_name.localeCompare(right.technician_name, 'pt-BR'));
   }, [hourBankSchedule, hourBankWorkHours, technicianNameById]);
+  const hourBankDetailRowsFiltered = useMemo(
+    () => (hourBankDetailTechnicianId === 'all' ? hourBankDetailRows : hourBankDetailRows.filter((row) => row.technician_id === hourBankDetailTechnicianId)),
+    [hourBankDetailRows, hourBankDetailTechnicianId],
+  );
   const hourBankRows = useMemo<HourBankRow[]>(() => {
     const monthSchedule = hourBankSchedule;
     const monthWorkHours = hourBankWorkHours;
@@ -3703,11 +3710,61 @@ export function AdminScheduleBuilderPage() {
             <DialogHeader className="border-b border-border/70 px-6 py-5 sm:px-7">
               <DialogTitle className="text-xl">Banco de horas detalhado</DialogTitle>
               <DialogDescription className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                {hourBankPeriodLabel} com entrada e saída previstas, entrada e saída reais, horas e saldo.
+                Somente visualização — situação, escala prevista, entrada e saída reais e saldo por técnico e dia.
               </DialogDescription>
             </DialogHeader>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 sm:px-7">
+              <div className="mb-4 flex flex-wrap items-end gap-2 rounded-lg border border-border/70 bg-card/70 p-4">
+                <div className="flex h-11 items-center rounded-md border border-border bg-background p-1">
+                  {hourBankPeriodOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => setHourBankPeriodMode(option.value)}
+                      className={`h-8 rounded px-3 text-sm font-medium transition ${hourBankPeriodMode === option.value ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+
+                {hourBankPeriodMode === 'month' ? (
+                  <label className="flex h-11 items-center rounded-md border border-input bg-background px-3">
+                    <span className="sr-only">Mês</span>
+                    <input type="month" value={hourBankMonth} onChange={(event) => setHourBankMonth(event.target.value)} className="h-9 bg-transparent text-sm text-foreground outline-none" />
+                  </label>
+                ) : (
+                  <>
+                    <label className="flex h-11 items-center rounded-md border border-input bg-background px-3">
+                      <span className="sr-only">{hourBankPeriodMode === 'day' ? 'Data' : 'Semana de referência'}</span>
+                      <input type="date" value={hourBankDate} onChange={(event) => setHourBankDate(event.target.value)} className="h-9 bg-transparent text-sm text-foreground outline-none" />
+                    </label>
+                    {hourBankPeriodMode === 'day' ? (
+                      <Button type="button" variant="outline" onClick={() => setHourBankDate(createDateInputValue(new Date()))}>
+                        Hoje
+                      </Button>
+                    ) : null}
+                  </>
+                )}
+
+                <label className="flex h-11 items-center rounded-md border border-input bg-background px-3">
+                  <span className="sr-only">Técnico</span>
+                  <select
+                    value={hourBankDetailTechnicianId}
+                    onChange={(event) => setHourBankDetailTechnicianId(event.target.value)}
+                    className="h-9 min-w-40 bg-transparent text-sm text-foreground outline-none"
+                  >
+                    <option value="all">Todos os técnicos</option>
+                    {sortedTechnicians.map((technician) => (
+                      <option key={technician.id} value={technician.id}>{technician.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <span className="ml-auto text-sm text-muted-foreground">{hourBankPeriodLabel}</span>
+              </div>
+
               <div className="mb-4 grid gap-3 md:grid-cols-4">
                 <div className="rounded-md border border-border bg-secondary/30 px-3 py-3">
                   <p className="text-xs font-medium uppercase text-muted-foreground">Período</p>
@@ -3727,43 +3784,47 @@ export function AdminScheduleBuilderPage() {
                 </div>
               </div>
 
-              <div className="overflow-x-auto rounded-md border border-border">
-                <table className="w-full min-w-[1040px] text-sm">
-                  <thead className="bg-secondary/40">
-                    <tr className="border-b border-border text-left text-xs uppercase text-muted-foreground">
-                      <th className="px-3 py-3 font-medium">Data</th>
-                      <th className="px-3 py-3 font-medium">Técnico</th>
-                      <th className="px-3 py-3 font-medium">Situação</th>
-                      <th className="px-3 py-3 font-medium">Entrada prevista</th>
-                      <th className="px-3 py-3 font-medium">Saída prevista</th>
-                      <th className="px-3 py-3 font-medium">Entrada real</th>
-                      <th className="px-3 py-3 font-medium">Saída real</th>
-                      <th className="px-3 py-3 font-medium">Horas</th>
-                      <th className="px-3 py-3 font-medium">Saldo</th>
-                      <th className="px-3 py-3 font-medium">Obs.</th>
+              <div className="overflow-x-auto rounded-lg border border-border/70 bg-background">
+                <table className="w-full min-w-[1160px] text-sm">
+                  <thead className="bg-secondary/60 text-left text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-3">Data</th>
+                      <th className="px-3 py-3">Situação</th>
+                      <th className="px-3 py-3">Técnico</th>
+                      <th className="px-3 py-3">Escala</th>
+                      <th className="px-3 py-3">Previsto</th>
+                      <th className="px-3 py-3">Entrada</th>
+                      <th className="px-3 py-3">Saída</th>
+                      <th className="px-3 py-3">Observação</th>
+                      <th className="px-3 py-3">Saldo</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {hourBankDetailRows.length ? hourBankDetailRows.map((row) => (
-                      <tr key={row.key} className="border-b border-border last:border-0">
+                    {hourBankDetailRowsFiltered.length ? hourBankDetailRowsFiltered.map((row) => (
+                      <tr key={row.key} className="border-t border-border/70">
                         <td className="px-3 py-3 whitespace-nowrap">{formatDate(row.date)}</td>
+                        <td className="px-3 py-3 whitespace-nowrap">{row.status_label}</td>
                         <td className="px-3 py-3 font-medium text-foreground">{row.technician_name}</td>
-                        <td className="px-3 py-3">{row.status_label}</td>
-                        <td className="px-3 py-3 whitespace-nowrap">{formatTime(row.planned_start_time)}</td>
-                        <td className="px-3 py-3 whitespace-nowrap">{formatTime(row.planned_end_time)}</td>
+                        <td className="px-3 py-3">
+                          <StatusBadge tone={row.schedule_status === 'cancelled' ? 'warning' : row.schedule_status === 'completed' ? 'success' : row.schedule_status === 'scheduled' ? 'info' : 'neutral'}>
+                            {row.schedule_status ? getStatusLabel(row.schedule_status) : 'Sem escala'}
+                          </StatusBadge>
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap text-muted-foreground">
+                          {row.planned_hours > 0 ? `${formatTimeRange(row.planned_start_time, row.planned_end_time)} • ${formatHours(row.planned_hours)}` : 'Sem expediente previsto'}
+                        </td>
                         <td className="px-3 py-3 whitespace-nowrap">{row.actual_start_time ? formatTime(row.actual_start_time) : '-'}</td>
                         <td className="px-3 py-3 whitespace-nowrap">{row.actual_end_time ? formatTime(row.actual_end_time) : '-'}</td>
-                        <td className="px-3 py-3 whitespace-nowrap">{formatHours(row.worked_hours)} / {formatHours(row.planned_hours)}</td>
+                        <td className="px-3 py-3 max-w-64 truncate text-muted-foreground" title={row.observation}>{row.observation}</td>
                         <td className="px-3 py-3">
                           <StatusBadge tone={row.balance < 0 ? 'danger' : row.balance > 0 ? 'success' : 'neutral'}>
                             {formatHours(row.balance)}
                           </StatusBadge>
                         </td>
-                        <td className="px-3 py-3 max-w-64 truncate text-muted-foreground" title={row.observation}>{row.observation}</td>
                       </tr>
                     )) : (
                       <tr>
-                        <td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">Nenhum apontamento ou escala no período selecionado.</td>
+                        <td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">Nenhum apontamento ou escala no período selecionado.</td>
                       </tr>
                     )}
                   </tbody>
