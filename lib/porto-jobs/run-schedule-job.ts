@@ -152,7 +152,18 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
 
         resolvedTechnicianIds.push(technician.id);
 
+        let daysWithoutEscalaData = 0;
         for (const day of escalaDays) {
+          // Some accounts have no escala time at all for any day (confirmed live: the account
+          // owner's own QRA, plus at least one technician on extended leave — Porto just renders
+          // an empty cell, not an indisponibilidade-marked one). Writing "scheduled 00:00-00:00"
+          // for those is misleading (looks like a real, zero-length shift) — skip the row entirely
+          // instead when there's truly nothing to report.
+          if (!day.startTime && !day.endTime && !day.unavailable) {
+            daysWithoutEscalaData++;
+            continue;
+          }
+
           const dateKey = `${year}-${String(month).padStart(2, '0')}-${String(day.day).padStart(2, '0')}`;
           const reason = day.unavailable ? day.reason || 'indisponibilidade' : 'escala normal';
 
@@ -168,7 +179,14 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
           });
         }
 
-        details.push({ qra: socorrista.qra, technician_id: technician.id, technician_name: technician.name, action: 'imported', days: escalaDays.length });
+        details.push({
+          qra: socorrista.qra,
+          technician_id: technician.id,
+          technician_name: technician.name,
+          action: 'imported',
+          days: escalaDays.length - daysWithoutEscalaData,
+          daysWithoutEscalaData: daysWithoutEscalaData || undefined,
+        });
       }
 
       const dryRun = options.forceWrite ? false : options.manual || config.dry_run_only !== false;
