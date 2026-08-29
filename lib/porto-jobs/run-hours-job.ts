@@ -193,6 +193,22 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       const technicianIds = resolved.map((r) => r.technician.id);
       const existingDates = await getExistingPortoImportedDates(technicianIds, monthStartKey, todayKey);
 
+      // Porto's own escala calendar doesn't finalize a day's shift time until the day is over — a
+      // same-day scrape sees a blank/missing time range for "today" (confirmed live: fetching
+      // 2026-08-28's escala while it was still the current day returned no start/end time for
+      // every technician; the identical fetch the next day returned the normal fixed shift time).
+      // That empties `escalaDay.endTime` below, which falls back to the completion time as
+      // "previsto" — silently making that day's previsto equal its realizado, hiding any real
+      // discrepancy. Force a reprocess of the last two calendar days regardless of the "already
+      // imported" dedup so each day's previsto self-corrects the next time it's swept, once
+      // Porto's escala has caught up, instead of being stuck forever with the same-day fallback.
+      const reprocessWindowStart = addDaysToKey(todayKey, -1);
+      for (const key of Array.from(existingDates)) {
+        if (key.slice(-10) >= reprocessWindowStart) {
+          existingDates.delete(key);
+        }
+      }
+
       // One search per 15-day chunk covers the whole month-to-date, instead of one per day.
       const chunks = buildDateChunks(monthStartKey, todayKey);
       const allServices: PortoServiceRow[] = [];
