@@ -7,6 +7,15 @@ export type PortoServiceRow = {
   technicianNameFragment: string;
   /** "dd/mm/aaaa" as shown in the results table — the scheduled/programmed date, not necessarily the actual completion date (see getServicoDetail). */
   dataProgramada: string;
+  /**
+   * "HH:mm" from the results table's "Hora Prevista" column (`cap_horaAtendimento`) — confirmed
+   * live with the product owner (2026-08-29) as the real time the technician actually started
+   * that service, unlike the neighboring "Hora Comb." column (`cap_horaProgramadaAtendimento`,
+   * a generic/static programmed slot — always the same value like 08:00 regardless of what
+   * actually happened, which is what falsely made every technician's recorded start time show as
+   * 08:00 before this was found). Empty string if the column wasn't present/parseable.
+   */
+  horaAtendimento: string;
 };
 
 export type PortoServiceDetail = {
@@ -99,6 +108,10 @@ export async function searchServicosByDateRange(page: Page, range: PortoDateRang
 const ONCLICK_CODE_PATTERN = /onclick="changeUrlAW\(this,\s*(\d+),\s*(\d+)/i;
 const NAME_CELL_PATTERN = /<!--\s*Nome Tratamento\s*-->\s*<td[^>]*>([\s\S]*?)<\/td>/i;
 const DATE_SPAN_PATTERN = /cap_dataProgramadaAtendimento"[^>]*>([\s\S]*?)<\/span>/i;
+// "Hora Prevista" column — cap_horaAtendimento is the real per-service start time (see
+// PortoServiceRow.horaAtendimento doc comment); not to be confused with the neighboring
+// cap_horaProgramadaAtendimento ("Hora Comb.") column, a static scheduled slot.
+const HORA_ATENDIMENTO_PATTERN = /cap_horaAtendimento"[^>]*>([\s\S]*?)<\/span>/i;
 
 /**
  * Validated live against a real 15-day range result (402 rows): the row's other all-caps cells
@@ -127,9 +140,12 @@ function parseServiceRowsFromHtml(html: string): PortoServiceRow[] {
     const dateMatch = rawRow.match(DATE_SPAN_PATTERN);
     const dataProgramada = dateMatch ? dateMatch[1].trim() : '';
 
+    const horaMatch = rawRow.match(HORA_ATENDIMENTO_PATTERN);
+    const horaAtendimento = horaMatch ? horaMatch[1].replace(/&nbsp;/g, ' ').trim() : '';
+
     if (!technicianNameFragment) continue;
 
-    rows.push({ numeroServico, anoServico, technicianNameFragment, dataProgramada });
+    rows.push({ numeroServico, anoServico, technicianNameFragment, dataProgramada, horaAtendimento });
   }
 
   return rows;

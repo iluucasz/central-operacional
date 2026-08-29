@@ -58,6 +58,8 @@ export function jobDetailActionLabel(action: string | undefined) {
       return 'Execução parou por limite de tempo (continua na próxima)';
     case 'service_detail_failed':
       return 'Falha ao abrir detalhe de um serviço (pulado)';
+    case 'start_time_fallback_escala':
+      return 'Sem "Hora Prevista" válida — usou horário da escala como aproximação';
     default:
       return action || '-';
   }

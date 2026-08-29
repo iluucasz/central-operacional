@@ -24,6 +24,19 @@ const SOCORRISTAS_URL = 'https://wwws.portoseguro.com.br/integracoesportaldepres
  * `<img src=".../indisponibilidade.png">` on days with an exception — confirmed present on 9 of
  * 42 cells for a real technician's August 2026 calendar.
  *
+ * The month view is a fixed 6x7 grid, so it always shows some leading/trailing days from the
+ * adjacent months to fill whole weeks (e.g. August 2026 starts on a Saturday, so the grid also
+ * shows July 26-31 up front and September 1-5 at the end — confirmed live: 42 total cells for a
+ * 31-day month). Those padding cells have empty `span[title="Escala"]` text but the SAME day
+ * numbers as real days later/earlier in the target month (July 26-31 vs August 26-31, September
+ * 1-5 vs August 1-5) — without filtering them out, every consumer of this array either silently
+ * shadows the real day when doing `.find(d => d.day === n)` (the padding entry comes first for
+ * the leading case) or, worse, writes a second bogus 00:00 schedule row per date on top of the
+ * correct one (confirmed live in the `schedule` table: every technician had two rows for
+ * 2026-08-01/02/29/30/31, one correct, one from padding). Fixed by only keeping the contiguous
+ * 1..daysInMonth run in document order, which is exactly and only the real month's days
+ * regardless of which weekday the month starts/ends on.
+ *
  * Navigation: detail pages reject direct URL access ("Acesso proibido"), so this opens the
  * socorristas list through its portal wrapper and clicks the technician's own link, exactly like
  * a real user would, rather than constructing the ConDetSocor.xhtml URL directly.
@@ -43,10 +56,13 @@ export async function getEscalaForCurrentMonth(page: Page, qra: string): Promise
 
   const detailFrame = page.frames().find((f) => f.url().includes('ConDetSocor')) ?? listFrame;
 
-  return detailFrame.evaluate(() => {
+  const now = new Date();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+
+  return detailFrame.evaluate((daysInMonth) => {
     const cells = Array.from(document.querySelectorAll('.organizerDayCell'));
 
-    return cells
+    const parsed = cells
       .map((cell) => {
         // Day number and time range live in separate elements — read them independently rather
         // than the whole cell's concatenated textContent, which merges them with no separator
@@ -69,5 +85,19 @@ export async function getEscalaForCurrentMonth(page: Page, qra: string): Promise
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-  });
+
+    // Keep only the contiguous 1..daysInMonth run — drops leading/trailing adjacent-month padding
+    // regardless of which weekday the month starts or ends on (see doc comment above).
+    const realMonthDays: typeof parsed = [];
+    let expected = 1;
+    for (const entry of parsed) {
+      if (entry.day === expected) {
+        realMonthDays.push(entry);
+        expected++;
+        if (expected > daysInMonth) break;
+      }
+    }
+
+    return realMonthDays;
+  }, daysInMonth);
 }

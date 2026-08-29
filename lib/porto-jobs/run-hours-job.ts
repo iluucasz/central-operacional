@@ -80,6 +80,11 @@ function toBrDate(dateKey: string) {
   return `${day}/${month}/${year}`;
 }
 
+function timeToMinutes(value: string): number {
+  const [h, m] = value.split(':').map(Number);
+  return h * 60 + m;
+}
+
 function brDateToKey(brDate: string): string | null {
   const match = brDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!match) return null;
@@ -303,6 +308,19 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             continue;
           }
 
+          // Real start of the day's work: the earliest "Hora Prevista" (cap_horaAtendimento)
+          // among today's services for this technician — confirmed live with the product owner
+          // (2026-08-29) as the actual per-service start time. Read directly off the search
+          // results row (no extra page load needed). NOT the neighboring "Hora Comb."
+          // (cap_horaProgramadaAtendimento) column, a static scheduled slot that's the same value
+          // (typically 08:00) for nearly every service regardless of when work actually started —
+          // using that by mistake (via the escala's generic shift start, previously) is exactly
+          // why every technician's recorded start time was showing as 08:00.
+          const earliestStart = servicesForDay
+            .map((service) => service.horaAtendimento)
+            .filter((value) => /^\d{1,2}:\d{2}$/.test(value))
+            .reduce((earliest: string | null, current) => (!earliest || timeToMinutes(current) < timeToMinutes(earliest) ? current : earliest), null);
+
           let plannedStart = '08:00';
           let plannedEnd = latestCompletion;
           try {
@@ -322,16 +340,21 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'escala_fetch_failed_fallback_0800', date: dateKey, error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
           }
 
-          const hoursWorked = diffHours(plannedStart, latestCompletion);
+          if (!earliestStart) {
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'start_time_fallback_escala', date: dateKey });
+          }
+          const actualStart = earliestStart ?? plannedStart;
+
+          const hoursWorked = diffHours(actualStart, latestCompletion);
           if (hoursWorked <= 0 || hoursWorked > MAX_PLAUSIBLE_SHIFT_HOURS) {
-            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'invalid_hours', date: dateKey, plannedStart, latestCompletion, hoursWorked });
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'invalid_hours', date: dateKey, actualStart, latestCompletion, hoursWorked });
             continue;
           }
 
           const entry: WorkHourEntry = {
             technician_id: technician.id,
             date: dateKey,
-            start_time: plannedStart,
+            start_time: actualStart,
             end_time: latestCompletion,
             planned_start_time: plannedStart,
             planned_end_time: plannedEnd,
