@@ -6,6 +6,24 @@ const MANUAL_NOTE_PREFIX = 'Apontamento manual:';
 
 type ProtectionMode = 'generated' | 'porto';
 
+/**
+ * The driver returns `date`-typed columns as JS Date objects (constructed at local midnight for
+ * that calendar date), not plain 'YYYY-MM-DD' strings. `String(dateObject)` calls
+ * Date.prototype.toString(), which starts with a weekday abbreviation ("Sat Aug 01 2026...") and
+ * never matches a plain date string under any timezone — so comparing that against
+ * `ScheduleSeedRow.date` ("2026-08-01") always fails. Use local getters (matching how the Date was
+ * constructed) to recover the real calendar-date key instead of relying on string coercion.
+ */
+function toDateKey(value: unknown): string {
+  if (value instanceof Date) {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return String(value).slice(0, 10);
+}
+
 type ReplaceScheduleRowsParams = {
   technicianIds: string[];
   startDate: string;
@@ -43,7 +61,7 @@ async function replaceScheduleRows(params: ReplaceScheduleRowsParams & { mode: P
   );
 
   const preservedKeys = new Set(
-    preservedRows.map((row) => `${String(row.technician_id)}::${String(row.date).slice(0, 10)}`),
+    preservedRows.map((row) => `${String(row.technician_id)}::${toDateKey(row.date)}`),
   );
 
   const filteredRows = rows.filter((row) => !preservedKeys.has(`${row.technician_id}::${row.date}`));
