@@ -10,6 +10,11 @@ import { applyWorkHourEntries, getExistingPortoImportedDates, getIsoWeekNumber, 
 import type { Technician } from '../types';
 
 const MAX_PLAUSIBLE_SHIFT_HOURS = 16;
+// Mirrors admin-schedule-builder.tsx's DAILY_BREAK_HOURS/getHoursBetween — "previsto" (planned
+// hours) always nets out an assumed 1h lunch break, so "realizado" needs the same deduction or the
+// two aren't comparable (confirmed live: every Porto-imported hours_worked exactly matched the raw
+// entrada-saída diff, zero exceptions, silently inflating saldo by ~1h on every full workday).
+const DAILY_BREAK_HOURS = 1;
 const SEARCH_CHUNK_DAYS = 15; // matches the site's own client-side range cap (see servicos.ts)
 
 export type HoursJobOptions = {
@@ -110,13 +115,18 @@ function buildDateChunks(startKey: string, endKey: string): { startDateKey: stri
   return chunks;
 }
 
-/** Handles shifts that cross midnight (e.g. 22:00 -> 02:00) by wrapping the end time forward a day. */
+/**
+ * Handles shifts that cross midnight (e.g. 22:00 -> 02:00) by wrapping the end time forward a day,
+ * and nets out DAILY_BREAK_HOURS once the raw span exceeds it (see the constant's comment above).
+ */
 function diffHours(startTime: string, endTime: string) {
   const [sh, sm] = startTime.split(':').map(Number);
   const [eh, em] = endTime.split(':').map(Number);
   let minutes = eh * 60 + em - (sh * 60 + sm);
   if (minutes < 0) minutes += 24 * 60;
-  return Number((minutes / 60).toFixed(2));
+  const grossHours = minutes / 60;
+  const netHours = grossHours > DAILY_BREAK_HOURS ? grossHours - DAILY_BREAK_HOURS : grossHours;
+  return Number(netHours.toFixed(2));
 }
 
 /**
