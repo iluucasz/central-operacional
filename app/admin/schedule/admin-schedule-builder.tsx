@@ -1625,6 +1625,16 @@ export function AdminScheduleBuilderPage() {
     () => (hourBankDetailTechnicianId === 'all' ? hourBankDetailRows : hourBankDetailRows.filter((row) => row.technician_id === hourBankDetailTechnicianId)),
     [hourBankDetailRows, hourBankDetailTechnicianId],
   );
+  const hourBankDetailFilteredTotals = useMemo(() => {
+    return hourBankDetailRowsFiltered.reduce(
+      (totals, row) => ({
+        planned: totals.planned + row.planned_hours,
+        worked: totals.worked + row.worked_hours,
+        balance: totals.balance + row.balance,
+      }),
+      { planned: 0, worked: 0, balance: 0 },
+    );
+  }, [hourBankDetailRowsFiltered]);
   const hourBankRows = useMemo<HourBankRow[]>(() => {
     const monthSchedule = hourBankSchedule;
     const monthWorkHours = hourBankWorkHours;
@@ -3772,15 +3782,15 @@ export function AdminScheduleBuilderPage() {
                 </div>
                 <div className="rounded-md border border-border px-3 py-3">
                   <p className="text-xs font-medium uppercase text-muted-foreground">Previsto</p>
-                  <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatHours(hourBankTotals.planned)}</p>
+                  <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatHours(hourBankDetailFilteredTotals.planned)}</p>
                 </div>
                 <div className="rounded-md border border-border px-3 py-3">
                   <p className="text-xs font-medium uppercase text-muted-foreground">Realizado</p>
-                  <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatHours(hourBankTotals.worked)}</p>
+                  <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{formatHours(hourBankDetailFilteredTotals.worked)}</p>
                 </div>
                 <div className="rounded-md border border-border px-3 py-3">
                   <p className="text-xs font-medium uppercase text-muted-foreground">Saldo</p>
-                  <p className={`mt-1 text-lg font-semibold tabular-nums ${hourBankTotals.balance < 0 ? 'text-rose-700' : hourBankTotals.balance > 0 ? 'text-emerald-700' : 'text-foreground'}`}>{formatHours(hourBankTotals.balance)}</p>
+                  <p className={`mt-1 text-lg font-semibold tabular-nums ${hourBankDetailFilteredTotals.balance < 0 ? 'text-rose-700' : hourBankDetailFilteredTotals.balance > 0 ? 'text-emerald-700' : 'text-foreground'}`}>{formatHours(hourBankDetailFilteredTotals.balance)}</p>
                 </div>
               </div>
 
