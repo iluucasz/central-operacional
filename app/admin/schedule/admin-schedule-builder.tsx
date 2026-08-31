@@ -3843,6 +3843,23 @@ export function AdminScheduleBuilderPage() {
                   </select>
                 </label>
 
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button type="button" className="bg-emerald-600 text-white hover:bg-emerald-700">
+                      <Download className="h-4 w-4" />
+                      Exportar
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem onSelect={() => handleExportHourBankDetail('period')}>
+                      Período selecionado ({hourBankPeriodLabel})
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => handleExportHourBankDetail('all')}>
+                      Todos os períodos
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
                 <span className="ml-auto text-sm text-muted-foreground">{hourBankPeriodLabel}</span>
               </div>
 
@@ -3914,22 +3931,6 @@ export function AdminScheduleBuilderPage() {
             </div>
 
             <DialogFooter className="border-t border-border/70 bg-background/95 px-6 py-4 sm:px-7">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="outline">
-                    <Download className="h-4 w-4" />
-                    Exportar
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuItem onSelect={() => handleExportHourBankDetail('period')}>
-                    Período selecionado ({hourBankPeriodLabel})
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => handleExportHourBankDetail('all')}>
-                    Todos os períodos
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
               <Button type="button" variant="outline" onClick={() => setIsHourBankDetailDialogOpen(false)}>
                 Fechar
               </Button>
