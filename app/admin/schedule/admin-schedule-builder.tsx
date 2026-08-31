@@ -98,7 +98,7 @@ interface ScheduleBuilderForm {
 
 type AttendanceStatus = 'not_marked' | 'worked' | 'day_off' | 'missed' | 'justified';
 type AttendanceMode = 'day' | 'month' | 'spreadsheet';
-type HourBankPeriodMode = 'day' | 'week' | 'month';
+type HourBankPeriodMode = 'day' | 'week' | 'month' | 'year';
 
 interface AttendanceDraft {
   key: string;
@@ -244,6 +244,7 @@ const hourBankPeriodOptions: Array<{ value: HourBankPeriodMode; label: string }>
   { value: 'day', label: 'Dia' },
   { value: 'week', label: 'Semana' },
   { value: 'month', label: 'Mês' },
+  { value: 'year', label: 'Ano' },
 ];
 const dayRuleDefinitions: Array<{ key: ScheduleDayRuleKey; label: string; dayLabel: string }> = [
   { key: 'monday', label: 'Segunda', dayLabel: 'segunda-feira' },
@@ -618,6 +619,78 @@ function getScheduleObservation(entry: Schedule) {
   return entry.notes || '-';
 }
 
+/**
+ * Shared by the live (period-filtered) hour-bank view and the "export all periods" action, which
+ * needs the same merge logic over the full, unfiltered schedule/work_hours arrays instead of just
+ * the current hourBankRange window.
+ */
+function buildHourBankDetailRows(scheduleRows: Schedule[], workHoursRows: WorkHours[], technicianNameById: Map<string, string>): HourBankDetailRow[] {
+  const scheduleByTechnicianDate = new Map<string, Schedule[]>();
+  const workHoursByTechnicianDate = new Map<string, WorkHours[]>();
+
+  scheduleRows.forEach((item) => {
+    const dateKey = normalizeDateKey(item.date);
+    const key = createAttendanceKey(item.technician_id, dateKey);
+    scheduleByTechnicianDate.set(key, [...(scheduleByTechnicianDate.get(key) ?? []), item]);
+  });
+
+  workHoursRows.forEach((item) => {
+    const dateKey = normalizeDateKey(item.date);
+    const key = createAttendanceKey(item.technician_id, dateKey);
+    workHoursByTechnicianDate.set(key, [...(workHoursByTechnicianDate.get(key) ?? []), item]);
+  });
+
+  const allKeys = Array.from(new Set([...scheduleByTechnicianDate.keys(), ...workHoursByTechnicianDate.keys()]));
+
+  return allKeys.map((key) => {
+    const [technicianId, dateKey] = key.split('::');
+    const entry = getBestScheduleEntry(scheduleByTechnicianDate.get(key) ?? []);
+    const workHour = getBestWorkHour(workHoursByTechnicianDate.get(key) ?? []);
+    const plannedTimes = getSchedulePlannedTimes(entry);
+    const plannedHours = getSchedulePlannedHoursForBank(entry);
+    const workedHours = Number(workHour?.hours_worked || 0);
+    const technicianName = entry?.technician_name || technicianNameById.get(technicianId) || technicianId;
+
+    return {
+      key,
+      date: dateKey,
+      technician_id: technicianId,
+      technician_name: technicianName,
+      status_label: workHour ? 'Trabalhou' : getScheduleDisplayLabel(entry),
+      schedule_status: entry?.status,
+      planned_start_time: plannedTimes.startTime,
+      planned_end_time: plannedTimes.endTime,
+      actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, '') : '',
+      actual_end_time: workHour ? normalizeTimeInput(workHour.end_time, '') : '',
+      planned_hours: plannedHours,
+      worked_hours: Number(workedHours.toFixed(2)),
+      balance: Number((workedHours - plannedHours).toFixed(2)),
+      observation: entry ? getScheduleObservation(entry) : '-',
+    };
+  }).sort((left, right) => left.date.localeCompare(right.date) || left.technician_name.localeCompare(right.technician_name, 'pt-BR'));
+}
+
+function buildHourBankExportRows(rows: HourBankDetailRow[]) {
+  return rows.map((row) => ({
+    Data: formatDate(row.date),
+    Situacao: row.status_label,
+    Tecnico: row.technician_name,
+    Escala: row.schedule_status ? getStatusLabel(row.schedule_status) : 'Sem escala',
+    Previsto_inicio: formatTime(row.planned_start_time),
+    Previsto_fim: formatTime(row.planned_end_time),
+    Entrada: row.actual_start_time ? formatTime(row.actual_start_time) : '-',
+    Saida: row.actual_end_time ? formatTime(row.actual_end_time) : '-',
+    Horas_previstas: row.planned_hours,
+    Horas_realizadas: row.worked_hours,
+    Saldo: row.balance,
+    Observacao: row.observation,
+  }));
+}
+
+function slugify(value: string) {
+  return value.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
 function getMonthLabel(monthKey: string) {
   const [year, month] = monthKey.split('-').map(Number);
   const monthName = monthNames[month - 1];
@@ -628,6 +701,7 @@ function getMonthLabel(monthKey: string) {
 function getHourBankPeriodLabel(periodMode: HourBankPeriodMode, startDate: string, endDate: string, monthKey: string) {
   if (periodMode === 'day') return formatDate(startDate);
   if (periodMode === 'week') return `${formatDate(startDate)} a ${formatDate(endDate)}`;
+  if (periodMode === 'year') return startDate.slice(0, 4);
 
   return getMonthLabel(monthKey);
 }
@@ -1176,6 +1250,7 @@ export function AdminScheduleBuilderPage() {
   const [hourBankPeriodMode, setHourBankPeriodMode] = useState<HourBankPeriodMode>('month');
   const [hourBankDate, setHourBankDate] = useState(() => createDateInputValue(new Date()));
   const [hourBankMonth, setHourBankMonth] = useState(() => createMonthInputValue(new Date()));
+  const [hourBankYear, setHourBankYear] = useState(() => new Date().getFullYear());
   const [hourBankDetailTechnicianId, setHourBankDetailTechnicianId] = useState('all');
   const [builderDialog, setBuilderDialog] = useState<ScheduleBuilderDialog>(null);
   const [activeDayRuleKey, setActiveDayRuleKey] = useState<ScheduleDayRuleKey | null>(null);
@@ -1554,10 +1629,13 @@ export function AdminScheduleBuilderPage() {
       const parts = getYearMonthParts(hourBankMonth);
       return getScheduleRange('month', parts.year, parts.month);
     }
+    if (hourBankPeriodMode === 'year') {
+      return getScheduleRange('year', hourBankYear);
+    }
 
     const year = Number(hourBankDate.slice(0, 4)) || new Date().getFullYear();
     return getScheduleRange(hourBankPeriodMode, year, undefined, hourBankDate);
-  }, [hourBankDate, hourBankMonth, hourBankPeriodMode]);
+  }, [hourBankDate, hourBankMonth, hourBankPeriodMode, hourBankYear]);
   const hourBankPeriodLabel = useMemo(
     () => getHourBankPeriodLabel(hourBankPeriodMode, hourBankRange.startDate, hourBankRange.endDate, hourBankMonth),
     [hourBankMonth, hourBankPeriodMode, hourBankRange.endDate, hourBankRange.startDate],
@@ -1576,51 +1654,10 @@ export function AdminScheduleBuilderPage() {
     }),
     [hourBankRange.endDate, hourBankRange.startDate, visibleWorkHours],
   );
-  const hourBankDetailRows = useMemo<HourBankDetailRow[]>(() => {
-    const scheduleByTechnicianDate = new Map<string, Schedule[]>();
-    const workHoursByTechnicianDate = new Map<string, WorkHours[]>();
-
-    hourBankSchedule.forEach((item) => {
-      const dateKey = normalizeDateKey(item.date);
-      const key = createAttendanceKey(item.technician_id, dateKey);
-      scheduleByTechnicianDate.set(key, [...(scheduleByTechnicianDate.get(key) ?? []), item]);
-    });
-
-    hourBankWorkHours.forEach((item) => {
-      const dateKey = normalizeDateKey(item.date);
-      const key = createAttendanceKey(item.technician_id, dateKey);
-      workHoursByTechnicianDate.set(key, [...(workHoursByTechnicianDate.get(key) ?? []), item]);
-    });
-
-    const allKeys = Array.from(new Set([...scheduleByTechnicianDate.keys(), ...workHoursByTechnicianDate.keys()]));
-
-    return allKeys.map((key) => {
-      const [technicianId, dateKey] = key.split('::');
-      const entry = getBestScheduleEntry(scheduleByTechnicianDate.get(key) ?? []);
-      const workHour = getBestWorkHour(workHoursByTechnicianDate.get(key) ?? []);
-      const plannedTimes = getSchedulePlannedTimes(entry);
-      const plannedHours = getSchedulePlannedHoursForBank(entry);
-      const workedHours = Number(workHour?.hours_worked || 0);
-      const technicianName = entry?.technician_name || technicianNameById.get(technicianId) || technicianId;
-
-      return {
-        key,
-        date: dateKey,
-        technician_id: technicianId,
-        technician_name: technicianName,
-        status_label: workHour ? 'Trabalhou' : getScheduleDisplayLabel(entry),
-        schedule_status: entry?.status,
-        planned_start_time: plannedTimes.startTime,
-        planned_end_time: plannedTimes.endTime,
-        actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, '') : '',
-        actual_end_time: workHour ? normalizeTimeInput(workHour.end_time, '') : '',
-        planned_hours: plannedHours,
-        worked_hours: Number(workedHours.toFixed(2)),
-        balance: Number((workedHours - plannedHours).toFixed(2)),
-        observation: entry ? getScheduleObservation(entry) : '-',
-      };
-    }).sort((left, right) => left.date.localeCompare(right.date) || left.technician_name.localeCompare(right.technician_name, 'pt-BR'));
-  }, [hourBankSchedule, hourBankWorkHours, technicianNameById]);
+  const hourBankDetailRows = useMemo<HourBankDetailRow[]>(
+    () => buildHourBankDetailRows(hourBankSchedule, hourBankWorkHours, technicianNameById),
+    [hourBankSchedule, hourBankWorkHours, technicianNameById],
+  );
   const hourBankDetailRowsFiltered = useMemo(
     () => (hourBankDetailTechnicianId === 'all' ? hourBankDetailRows : hourBankDetailRows.filter((row) => row.technician_id === hourBankDetailTechnicianId)),
     [hourBankDetailRows, hourBankDetailTechnicianId],
@@ -2669,6 +2706,30 @@ export function AdminScheduleBuilderPage() {
     }));
   }
 
+  function handleExportHourBankDetail(scope: 'period' | 'all') {
+    const sourceRows = scope === 'all'
+      ? buildHourBankDetailRows(visibleSchedule, visibleWorkHours, technicianNameById)
+      : hourBankDetailRowsFiltered;
+    const filteredRows = scope === 'all' && hourBankDetailTechnicianId !== 'all'
+      ? sourceRows.filter((row) => row.technician_id === hourBankDetailTechnicianId)
+      : sourceRows;
+
+    if (!filteredRows.length) {
+      setSaveMessage('Nenhuma linha para exportar no filtro selecionado.');
+      return;
+    }
+
+    const technicianLabel = hourBankDetailTechnicianId === 'all'
+      ? 'todos-tecnicos'
+      : slugify(sortedTechnicians.find((technician) => technician.id === hourBankDetailTechnicianId)?.name ?? 'tecnico');
+    const periodLabel = scope === 'all' ? 'todos-periodos' : `${hourBankRange.startDate}_a_${hourBankRange.endDate}`;
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(buildHourBankExportRows(filteredRows)), 'Banco de horas');
+    XLSX.writeFile(workbook, `banco-horas-detalhado_${periodLabel}_${technicianLabel}.xlsx`);
+    setSaveMessage(`Planilha exportada com ${formatCount(filteredRows.length, 'linha', 'linhas')}.`);
+  }
+
   function handleExportSpreadsheet() {
     const bankRows = hourBankRows.map((row) => ({
       Tecnico: row.technician_name,
@@ -3487,6 +3548,11 @@ export function AdminScheduleBuilderPage() {
                   <span className="sr-only">Mês</span>
                   <input type="month" value={hourBankMonth} onChange={(event) => setHourBankMonth(event.target.value)} className="h-9 bg-transparent text-sm text-foreground outline-none" />
                 </label>
+              ) : hourBankPeriodMode === 'year' ? (
+                <label className="flex h-11 items-center rounded-md border border-input bg-background px-3">
+                  <span className="sr-only">Ano</span>
+                  <input type="number" value={hourBankYear} onChange={(event) => setHourBankYear(Number(event.target.value) || new Date().getFullYear())} className="h-9 w-20 bg-transparent text-sm text-foreground outline-none" />
+                </label>
               ) : (
                 <label className="flex h-11 items-center rounded-md border border-input bg-background px-3">
                   <span className="sr-only">{hourBankPeriodMode === 'day' ? 'Data' : 'Semana de referência'}</span>
@@ -3744,6 +3810,11 @@ export function AdminScheduleBuilderPage() {
                     <span className="sr-only">Mês</span>
                     <input type="month" value={hourBankMonth} onChange={(event) => setHourBankMonth(event.target.value)} className="h-9 bg-transparent text-sm text-foreground outline-none" />
                   </label>
+                ) : hourBankPeriodMode === 'year' ? (
+                  <label className="flex h-11 items-center rounded-md border border-input bg-background px-3">
+                    <span className="sr-only">Ano</span>
+                    <input type="number" value={hourBankYear} onChange={(event) => setHourBankYear(Number(event.target.value) || new Date().getFullYear())} className="h-9 w-20 bg-transparent text-sm text-foreground outline-none" />
+                  </label>
                 ) : (
                   <>
                     <label className="flex h-11 items-center rounded-md border border-input bg-background px-3">
@@ -3843,6 +3914,22 @@ export function AdminScheduleBuilderPage() {
             </div>
 
             <DialogFooter className="border-t border-border/70 bg-background/95 px-6 py-4 sm:px-7">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button type="button" variant="outline">
+                    <Download className="h-4 w-4" />
+                    Exportar
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onSelect={() => handleExportHourBankDetail('period')}>
+                    Período selecionado ({hourBankPeriodLabel})
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => handleExportHourBankDetail('all')}>
+                    Todos os períodos
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button type="button" variant="outline" onClick={() => setIsHourBankDetailDialogOpen(false)}>
                 Fechar
               </Button>
