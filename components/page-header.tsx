@@ -7,13 +7,13 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, description, eyebrow, children }: PageHeaderProps) {
   return (
-    <div className="mb-4 flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-end lg:justify-between">
-      <div className="max-w-3xl">
-        {eyebrow ? <p className="mb-1 text-xs font-semibold uppercase text-primary">{eyebrow}</p> : null}
-        <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
-        {description ? <p className="mt-1 text-sm leading-5 text-muted-foreground">{description}</p> : null}
+    <div className="app-page-header">
+      <div className="min-w-0 max-w-3xl">
+        {eyebrow ? <p className="app-eyebrow">{eyebrow}</p> : null}
+        <h1>{title}<span aria-hidden="true" className="app-title-dot">.</span></h1>
+        {description ? <p className="app-page-description">{description}</p> : null}
       </div>
-      {children ? <div className="flex flex-wrap items-center gap-2">{children}</div> : null}
+      {children ? <div className="app-page-actions flex flex-wrap items-center gap-2">{children}</div> : null}
     </div>
   );
 }

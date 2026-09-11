@@ -10,6 +10,16 @@ const JWT_SECRET = new TextEncoder().encode(
 
 const COOKIE_NAME = 'auth-token'
 
+export type TokenPayload = {
+  userId: string
+  email: string
+  role: UserRole
+  /** Set only on tokens minted by the admin preview flow. Such sessions are read-only. */
+  preview?: boolean
+  /** Which admin opened the preview — kept for auditing/debugging. */
+  previewBy?: string
+}
+
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 12)
 }
@@ -18,7 +28,7 @@ export async function verifyPassword(password: string, hashedPassword: string): 
   return bcrypt.compare(password, hashedPassword)
 }
 
-export async function createToken(payload: { userId: string; email: string; role: UserRole }): Promise<string> {
+export async function createToken(payload: TokenPayload): Promise<string> {
   return new SignJWT(payload)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
@@ -26,10 +36,10 @@ export async function createToken(payload: { userId: string; email: string; role
     .sign(JWT_SECRET)
 }
 
-export async function verifyToken(token: string): Promise<{ userId: string; email: string; role: UserRole } | null> {
+export async function verifyToken(token: string): Promise<TokenPayload | null> {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET)
-    return payload as { userId: string; email: string; role: UserRole }
+    return payload as TokenPayload
   } catch {
     return null
   }
@@ -114,9 +124,17 @@ export async function requireAdmin(): Promise<User> {
   return user
 }
 
+/** Reads the preview flag straight off the token, so callers don't have to re-parse the cookie. */
+export async function getPreviewContext(): Promise<{ preview: boolean; previewBy?: string }> {
+  const token = await getAuthToken()
+  const payload = token ? await verifyToken(token) : null
+
+  return { preview: payload?.preview === true, previewBy: payload?.previewBy }
+}
+
 export async function verifyAuth(
   request: Request,
-): Promise<{ userId: string; email: string; role: UserRole; technicianId?: string } | null> {
+): Promise<(TokenPayload & { technicianId?: string }) | null> {
   const token = request.headers.get('cookie')?.match(new RegExp(`${COOKIE_NAME}=([^;]+)`))?.[1]
   if (!token) return null
   const payload = await verifyToken(token)

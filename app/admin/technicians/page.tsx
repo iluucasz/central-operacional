@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { MoreHorizontal, Pencil, Power, Search, Trash2, UserPlus, Users, WalletCards } from 'lucide-react';
+import { Eye, MoreHorizontal, Pencil, Power, Search, Trash2, UserPlus, Users, WalletCards } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
@@ -198,6 +198,24 @@ export default function TechniciansPage() {
     upsertTechnician(updatedTechnician);
   }
 
+  async function handleStartPreview(technician: Technician) {
+    const response = await fetch('/api/auth/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ technicianId: technician.id }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      window.alert(data?.error || 'Nao foi possivel abrir o modo preview.');
+      return;
+    }
+
+    // Full reload, not a router push: the session cookie now belongs to a different user, so any
+    // client-side cache from the admin session has to be dropped.
+    window.location.href = '/dashboard';
+  }
+
   async function handleDelete() {
     if (!deletingTechnician) {
       return;
@@ -225,7 +243,7 @@ export default function TechniciansPage() {
   }
 
   if (loading || !user || techniciansLoading) {
-    return <LoadingState />;
+    return <LoadingShell role="admin" />;
   }
 
   const activeTechnicians = technicians.filter((technician) => technician.status === 'active');
@@ -580,6 +598,13 @@ export default function TechniciansPage() {
                             <DropdownMenuItem onSelect={() => void handleToggleStatus(technician)}>
                               <Power className="h-4 w-4" />
                               {technician.status === 'active' ? 'Inativar' : 'Ativar'}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={technician.status !== 'active'}
+                              onSelect={() => void handleStartPreview(technician)}
+                            >
+                              <Eye className="h-4 w-4" />
+                              Modo preview
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem

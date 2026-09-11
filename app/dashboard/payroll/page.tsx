@@ -5,7 +5,7 @@ import { Clock3, CreditCard, WalletCards } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { formatCurrency, formatHours, monthKeyFromDate, normalizeCompetenceMonth, resolveCompetenceMonth } from '@/lib/formatters';
@@ -118,7 +118,7 @@ export default function TechnicianPayrollPage() {
   const payrollTotal = getPayrollTotal(currentPayroll);
 
   if (loading || isDataLoading || !user) {
-    return <LoadingState />;
+    return <LoadingShell role="technician" />;
   }
 
   const earningsItems = [
@@ -158,7 +158,7 @@ export default function TechnicianPayrollPage() {
         />
       ) : (
         <>
-          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <MetricCard title="Horas realizadas" value={formatHours(workedHoursTotal)} hint={`Banco de horas: ${formatHours(hourBankBalance)}`} icon={Clock3} tone={hourBankBalance < 0 ? 'danger' : 'warning'} />
             <MetricCard title="OS realizadas" value={servicesCount} hint="Quantidade de OS na competência" icon={WalletCards} />
             <MetricCard title="Salário base" value={formatCurrency(baseSalary)} hint={competenceLabel} icon={WalletCards} />

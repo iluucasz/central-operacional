@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Calculator, CheckCircle2, CreditCard, FileText, RefreshCw, Search, WalletCards } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
@@ -950,7 +950,7 @@ export default function PayrollPage() {
   }
 
   if (loading || isDataLoading || !user) {
-    return <LoadingState />;
+    return <LoadingShell role="admin" />;
   }
 
   return (
@@ -963,7 +963,7 @@ export default function PayrollPage() {
 
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
 
-      <div className="mb-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))] gap-3">
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard title="Em conta" value={formatCurrency(totalCashNet)} hint="Valor já devido em conta" icon={WalletCards} tone="success" />
         <MetricCard title="Cartões" value={formatCurrency(totalBenefits)} hint="VR + VA já devidos" icon={CreditCard} />
         <MetricCard title="Líquido da folha" value={formatCurrency(totalPayrollNet)} hint="Custo total já devido" icon={Calculator} tone="success" />
@@ -1203,7 +1203,7 @@ export default function PayrollPage() {
                     ) : null}
                   </div>
 
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     <div className="rounded-md border border-border bg-background p-3">
                       <div className="text-xs uppercase text-muted-foreground">Bruto</div>
                       <div className="mt-1 text-lg font-semibold">{formatCurrency(payrollDraft.total_services_value)}</div>

@@ -4,6 +4,8 @@ export interface SessionUser {
   name: string;
   role: 'admin' | 'technician';
   technicianId?: string;
+  /** True when an admin is viewing this session through the read-only preview mode. */
+  preview?: boolean;
 }
 
 export async function getSessionUser(): Promise<SessionUser | null> {

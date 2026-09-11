@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 import { AlertTriangle, CheckCircle2, CircleHelp, Download, FileSpreadsheet, MoreHorizontal, PencilLine, Plus, Search, Trash2, UploadCloud, Users, Wrench } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
@@ -796,7 +796,7 @@ export default function AdminServicesPage() {
   }
 
   if (loading || !user || isDataLoading) {
-    return <LoadingState />;
+    return <LoadingShell role="admin" />;
   }
 
   const totalValue = filteredServices.reduce((total, service) => total + Number(service.value), 0);

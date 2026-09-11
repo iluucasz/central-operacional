@@ -2,6 +2,7 @@ import { neon } from '@neondatabase/serverless';
 import bcrypt from 'bcryptjs';
 import { NextRequest, NextResponse } from 'next/server';
 import { createToken } from '@/lib/auth';
+import { PREVIEW_FLAG_COOKIE, PREVIEW_ORIGIN_COOKIE } from '@/lib/preview-mode';
 
 const sql = neon(process.env.DATABASE_URL!);
 
@@ -79,6 +80,11 @@ export async function POST(request: NextRequest) {
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7, // 7 days
     });
+
+    // A fresh login always starts outside preview mode — clear any leftovers so a stale parked
+    // token can't block the next preview or leave the banner showing.
+    response.cookies.set({ name: PREVIEW_ORIGIN_COOKIE, value: '', httpOnly: true, maxAge: 0, path: '/' });
+    response.cookies.set({ name: PREVIEW_FLAG_COOKIE, value: '', maxAge: 0, path: '/' });
 
     return response;
   } catch (error) {

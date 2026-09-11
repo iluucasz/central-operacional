@@ -2,15 +2,20 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { PREVIEW_FLAG_COOKIE } from '@/lib/preview-mode';
 import {
   BookOpen,
+  ChartNoAxesCombined,
   CalendarDays,
   Clock3,
   Landmark,
   LayoutDashboard,
+  Eye,
   LogOut,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   ShieldCheck,
   TrendingUp,
   Users,
@@ -19,6 +24,13 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
+
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'app-sidebar-collapsed';
+
+// Module scope, so it outlives the AppShell instances that come and go with each client-side
+// navigation — see the comment where it's read in AppShell.
+let cachedCollapsed = false;
+let cachedCollapsedKnown = false;
 
 type Role = 'admin' | 'technician';
 
@@ -36,6 +48,7 @@ interface AppShellProps {
 
 const adminLinks: NavItem[] = [
   { href: '/admin', label: 'Operação', icon: LayoutDashboard },
+  { href: '/admin/dashboard-gerencial', label: 'Dashboard Gerencial', icon: ChartNoAxesCombined },
   { href: '/admin/technicians', label: 'Técnicos', icon: Users },
   { href: '/admin/services', label: 'Serviços', icon: Wrench },
   { href: '/admin/schedule', label: 'Escala', icon: CalendarDays },
@@ -53,6 +66,66 @@ const technicianLinks: NavItem[] = [
   { href: '/dashboard/payroll', label: 'Pagamento', icon: WalletCards },
   { href: '/dashboard/library', label: 'Biblioteca', icon: BookOpen },
 ];
+
+interface PreviewBannerProps {
+  userName?: string;
+}
+
+function PreviewBanner({ userName }: PreviewBannerProps) {
+  const [isExiting, setIsExiting] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleExit = async () => {
+    setIsExiting(true);
+    setError('');
+
+    try {
+      const response = await fetch('/api/auth/preview/exit', { method: 'POST' });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        setError(data?.error || 'Não foi possível sair do modo preview.');
+        setIsExiting(false);
+        return;
+      }
+
+      // Full reload rather than a client-side push: the identity behind every cached page and
+      // fetch just changed, so nothing from the technician session should be reused.
+      window.location.href = '/admin/technicians';
+    } catch {
+      setError('Não foi possível sair do modo preview.');
+      setIsExiting(false);
+    }
+  };
+
+  return (
+    // Spans the full width above the shell (not just the content column) so it can't collide with
+    // the sidebar's collapse toggle, which deliberately overhangs the panel's right edge. Height is
+    // fixed and shared with design-system.css, which offsets the sidebar by exactly this much.
+    <div className="sticky top-0 z-50 flex h-(--preview-banner-height) items-center justify-between gap-3 border-b border-amber-300 bg-amber-100 px-4 text-amber-950">
+      <p className="flex min-w-0 items-center gap-2 text-sm">
+        <Eye className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 truncate">
+          <strong className="font-semibold">Modo preview</strong>
+          {userName ? <span> — visualizando como {userName}</span> : null}
+          <span className="hidden sm:inline"> (somente leitura)</span>
+        </span>
+      </p>
+      <div className="flex items-center gap-3">
+        {error ? <span className="text-xs font-medium text-rose-700">{error}</span> : null}
+        <button
+          type="button"
+          onClick={handleExit}
+          disabled={isExiting}
+          className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md bg-amber-900 px-3 text-xs font-semibold text-amber-50 transition-colors hover:bg-amber-950 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <LogOut className="h-3.5 w-3.5" />
+          {isExiting ? 'Saindo...' : 'Sair do modo preview'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function getInitials(value?: string) {
   return (value ?? 'Usuário')
@@ -73,7 +146,7 @@ function ProfileSummary({ role, userName }: ProfileSummaryProps) {
   const accessLabel = role === 'admin' ? 'Acesso administrativo' : 'Área do colaborador';
 
   return (
-    <div className="flex min-w-0 items-center gap-3 text-left">
+    <div className="app-profile flex min-w-0 items-center gap-3 text-left">
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-xs font-semibold text-primary-foreground">
         {initials || 'U'}
       </span>
@@ -96,7 +169,7 @@ function LogoutButton({ isLoggingOut, onLogout }: LogoutButtonProps) {
       type="button"
       onClick={onLogout}
       disabled={isLoggingOut}
-      className="inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
+      className="app-logout inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
     >
       <LogOut className="h-4 w-4" />
       {isLoggingOut ? 'Saindo...' : 'Sair'}
@@ -108,8 +181,48 @@ export function AppShell({ children, role, userName }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  // Seeded from the module cache, not from localStorage: every page renders its own AppShell, so
+  // this component remounts on each navigation. Starting from `false` there made the sidebar snap
+  // open and animate shut again on every route change; starting from localStorage directly would
+  // disagree with the server-rendered markup and break hydration. The cache is only ever written
+  // after mount, so the first render still matches the server.
+  const [collapsed, setCollapsed] = useState(cachedCollapsed);
+  const [animated, setAnimated] = useState(cachedCollapsedKnown);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [previewMode, setPreviewMode] = useState(false);
   const links = role === 'admin' ? adminLinks : technicianLinks;
+
+  // Read from the client-visible marker cookie rather than refetching the session: it's only
+  // deciding whether to render a banner, and the server-side cookies remain the source of truth
+  // for anything the banner's exit button actually does.
+  useEffect(() => {
+    setPreviewMode(document.cookie.split('; ').includes(`${PREVIEW_FLAG_COOKIE}=1`));
+  }, [pathname]);
+
+  useEffect(() => {
+    if (cachedCollapsedKnown) {
+      return;
+    }
+
+    cachedCollapsed = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === '1';
+    cachedCollapsedKnown = true;
+    setCollapsed(cachedCollapsed);
+    // Transitions stay off until the stored preference has actually been applied, so the one-time
+    // correction on a cold load lands instantly instead of animating open-then-shut.
+    const frame = requestAnimationFrame(() => setAnimated(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  const toggleCollapsed = () => {
+    setCollapsed((value) => {
+      const next = !value;
+      cachedCollapsed = next;
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, next ? '1' : '0');
+      return next;
+    });
+  };
+
+  const motion = animated ? 'transition-all duration-300 ease-in-out' : '';
   const rootHref = role === 'admin' ? '/admin' : '/dashboard';
   const activeLink = links.find((link) =>
     link.href === rootHref ? pathname === link.href : pathname === link.href || pathname.startsWith(`${link.href}/`),
@@ -126,18 +239,29 @@ export function AppShell({ children, role, userName }: AppShellProps) {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground lg:flex">
-      <div className="sticky top-0 z-40 flex h-12 items-center justify-between border-b border-border bg-card px-3 lg:hidden">
+    <>
+      {previewMode ? <PreviewBanner userName={userName} /> : null}
+      <div
+        className="app-shell relative min-h-screen bg-background text-foreground lg:flex"
+        data-collapsed={collapsed ? 'true' : undefined}
+        data-preview={previewMode ? 'true' : undefined}
+      >
+      <div className="app-mobile-header sticky top-0 z-40 flex h-12 items-center justify-between border-b border-border bg-card px-3 lg:hidden">
         <div className="min-w-0 flex-1 pr-2">
           <ProfileSummary role={role} userName={userName} />
         </div>
         <div className="flex items-center gap-2">
-          <LogoutButton isLoggingOut={isLoggingOut} onLogout={handleLogout} />
+          {/* Hidden during preview: it sits next to the banner's "Sair do modo preview" and reads
+              almost the same, but logs the admin out entirely instead of handing their session
+              back. Exiting the preview is the only sign-out that makes sense from here. */}
+          {previewMode ? null : <LogoutButton isLoggingOut={isLoggingOut} onLogout={handleLogout} />}
           <button
             type="button"
             onClick={() => setOpen((value) => !value)}
             className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-background"
             aria-label="Abrir navegação"
+            aria-expanded={open}
+            aria-controls="app-navigation"
           >
             {open ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
           </button>
@@ -145,17 +269,63 @@ export function AppShell({ children, role, userName }: AppShellProps) {
       </div>
 
       <aside
-        className={`${
-          open ? 'block' : 'hidden'
-        } fixed inset-x-0 top-12 z-30 border-b border-border bg-card lg:sticky lg:top-0 lg:block lg:h-screen lg:w-64 lg:shrink-0 lg:border-b-0 lg:border-r`}
+        id="app-navigation"
+        className={`app-sidebar ${open ? 'block' : 'hidden'} ${motion} fixed inset-x-0 top-12 z-30 border-b border-border bg-card lg:sticky lg:top-0 lg:block lg:h-screen lg:shrink-0 lg:border-b-0 lg:border-r`}
       >
+        {/*
+          Anchored to the sidebar's own right edge (and hanging half outside it), so it travels
+          with the width instead of animating its own `left` — two separate animations racing to
+          stay aligned is what made the icon look like it lagged behind the panel. `.app-sidebar`
+          is `fixed`/`sticky`, so it's already a containing block for this; design-system.css drops
+          its overflow clipping at lg so the overhang isn't cut off.
+        */}
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          className="absolute -right-3.5 top-11 z-30 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-[0_2px_6px_#25233733] transition-colors hover:bg-secondary hover:text-foreground lg:flex"
+          aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}
+          title={collapsed ? 'Expandir menu' : 'Recolher menu'}
+        >
+          {collapsed ? <PanelLeftOpen className="h-3.5 w-3.5" /> : <PanelLeftClose className="h-3.5 w-3.5" />}
+        </button>
+
         <div className="flex h-full flex-col">
-          <div className="flex h-16 flex-col justify-center border-b border-border px-5">
-            <p className="text-base font-semibold leading-tight">Central Operacional</p>
-            <p className="mt-1 text-xs text-muted-foreground">{role === 'admin' ? 'Operação e gestão integrada' : 'Área do colaborador'}</p>
+          {/*
+            The `collapsed` preference only ever applies at the lg breakpoint (the mobile drawer
+            below lg is always shown expanded, regardless of the stored preference — collapsing a
+            fixed-width sidebar makes no sense on a full-width overlay drawer). Every conditional
+            class below is `lg:`-scoped for that reason, and both the full brand block and the
+            compact badge stay in the DOM (toggled via CSS, not unmounted) so this works with plain
+            responsive classes instead of needing a second, viewport-aware piece of state.
+
+            The actual width is set in design-system.css via `.app-shell[data-collapsed='true']
+            .app-sidebar` — a plain `lg:w-*` Tailwind utility here loses to that file's existing
+            `.app-sidebar` width rule at the lg breakpoint (equal specificity, later in the
+            cascade), so the override has to win on specificity instead (an extra class+attribute
+            selector), not by trying to load after it.
+          */}
+          <div
+            className={`app-brand flex h-16 items-center overflow-hidden border-b border-border px-5 ${motion} ${collapsed ? 'lg:justify-center lg:px-2' : ''}`}
+          >
+            {/*
+              Both the full text and the compact badge stay mounted always — collapsing/expanding
+              fades and shrinks one while growing the other via max-width + opacity (both
+              transition-friendly), instead of a hidden/flex swap, which can't animate at all
+              (display changes are a hard cut, never a transition).
+            */}
+            <div className={`max-w-50 overflow-hidden opacity-100 ${motion} ${collapsed ? 'lg:max-w-0 lg:opacity-0' : ''}`}>
+              <p className="whitespace-nowrap text-base font-semibold leading-tight">Central Operacional</p>
+              <p className="mt-1 whitespace-nowrap text-xs text-muted-foreground">{role === 'admin' ? 'Operação e gestão integrada' : 'Área do colaborador'}</p>
+            </div>
+            <span
+              className={`flex h-8 w-0 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-primary text-xs font-semibold text-primary-foreground opacity-0 ${motion} ${collapsed ? 'lg:w-8 lg:opacity-100' : ''}`}
+              aria-hidden="true"
+            >
+              CO
+            </span>
           </div>
 
-          <nav className="flex-1 space-y-1.5 px-3 py-4">
+          <nav className="app-navigation flex-1 space-y-1.5 px-3 py-4">
             {links.map((link) => {
               const Icon = link.icon;
               const isActive = activeLink?.href === link.href;
@@ -165,38 +335,49 @@ export function AppShell({ children, role, userName }: AppShellProps) {
                   key={link.href}
                   href={link.href}
                   onClick={() => setOpen(false)}
-                  className={`flex min-h-10 items-center gap-2.5 rounded-md px-3.5 text-sm font-medium transition-colors ${
+                  aria-current={isActive ? 'page' : undefined}
+                  title={collapsed ? link.label : undefined}
+                  className={`flex min-h-10 items-center gap-2.5 rounded-md px-3.5 text-sm font-medium ${motion || 'transition-colors'} ${
+                    collapsed ? 'lg:justify-center' : ''
+                  } ${
                     isActive
                       ? 'bg-primary text-primary-foreground'
                       : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                   }`}
                 >
                   <Icon className="h-4 w-4 shrink-0" />
-                  <span>{link.label}</span>
+                  <span
+                    className={`inline-block max-w-40 overflow-hidden whitespace-nowrap opacity-100 ${motion} ${collapsed ? 'lg:max-w-0 lg:opacity-0' : ''}`}
+                  >
+                    {link.label}
+                  </span>
                 </Link>
               );
             })}
           </nav>
 
-          <div className="border-t border-border px-5 py-4 text-xs text-muted-foreground">
-            {role === 'admin' ? 'Administração' : 'Colaborador'}
+          <div className="app-sidebar-footer flex items-center justify-center border-t border-border px-5 py-4 text-xs text-muted-foreground">
+            <span className={`inline-block max-w-50 overflow-hidden whitespace-nowrap opacity-100 ${motion} ${collapsed ? 'lg:max-w-0 lg:opacity-0' : ''}`}>
+              {role === 'admin' ? 'Administração' : 'Colaborador'}
+            </span>
           </div>
         </div>
       </aside>
 
       <main className="min-w-0 flex-1">
-        <header className="sticky top-0 z-20 hidden h-16 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur lg:flex">
-          <div className="min-w-0">
+        <header className="app-topbar sticky top-0 z-20 hidden h-16 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur lg:flex">
+          <div className="app-breadcrumb min-w-0">
             <p className="truncate text-sm font-semibold leading-tight">{activeLink?.label ?? 'Painel'}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">{role === 'admin' ? 'Painel administrativo' : 'Painel do técnico'}</p>
           </div>
           <div className="flex items-center gap-3">
             <ProfileSummary role={role} userName={userName} />
-            <LogoutButton isLoggingOut={isLoggingOut} onLogout={handleLogout} />
+            {previewMode ? null : <LogoutButton isLoggingOut={isLoggingOut} onLogout={handleLogout} />}
           </div>
         </header>
-        <div className="w-full px-3 py-4 sm:px-4 lg:px-4">{children}</div>
+        <div className="app-content">{children}</div>
       </main>
-    </div>
+      </div>
+    </>
   );
 }

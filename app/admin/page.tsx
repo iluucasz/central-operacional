@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ArrowRight, CalendarDays, CheckCircle2, UploadCloud, Users, WalletCards, Wrench } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
@@ -256,7 +256,7 @@ export default function AdminDashboard() {
   }, [activeTechnicians, payrollInCompetence, servicesInCompetence]);
 
   if (loading || isDataLoading || !user) {
-    return <LoadingState />;
+    return <LoadingShell role="admin" />;
   }
 
   const rowsWithServices = summaries.filter((row) => row.serviceCount > 0);
@@ -311,7 +311,7 @@ export default function AdminDashboard() {
 
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
 
-      <div className="mb-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard title="Valor bruto" value={formatCurrency(totalGrossValue)} hint="Soma das OS do mês" icon={Wrench} tone="success" />
         <MetricCard title="OS" value={formatNumber(servicesInCompetence.length)} hint={`${rowsWithServices.length} técnico(s)`} icon={Wrench} />
         <MetricCard

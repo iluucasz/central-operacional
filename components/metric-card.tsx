@@ -39,17 +39,17 @@ export function MetricCard({ title, value, hint, icon: Icon, tone = 'default', h
       : 'text-muted-foreground';
 
   return (
-    <section className="rounded-md border border-border bg-card p-3 shadow-sm">
+    <section className="app-metric-card min-w-0 rounded-xl border border-border bg-card p-4 shadow-[0_4px_14px_#25233702] sm:p-[18px]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-medium uppercase text-muted-foreground">{title}</p>
-          <p className={`mt-1 break-words text-xl font-semibold leading-tight tabular-nums ${accentText ? toneTextClasses[tone] : 'text-foreground'}`}>{value}</p>
+          <p className="text-xs font-medium text-muted-foreground">{title}</p>
+          <p className={`mt-3 break-words text-2xl font-semibold leading-tight tracking-tight tabular-nums ${accentText ? toneTextClasses[tone] : 'text-foreground'}`}>{value}</p>
         </div>
-        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${toneClasses[tone]}`}>
-          <Icon className="h-5 w-5" />
+        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${toneClasses[tone]}`}>
+          <Icon className="h-4 w-4" />
         </div>
       </div>
-      {hint ? <p className={`mt-1 text-xs ${resolvedHintClass}`}>{hint}</p> : null}
+      {hint ? <p className={`mt-3 text-xs leading-relaxed ${resolvedHintClass}`}>{hint}</p> : null}
     </section>
   );
 }

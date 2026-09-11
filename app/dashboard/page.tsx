@@ -6,7 +6,7 @@ import { CalendarDays, ChevronLeft, ChevronRight, Clock3, FileText, WalletCards,
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { ProgressGauge } from '@/components/progress-gauge';
@@ -15,8 +15,8 @@ import { formatCurrency, formatDate, formatHours, formatNumber, formatTime, form
 import { STANDARD_HOURS_PER_MONTH } from '@/lib/hour-bank';
 import type { Payroll, Schedule, Service, ServiceFortnight, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { CHART_COLORS as chartColors } from '@/lib/chart-theme';
 
-const chartColors = ['#168a65', '#d06b36', '#3e6fba', '#b48b17', '#914b8f', '#2f8fa1', '#6b7280'];
 const SERVICES_PAGE_SIZE = 12;
 const defaultCompetenceMonth = new Date().toISOString().slice(0, 7);
 const monthNames = [
@@ -264,7 +264,7 @@ export default function TechnicianDashboard() {
   }, [competenceMonth, filteredServices.length, periodFilter, typeFilter]);
 
   if (loading || isDataLoading || !user) {
-    return <LoadingState />;
+    return <LoadingShell role="technician" />;
   }
 
   const technicianName = user.name || user.email;

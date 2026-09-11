@@ -24,7 +24,7 @@ import {
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
@@ -938,7 +938,7 @@ export default function AdminFinanceiroPage() {
   }
 
   if (loading || isDataLoading || !user) {
-    return <LoadingState />;
+    return <LoadingShell role="admin" />;
   }
 
   const resultTone = summary.competenceResult >= 0 ? 'success' : 'danger';
@@ -995,7 +995,7 @@ export default function AdminFinanceiroPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard title="Receitas" value={formatCurrency(summary.receivableTotal)} hint="Regime de competência" icon={TrendingUp} tone="success" />
         <MetricCard title="Despesas" value={formatCurrency(summary.payableTotal)} hint={`Mês anterior: ${formatCurrency(previousSummary.payableTotal)}`} icon={TrendingDown} tone="warning" />
         <MetricCard

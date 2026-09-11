@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react';
+import { ChartNoAxesCombined, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -42,8 +42,14 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-secondary/20 p-4">
-      <section className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-sm sm:p-8">
+    <main className="auth-page">
+      <div className="auth-brand" aria-hidden="true">
+        <span className="auth-brand-mark"><ChartNoAxesCombined className="h-7 w-7" /></span>
+        <p className="auth-brand-name">Central<br /> Operacional<span>.</span></p>
+        <p>Operação e gestão integrada.</p>
+      </div>
+      <div className="auth-form-area">
+      <section className="auth-card">
         <div className="mb-8 text-center">
           <p className="text-sm font-semibold text-primary">Central Operacional</p>
           <h1 className="mt-3 text-2xl font-semibold">Entrar no sistema</h1>
@@ -83,6 +89,7 @@ export default function LoginPage() {
 
         <p className="mt-6 text-center text-sm text-muted-foreground">O acesso é liberado pelo administrador da plataforma.</p>
       </section>
+      </div>
     </main>
   );
 }

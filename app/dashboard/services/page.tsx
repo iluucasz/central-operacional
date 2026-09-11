@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Search, Wrench } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
@@ -42,7 +42,7 @@ export default function TechnicianServicesPage() {
   }, [query, visibleServices]);
 
   if (loading || !user) {
-    return <LoadingState />;
+    return <LoadingShell role="technician" />;
   }
 
   const totalValue = filteredServices.reduce((total, service) => total + Number(service.value), 0);

@@ -12,13 +12,18 @@ const adminRoutes = ['/admin'];
 const technicianRoutes = ['/dashboard'];
 const hiddenTechnicianRoutes = ['/dashboard/services'];
 
-async function verifyAuthMiddleware(request: NextRequest): Promise<{ userId: string; email: string; role: string } | null> {
+/** Endpoints that must stay reachable while previewing, so the admin can always get back out. */
+const previewEscapeRoutes = ['/api/auth/preview/exit', '/api/auth/logout'];
+
+async function verifyAuthMiddleware(
+  request: NextRequest,
+): Promise<{ userId: string; email: string; role: string; preview?: boolean } | null> {
   const token = request.cookies.get(COOKIE_NAME)?.value;
   if (!token) return null;
 
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    return payload as { userId: string; email: string; role: string };
+    return payload as { userId: string; email: string; role: string; preview?: boolean };
   } catch {
     return null;
   }
@@ -42,6 +47,15 @@ export async function middleware(request: NextRequest) {
 
   if (!auth) {
     return NextResponse.redirect(new URL('/login', request.url));
+  }
+
+  // A preview session is strictly read-only. Enforcing it here rather than per-route means a new
+  // endpoint can't accidentally become writable while impersonating someone.
+  if (auth.preview && request.method !== 'GET' && !previewEscapeRoutes.includes(path)) {
+    return NextResponse.json(
+      { error: 'Ação bloqueada: o modo preview é somente leitura.' },
+      { status: 403 },
+    );
   }
 
   if (hiddenTechnicianRoutes.some(route => path.startsWith(route))) {

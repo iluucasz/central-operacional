@@ -5,7 +5,7 @@ import { CalendarDays, Clock3, Search } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
@@ -165,7 +165,7 @@ export default function TechnicianHoursPage() {
   }, [competenceMonth, schedule]);
 
   if (loading || isDataLoading || !user) {
-    return <LoadingState />;
+    return <LoadingShell role="technician" />;
   }
 
   const totalHours = monthlyWorkHours.reduce((total, item) => total + Number(item.hours_worked), 0);

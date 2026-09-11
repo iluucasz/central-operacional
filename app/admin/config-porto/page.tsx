@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { CheckCircle2, Clock3, FlaskConical, KeyRound, Loader2, Users, XCircle } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { PageHeader } from '@/components/page-header';
 import { Button } from '@/components/ui/button';
 import {
@@ -321,7 +321,7 @@ export default function ConfigPortoPage() {
   }
 
   if (loading || isDataLoading || !user) {
-    return <LoadingState />;
+    return <LoadingShell role="admin" />;
   }
 
   return (

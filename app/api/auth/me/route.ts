@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth';
+import { getCurrentUser, getPreviewContext } from '@/lib/auth';
 
 export async function GET() {
   try {
@@ -12,6 +12,8 @@ export async function GET() {
       );
     }
 
+    const { preview } = await getPreviewContext();
+
     return NextResponse.json({
       user: {
         userId: user.id,
@@ -19,6 +21,7 @@ export async function GET() {
         name: user.name,
         role: user.role,
         technicianId: user.technician_id,
+        preview,
       },
     });
   } catch (error) {

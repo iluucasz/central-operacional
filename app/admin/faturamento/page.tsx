@@ -32,13 +32,14 @@ import {
 import { AppShell } from '@/components/app-shell';
 import { DataPanel } from '@/components/data-panel';
 import { EmptyState } from '@/components/empty-state';
-import { LoadingState } from '@/components/loading-state';
+import { LoadingShell } from '@/components/page-skeleton';
 import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { useAppSession } from '@/hooks/use-app-session';
 import { formatCurrency, formatNumber, normalizeText, resolveCompetenceMonth } from '@/lib/formatters';
 import type { Payroll, Service, Technician } from '@/lib/types';
+import { CHART_COLORS as chartColors } from '@/lib/chart-theme';
 
 const monthNames = [
   'Janeiro',
@@ -56,7 +57,6 @@ const monthNames = [
 ];
 
 const shortMonthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-const chartColors = ['#0f766e', '#2563eb', '#d97706', '#be123c', '#7c3aed', '#0891b2', '#65a30d', '#c2410c'];
 const currentDate = new Date();
 const currentYear = String(currentDate.getFullYear());
 const currentMonthNum = String(currentDate.getMonth() + 1).padStart(2, '0');
@@ -495,7 +495,7 @@ export default function AdminFaturamentoPage() {
           : 'Todos os períodos';
 
   if (loading || isDataLoading || !user) {
-    return <LoadingState />;
+    return <LoadingShell role="admin" />;
   }
 
   return (
@@ -514,7 +514,7 @@ export default function AdminFaturamentoPage() {
 
       {dataError ? <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{dataError}</div> : null}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard title="Faturamento (período)" value={formatCurrency(periodData.revenue)} hint={monthLabel} icon={TrendingUp} tone="success" />
         <MetricCard
           title="Lucro (período)"
@@ -625,9 +625,9 @@ export default function AdminFaturamentoPage() {
                 <YAxis tick={{ fontSize: 11 }} tickFormatter={formatCompactCurrency} />
                 <Tooltip formatter={(value) => formatChartCurrency(value)} />
                 <Legend />
-                <Bar dataKey="revenue" name="Faturamento" fill="#0f766e" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="expenses" name="Custos" fill="#d97706" radius={[4, 4, 0, 0]} />
-                <Line type="monotone" dataKey="profit" name="Lucro" stroke="#2563eb" strokeWidth={3} dot={{ r: 3 }} />
+                <Bar dataKey="revenue" name="Faturamento" fill={chartColors[0]} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="expenses" name="Custos" fill={chartColors[2]} radius={[4, 4, 0, 0]} />
+                <Line type="monotone" dataKey="profit" name="Lucro" stroke={chartColors[1]} strokeWidth={3} dot={{ r: 3 }} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -689,7 +689,7 @@ export default function AdminFaturamentoPage() {
                 <XAxis dataKey="monthLabel" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} tickFormatter={(value) => `${value}%`} />
                 <Tooltip formatter={(value) => formatChartPercent(value)} />
-                <Line type="monotone" dataKey="margin" name="Margem" stroke="#7c3aed" strokeWidth={3} dot={{ r: 3 }} />
+                <Line type="monotone" dataKey="margin" name="Margem" stroke={chartColors[0]} strokeWidth={3} dot={{ r: 3 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
