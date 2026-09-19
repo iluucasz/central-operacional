@@ -13,6 +13,8 @@ import { formatDate, formatHours, formatTime, formatTimeRange, monthKeyFromDate,
 import { STANDARD_HOURS_PER_MONTH } from '@/lib/hour-bank';
 import type { Payroll, Schedule, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useTechnicianVisibility } from '@/hooks/use-technician-visibility';
+import { resolveAllowedMonth } from '@/lib/technician-visibility';
 
 const defaultCompetenceMonth = new Date().toISOString().slice(0, 7);
 const MONTHLY_HOURS_TARGET = STANDARD_HOURS_PER_MONTH;
@@ -50,6 +52,8 @@ function moneyValue(value: number | string | null | undefined) {
 
 export default function TechnicianHoursPage() {
   const { user, loading } = useAppSession();
+  const { visibility, loading: visibilityLoading, blocked } = useTechnicianVisibility({ page: 'hours' });
+  const allowedMonth = resolveAllowedMonth(visibility.hours.month);
   const [workHours, setWorkHours] = useState<WorkHours[]>([]);
   const [payroll, setPayroll] = useState<Payroll[]>([]);
   const [schedule, setSchedule] = useState<Schedule[]>([]);
@@ -113,6 +117,8 @@ export default function TechnicianHoursPage() {
   }, [user]);
 
   const competenceOptions = useMemo(() => {
+    if (allowedMonth) return [allowedMonth];
+
     const values = new Set<string>([defaultCompetenceMonth]);
 
     workHours.forEach((item) => {
@@ -131,7 +137,7 @@ export default function TechnicianHoursPage() {
     });
 
     return Array.from(values).sort((left, right) => right.localeCompare(left, 'pt-BR'));
-  }, [payroll, schedule, workHours]);
+  }, [allowedMonth, payroll, schedule, workHours]);
 
   useEffect(() => {
     if (!competenceOptions.length) return;
@@ -164,7 +170,7 @@ export default function TechnicianHoursPage() {
       });
   }, [competenceMonth, schedule]);
 
-  if (loading || isDataLoading || !user) {
+  if (loading || isDataLoading || visibilityLoading || blocked || !user) {
     return <LoadingShell role="technician" />;
   }
 
@@ -194,7 +200,12 @@ export default function TechnicianHoursPage() {
             <span className="mb-1.5 block font-medium">Mês</span>
             <span className="flex min-h-10 items-center gap-2 rounded-lg border border-input bg-background px-3">
               <CalendarDays className="h-4 w-4 text-primary" />
-              <select value={competenceMonth} onChange={(event) => setCompetenceMonth(event.target.value)} className="w-full bg-transparent text-sm outline-none">
+              <select
+                value={competenceMonth}
+                onChange={(event) => setCompetenceMonth(event.target.value)}
+                disabled={Boolean(allowedMonth)}
+                className="w-full bg-transparent text-sm outline-none disabled:cursor-default"
+              >
                 {competenceOptions.length ? (
                   competenceOptions.map((item) => (
                     <option key={item} value={item}>
@@ -223,6 +234,7 @@ export default function TechnicianHoursPage() {
         <MetricCard title="Banco de horas" value={formatHours(payrollBalance)} hint={payrollBalanceHint} icon={Clock3} tone={payrollBalance < 0 ? 'danger' : 'warning'} />
       </div>
 
+      {visibility.hours.hoursLog ? (
       <div className="mt-5">
         <DataPanel
           title="Registro de horas"
@@ -278,6 +290,7 @@ export default function TechnicianHoursPage() {
           )}
         </DataPanel>
       </div>
+      ) : null}
     </AppShell>
   );
 }

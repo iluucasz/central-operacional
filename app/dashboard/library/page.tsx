@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button';
 import { formatDate, normalizeText } from '@/lib/formatters';
 import type { LibraryDocument } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useTechnicianVisibility } from '@/hooks/use-technician-visibility';
 
 type AudienceBucket = 'Global' | 'Individual' | 'Administrativo';
 type VisibleAudienceBucket = 'Global' | 'Individual';
@@ -78,6 +79,7 @@ function getSectionConfig(bucket: VisibleAudienceBucket) {
 
 export default function TechnicianLibraryPage() {
   const { user, loading } = useAppSession();
+  const { loading: visibilityLoading, blocked } = useTechnicianVisibility({ page: 'library' });
   const [query, setQuery] = useState('');
   const [documents, setDocuments] = useState<LibraryDocument[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
@@ -126,7 +128,7 @@ export default function TechnicianLibraryPage() {
     };
   }, [user]);
 
-  if (loading || isDataLoading || !user) {
+  if (loading || isDataLoading || visibilityLoading || blocked || !user) {
     return <LoadingShell role="technician" />;
   }
 

@@ -4,6 +4,9 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { PREVIEW_FLAG_COOKIE } from '@/lib/preview-mode';
+import { TECHNICIAN_PAGE_PATHS, type HideableTechnicianPage } from '@/lib/technician-visibility';
+import { resetTechnicianVisibilityCache, useTechnicianVisibility } from '@/hooks/use-technician-visibility';
+import { TechnicianVisibilityDialog } from '@/components/technician-visibility-dialog';
 import {
   BookOpen,
   ChartNoAxesCombined,
@@ -14,8 +17,10 @@ import {
   Eye,
   LogOut,
   Menu,
+  MessageCircle,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings,
   ShieldCheck,
   TrendingUp,
   Users,
@@ -56,6 +61,7 @@ const adminLinks: NavItem[] = [
   { href: '/admin/faturamento', label: 'Faturamento', icon: TrendingUp },
   { href: '/admin/financeiro', label: 'Controle de Despesas', icon: Landmark },
   { href: '/admin/library', label: 'Biblioteca', icon: BookOpen },
+  { href: '/admin/whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { href: '/admin/config-porto', label: 'Config. Porto', icon: ShieldCheck },
 ];
 
@@ -74,6 +80,7 @@ interface PreviewBannerProps {
 function PreviewBanner({ userName }: PreviewBannerProps) {
   const [isExiting, setIsExiting] = useState(false);
   const [error, setError] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const handleExit = async () => {
     setIsExiting(true);
@@ -115,6 +122,15 @@ function PreviewBanner({ userName }: PreviewBannerProps) {
         {error ? <span className="text-xs font-medium text-rose-700">{error}</span> : null}
         <button
           type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-amber-300 bg-amber-50 text-amber-900 transition-colors hover:bg-amber-200"
+          aria-label="Configurar o que o técnico visualiza"
+          title="Configurar o que o técnico visualiza"
+        >
+          <Settings className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
           onClick={handleExit}
           disabled={isExiting}
           className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md bg-amber-900 px-3 text-xs font-semibold text-amber-50 transition-colors hover:bg-amber-950 disabled:cursor-not-allowed disabled:opacity-60"
@@ -123,6 +139,7 @@ function PreviewBanner({ userName }: PreviewBannerProps) {
           {isExiting ? 'Saindo...' : 'Sair do modo preview'}
         </button>
       </div>
+      <TechnicianVisibilityDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }
@@ -190,7 +207,19 @@ export function AppShell({ children, role, userName }: AppShellProps) {
   const [animated, setAnimated] = useState(cachedCollapsedKnown);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [previewMode, setPreviewMode] = useState(false);
-  const links = role === 'admin' ? adminLinks : technicianLinks;
+  const { visibility, loading: visibilityLoading } = useTechnicianVisibility({ enabled: role === 'technician' });
+  // Pages the admin hid for this technician drop out of the menu; the pages themselves also
+  // redirect, in case someone reaches them by URL. Until the settings arrive, the hideable entries
+  // stay out too — briefly showing a link that then vanishes would reveal it was hidden.
+  const links =
+    role === 'admin'
+      ? adminLinks
+      : technicianLinks.filter((link) => {
+          const page = (Object.keys(TECHNICIAN_PAGE_PATHS) as HideableTechnicianPage[]).find(
+            (key) => TECHNICIAN_PAGE_PATHS[key] === link.href,
+          );
+          return !page || (!visibilityLoading && visibility[page].visible);
+        });
 
   // Read from the client-visible marker cookie rather than refetching the session: it's only
   // deciding whether to render a banner, and the server-side cookies remain the source of truth
@@ -232,6 +261,7 @@ export function AppShell({ children, role, userName }: AppShellProps) {
     setIsLoggingOut(true);
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
+      resetTechnicianVisibilityCache();
       router.push('/login');
     } finally {
       setIsLoggingOut(false);

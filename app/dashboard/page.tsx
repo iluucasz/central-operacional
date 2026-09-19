@@ -15,6 +15,8 @@ import { formatCurrency, formatDate, formatHours, formatNumber, formatTime, form
 import { STANDARD_HOURS_PER_MONTH } from '@/lib/hour-bank';
 import type { Payroll, Schedule, Service, ServiceFortnight, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useTechnicianVisibility } from '@/hooks/use-technician-visibility';
+import { resolveAllowedMonth } from '@/lib/technician-visibility';
 import { CHART_COLORS as chartColors } from '@/lib/chart-theme';
 
 const SERVICES_PAGE_SIZE = 12;
@@ -107,6 +109,9 @@ function matchesPeriod(dateValue: string | Date | null | undefined, period: Peri
 
 export default function TechnicianDashboard() {
   const { user, loading } = useAppSession();
+  const { visibility, loading: visibilityLoading } = useTechnicianVisibility();
+  // When the admin pins this screen to one month, that month is the only option in the filter.
+  const allowedMonth = resolveAllowedMonth(visibility.dashboard.month);
   const [services, setServices] = useState<Service[]>([]);
   const [workHours, setWorkHours] = useState<WorkHours[]>([]);
   const [payroll, setPayroll] = useState<Payroll[]>([]);
@@ -182,6 +187,8 @@ export default function TechnicianDashboard() {
   }, [user]);
 
   const competenceOptions = useMemo(() => {
+    if (allowedMonth) return [allowedMonth];
+
     const values = new Set<string>();
 
     services.forEach((service) => {
@@ -191,7 +198,7 @@ export default function TechnicianDashboard() {
 
 
     return Array.from(values).sort((left, right) => right.localeCompare(left, 'pt-BR'));
-  }, [services]);
+  }, [allowedMonth, services]);
 
   useEffect(() => {
     if (!competenceOptions.length) return;
@@ -263,7 +270,7 @@ export default function TechnicianDashboard() {
     setServicesPage(1);
   }, [competenceMonth, filteredServices.length, periodFilter, typeFilter]);
 
-  if (loading || isDataLoading || !user) {
+  if (loading || isDataLoading || visibilityLoading || !user) {
     return <LoadingShell role="technician" />;
   }
 
@@ -330,7 +337,8 @@ export default function TechnicianDashboard() {
                 <select
                   value={competenceMonth}
                   onChange={(event) => setCompetenceMonth(event.target.value)}
-                  className="w-full bg-transparent text-sm font-semibold outline-none"
+                  disabled={Boolean(allowedMonth)}
+                  className="w-full bg-transparent text-sm font-semibold outline-none disabled:cursor-default"
                 >
                   {competenceOptions.length ? (
                     competenceOptions.map((competence) => (
@@ -369,7 +377,7 @@ export default function TechnicianDashboard() {
         </DataPanel>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
+      <div className={`grid gap-5 ${visibility.dashboard.servicesByType ? 'xl:grid-cols-2' : ''}`}>
         <DataPanel title="Metas por competência" description="Meta 1: 80 OS. Meta 2: 160 OS. Clique em um card para mudar o período.">
           <div className="grid gap-3 sm:grid-cols-3">
             <ProgressGauge
@@ -402,6 +410,7 @@ export default function TechnicianDashboard() {
           </div>
         </DataPanel>
 
+        {visibility.dashboard.servicesByType ? (
         <DataPanel title="Serviços por tipo" description="Clique em uma barra para refinar o recorte.">
           {servicesByType.length ? (
             <>
@@ -429,8 +438,10 @@ export default function TechnicianDashboard() {
             <EmptyState icon={Wrench} title="Sem tipos no recorte" description="Não há OS para agrupar nesse período." />
           )}
         </DataPanel>
+        ) : null}
       </div>
 
+      {visibility.dashboard.servicesPerformed ? (
       <div className="mt-5">
         <DataPanel title="Serviços realizados" description="OS realizadas no recorte atual.">
           {filteredServices.length ? (
@@ -490,6 +501,7 @@ export default function TechnicianDashboard() {
           )}
         </DataPanel>
       </div>
+      ) : null}
     </AppShell>
   );
 }

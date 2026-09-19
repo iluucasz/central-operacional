@@ -11,6 +11,8 @@ import { PageHeader } from '@/components/page-header';
 import { formatCurrency, formatHours, monthKeyFromDate, normalizeCompetenceMonth, resolveCompetenceMonth } from '@/lib/formatters';
 import type { Payroll, Service, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useTechnicianVisibility } from '@/hooks/use-technician-visibility';
+import { resolveAllowedMonth } from '@/lib/technician-visibility';
 
 function formatCompetence(value: string | null | undefined) {
   const normalized = normalizeCompetenceMonth(value);
@@ -41,6 +43,8 @@ function getPayrollTotal(payroll: Payroll | null | undefined) {
 
 export default function TechnicianPayrollPage() {
   const { user, loading } = useAppSession();
+  const { visibility, loading: visibilityLoading, blocked } = useTechnicianVisibility({ page: 'payroll' });
+  const allowedMonth = resolveAllowedMonth(visibility.payroll.month);
   const [payroll, setPayroll] = useState<Payroll[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [workHours, setWorkHours] = useState<WorkHours[]>([]);
@@ -102,9 +106,13 @@ export default function TechnicianPayrollPage() {
     loadPayroll();
   }, [user]);
 
+  // A pinned month narrows both the current closing and the history to that single competence.
   const visiblePayroll = useMemo(
-    () => [...payroll].sort((left, right) => String(right.competence_month ?? '').localeCompare(String(left.competence_month ?? ''))),
-    [payroll],
+    () =>
+      payroll
+        .filter((item) => !allowedMonth || normalizeCompetenceMonth(item.competence_month) === allowedMonth)
+        .sort((left, right) => String(right.competence_month ?? '').localeCompare(String(left.competence_month ?? ''))),
+    [allowedMonth, payroll],
   );
   const currentPayroll = visiblePayroll[0];
   const currentCompetenceMonth = normalizeCompetenceMonth(currentPayroll?.competence_month);
@@ -117,7 +125,7 @@ export default function TechnicianPayrollPage() {
   const cashNetTotal = moneyValue(currentPayroll?.net_total);
   const payrollTotal = getPayrollTotal(currentPayroll);
 
-  if (loading || isDataLoading || !user) {
+  if (loading || isDataLoading || visibilityLoading || blocked || !user) {
     return <LoadingShell role="technician" />;
   }
 

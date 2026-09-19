@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { runHoursJob } from '../lib/porto-jobs/run-hours-job';
 import { runScheduleJob } from '../lib/porto-jobs/run-schedule-job';
+import { runDueNotifications } from '../lib/whatsapp/notifications';
 import { startWorkerServer } from './server';
 
 function log(...args: unknown[]) {
@@ -14,6 +15,20 @@ async function runHours() {
     log('Resultado (horas):', JSON.stringify(result));
   } catch (error) {
     log('Job de horas falhou:', error);
+    return;
+  }
+
+  // The end-of-shift WhatsApp goes out as soon as today's hours are in, rather than waiting for
+  // its configured time — that time stays as the fallback (and it only ever sends once a day).
+  await runWhatsApp({ only: 'daily_hours', ignoreTime: true });
+}
+
+async function runWhatsApp(options: Parameters<typeof runDueNotifications>[0] = {}) {
+  try {
+    const summaries = await runDueNotifications(options);
+    if (summaries.length) log('WhatsApp:', JSON.stringify(summaries));
+  } catch (error) {
+    log('Notificações WhatsApp falharam:', error);
   }
 }
 
@@ -49,7 +64,11 @@ if (runArg) {
   // needing the Vercel route's time-budget cutoff.
   cron.schedule('0 23 * * *', runHours, { timezone: 'America/Sao_Paulo' });
   cron.schedule('0 3 * * *', runSchedule, { timezone: 'America/Sao_Paulo' });
-  log('Porto worker iniciado. Horas: 23:00 (Brasília) diariamente. Escala: 03:00 (Brasília) diariamente.');
+  // WhatsApp notification times are edited in the admin UI, so rather than one cron entry per
+  // notification (which would need a worker restart on every change) this just checks every few
+  // minutes what is due. Each notification claims its day/month before running, so it's once only.
+  cron.schedule('*/5 * * * *', () => runWhatsApp(), { timezone: 'America/Sao_Paulo' });
+  log('Porto worker iniciado. Horas: 23:00 (Brasília) diariamente. Escala: 03:00 (Brasília) diariamente. WhatsApp: verificação a cada 5 min.');
 
   // Everything the admin UI triggers on demand (test-login, técnico match, manual job runs) is
   // now served from here too — the Vercel routes are thin proxies (see server.ts).

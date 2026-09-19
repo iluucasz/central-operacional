@@ -1,7 +1,8 @@
 import { neon } from '@neondatabase/serverless';
-import { NextRequest, NextResponse } from 'next/server';
+import { after, NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { ensurePayrollSchema } from '@/lib/payroll-utils';
+import { notifyPayrollClosed } from '@/lib/whatsapp/notifications';
 
 const sql = neon(process.env.DATABASE_URL!);
 
@@ -182,6 +183,18 @@ export async function POST(request: NextRequest) {
           updated_at = NOW()
       RETURNING *
     `;
+
+    // After the response, so a slow or offline WhatsApp never holds up closing the payroll. Every
+    // save of a closed payroll lands here; the notification's dedupe key keeps it to one message.
+    if (payrollStatus === 'closed') {
+      after(async () => {
+        try {
+          await notifyPayrollClosed({ technicianId: String(technician_id), competenceMonth: String(competence_month), netTotal: values.net_total });
+        } catch (error) {
+          console.error('[payroll] WhatsApp notification failed:', error);
+        }
+      });
+    }
 
     return NextResponse.json(normalizePayrollRow(result[0] as Record<string, unknown>), { status: 201 });
   } catch (error) {

@@ -38,12 +38,15 @@ import {
 import { formatCurrency, formatPercent, normalizeText } from '@/lib/formatters';
 import type { Technician, TechnicianStatus } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { PhoneInput } from '@/components/phone-input';
+import { formatPhoneInput, validatePhone } from '@/lib/whatsapp/phone';
 
 const initialFormData = {
   qra: '',
   porto_name_hint: '',
   name: '',
   email: '',
+  phone: '',
   password: '',
   commission_percentage: 25,
   base_salary: 2664.53,
@@ -64,6 +67,7 @@ function createFormDataFromTechnician(technician: Technician): TechnicianFormDat
     porto_name_hint: technician.porto_name_hint || '',
     name: technician.name,
     email: technician.email || '',
+    phone: technician.phone ? formatPhoneInput(technician.phone) : '',
     password: '',
     commission_percentage: Number(technician.commission_percentage),
     base_salary: Number(technician.base_salary),
@@ -154,6 +158,13 @@ export default function TechniciansPage() {
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setFormError('');
+
+    const phoneValidation = validatePhone(formData.phone);
+    if (phoneValidation.status === 'incomplete' || phoneValidation.status === 'invalid') {
+      setFormError(`WhatsApp: ${phoneValidation.message}`);
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -381,6 +392,17 @@ export default function TechniciansPage() {
                         />
                       </label>
 
+                      <label className="text-sm">
+                        <span className="mb-1.5 block font-medium">WhatsApp (opcional)</span>
+                        <PhoneInput
+                          value={formData.phone}
+                          onChange={(phone) => setFormData((current) => ({ ...current, phone }))}
+                          className={inputClassName}
+                          checkWhatsApp
+                          hint="Ex.: (11) 97971-3590 — pode digitar com ou sem +55, espaços ou traços. Recebe as notificações automáticas; sem número, o técnico não recebe mensagens."
+                        />
+                      </label>
+
                       <label className="text-sm md:col-span-2">
                         <span className="mb-1.5 block font-medium">Nome no Porto (opcional)</span>
                         <input
@@ -573,7 +595,10 @@ export default function TechniciansPage() {
                     <tr key={technician.id} className="border-b border-border last:border-0">
                       <td className="py-3 pr-4 font-mono text-xs">{technician.qra || '-'}</td>
                       <td className="py-3 pr-4 font-medium">{technician.name}</td>
-                      <td className="py-3 pr-4 text-muted-foreground">{technician.email || '-'}</td>
+                      <td className="py-3 pr-4 text-muted-foreground">
+                        {technician.email || '-'}
+                        {technician.phone ? <span className="block text-xs">{technician.phone}</span> : null}
+                      </td>
                       <td className="py-3 pr-4">{formatPercent(technician.commission_percentage)}</td>
                       <td className="py-3 pr-4">{formatCurrency(technician.base_salary)}</td>
                       <td className="py-3 pr-4">{formatCurrency(technician.va_allowance)}</td>

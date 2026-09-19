@@ -23,6 +23,8 @@ export interface Technician {
   porto_name_hint?: string
   name: string
   email?: string
+  /** WhatsApp number for notifications. Optional — technicians without one are simply skipped. */
+  phone?: string | null
   commission_percentage: number
   base_salary: number
   va_allowance: number

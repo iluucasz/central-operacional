@@ -15,6 +15,12 @@ const hiddenTechnicianRoutes = ['/dashboard/services'];
 /** Endpoints that must stay reachable while previewing, so the admin can always get back out. */
 const previewEscapeRoutes = ['/api/auth/preview/exit', '/api/auth/logout'];
 
+/**
+ * Admin tools used from inside a preview. Their writes act as the admin, not as the previewed
+ * technician — each route re-verifies the parked admin token itself before changing anything.
+ */
+const previewAdminRoutes = ['/api/technician-visibility'];
+
 async function verifyAuthMiddleware(
   request: NextRequest,
 ): Promise<{ userId: string; email: string; role: string; preview?: boolean } | null> {
@@ -51,7 +57,12 @@ export async function middleware(request: NextRequest) {
 
   // A preview session is strictly read-only. Enforcing it here rather than per-route means a new
   // endpoint can't accidentally become writable while impersonating someone.
-  if (auth.preview && request.method !== 'GET' && !previewEscapeRoutes.includes(path)) {
+  if (
+    auth.preview &&
+    request.method !== 'GET' &&
+    !previewEscapeRoutes.includes(path) &&
+    !previewAdminRoutes.includes(path)
+  ) {
     return NextResponse.json(
       { error: 'Ação bloqueada: o modo preview é somente leitura.' },
       { status: 403 },

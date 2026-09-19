@@ -13,6 +13,8 @@ import { formatDate, formatTime, formatTimeRange } from '@/lib/formatters';
 import { enumerateDateKeys, normalizeDateKey } from '@/lib/schedule-planner';
 import type { Schedule } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useTechnicianVisibility } from '@/hooks/use-technician-visibility';
+import { resolveAllowedMonth } from '@/lib/technician-visibility';
 
 type PeriodMode = 'week' | 'month';
 
@@ -238,6 +240,8 @@ function ScheduleFilterAction({
 
 export function TechnicianScheduleViewPage() {
   const { user, loading } = useAppSession();
+  const { visibility, loading: visibilityLoading, blocked } = useTechnicianVisibility({ page: 'schedule' });
+  const allowedMonth = resolveAllowedMonth(visibility.schedule.month);
   const [schedule, setSchedule] = useState<Schedule[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [dataError, setDataError] = useState('');
@@ -286,9 +290,13 @@ export function TechnicianScheduleViewPage() {
     };
   }, [user]);
 
+  // A pinned month filters the data itself, so the weekly view and the summary cards can't show
+  // days from outside it either — not just the month picker.
   const sortedSchedule = useMemo(() => {
-    return [...schedule].sort((left, right) => normalizeDateKey(left.date).localeCompare(normalizeDateKey(right.date)));
-  }, [schedule]);
+    return schedule
+      .filter((item) => !allowedMonth || getMonthValue(normalizeDateKey(item.date)) === allowedMonth)
+      .sort((left, right) => normalizeDateKey(left.date).localeCompare(normalizeDateKey(right.date)));
+  }, [allowedMonth, schedule]);
 
   const todayKey = normalizeDateKey(new Date().toISOString());
   const currentMonthValue = getMonthValue(todayKey);
@@ -300,6 +308,8 @@ export function TechnicianScheduleViewPage() {
   }, [sortedSchedule, todayKey]);
 
   const monthOptions = useMemo(() => {
+    if (allowedMonth) return [allowedMonth];
+
     const values = new Set<string>([currentMonthValue]);
 
     sortedSchedule.forEach((item) => {
@@ -307,7 +317,7 @@ export function TechnicianScheduleViewPage() {
     });
 
     return Array.from(values).sort((left, right) => right.localeCompare(left, 'pt-BR'));
-  }, [currentMonthValue, sortedSchedule]);
+  }, [allowedMonth, currentMonthValue, sortedSchedule]);
 
   useEffect(() => {
     if (!monthOptions.includes(calendarSelectedMonth)) {
@@ -337,7 +347,7 @@ export function TechnicianScheduleViewPage() {
     [dataError, referenceDateKey, sortedSchedule],
   );
 
-  if (loading || isDataLoading || !user) {
+  if (loading || isDataLoading || visibilityLoading || blocked || !user) {
     return <LoadingShell role="technician" />;
   }
 

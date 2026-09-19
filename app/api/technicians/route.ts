@@ -2,6 +2,8 @@ import { neon } from '@neondatabase/serverless';
 import { NextRequest, NextResponse } from 'next/server';
 import { hashPassword, verifyAuth } from '@/lib/auth';
 import { ensurePortoConfigSchema } from '@/lib/porto-config-schema';
+import { validatePhone } from '@/lib/whatsapp/phone';
+import { ensureWhatsAppSchema } from '@/lib/whatsapp/store';
 
 const sql = neon(process.env.DATABASE_URL!);
 
@@ -20,6 +22,16 @@ function technicianConflictResponse() {
   );
 }
 
+/** Phone is optional; when given it has to be something WhatsApp can actually reach. */
+function parsePhone(value: unknown): { phone: string | null; error: string | null } {
+  const validation = validatePhone(typeof value === 'string' ? value : '');
+  if (validation.status === 'empty') return { phone: null, error: null };
+  if (validation.status !== 'valid') return { phone: null, error: `WhatsApp: ${validation.message}` };
+
+  // Stored in one canonical format whatever way it was typed, so lists and exports read the same.
+  return { phone: validation.formatted, error: null };
+}
+
 function positiveNumberOrDefault(value: unknown, fallback: number) {
   const numericValue = Number(value);
   return numericValue > 0 ? numericValue : fallback;
@@ -35,6 +47,7 @@ async function insertTechnicianRecord({
   vaAllowance,
   vrAllowance,
   portoNameHint,
+  phone,
 }: {
   userId: string | null;
   qra: string | null;
@@ -45,11 +58,12 @@ async function insertTechnicianRecord({
   vaAllowance: unknown;
   vrAllowance: unknown;
   portoNameHint: string | null;
+  phone: string | null;
 }) {
   const result = await sql`
     INSERT INTO technicians (
       user_id, qra, name, email, commission_percentage,
-      base_salary, va_allowance, vr_allowance, porto_name_hint
+      base_salary, va_allowance, vr_allowance, porto_name_hint, phone
     )
     VALUES (
       ${userId}, ${qra || null}, ${name}, ${email},
@@ -57,7 +71,8 @@ async function insertTechnicianRecord({
       ${positiveNumberOrDefault(baseSalary, 2664.53)},
       ${positiveNumberOrDefault(vaAllowance, 249)},
       ${positiveNumberOrDefault(vrAllowance, 783)},
-      ${portoNameHint || null}
+      ${portoNameHint || null},
+      ${phone}
     )
     RETURNING *
   `;
@@ -76,9 +91,10 @@ export async function GET(request: NextRequest) {
     }
 
     await ensurePortoConfigSchema();
+    await ensureWhatsAppSchema();
 
     const technicians = await sql`
-      SELECT id, qra, porto_name_hint, name, email, commission_percentage, base_salary,
+      SELECT id, qra, porto_name_hint, name, email, phone, commission_percentage, base_salary,
              va_allowance, vr_allowance, status, created_at
       FROM technicians
       ORDER BY name ASC
@@ -116,7 +132,13 @@ export async function POST(request: NextRequest) {
       va_allowance,
       vr_allowance,
       porto_name_hint,
+      phone: rawPhone,
     } = await request.json();
+
+    const { phone, error: phoneError } = parsePhone(rawPhone);
+    if (phoneError) {
+      return NextResponse.json({ error: phoneError }, { status: 400 });
+    }
 
     if (!name || !email || !password) {
       return NextResponse.json(
@@ -126,6 +148,7 @@ export async function POST(request: NextRequest) {
     }
 
     await ensurePortoConfigSchema();
+    await ensureWhatsAppSchema();
 
     const existingUsers = await sql`
       SELECT u.id, u.role, t.id AS technician_id
@@ -161,6 +184,7 @@ export async function POST(request: NextRequest) {
         vaAllowance: va_allowance,
         vrAllowance: vr_allowance,
         portoNameHint: porto_name_hint,
+        phone,
       });
 
       return NextResponse.json(technician, { status: 201 });
@@ -186,6 +210,7 @@ export async function POST(request: NextRequest) {
       vaAllowance: va_allowance,
       vrAllowance: vr_allowance,
       portoNameHint: porto_name_hint,
+      phone,
     });
 
     return NextResponse.json(technician, { status: 201 });
@@ -244,7 +269,13 @@ export async function PATCH(request: NextRequest) {
       vr_allowance,
       porto_name_hint,
       status,
+      phone: rawPhone,
     } = await request.json();
+
+    const { phone, error: phoneError } = parsePhone(rawPhone);
+    if (phoneError) {
+      return NextResponse.json({ error: phoneError }, { status: 400 });
+    }
 
     if (!name || !email) {
       return NextResponse.json(
@@ -254,6 +285,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     await ensurePortoConfigSchema();
+    await ensureWhatsAppSchema();
 
     const existingTechnicians = await sql`
       SELECT id, user_id
@@ -335,6 +367,7 @@ export async function PATCH(request: NextRequest) {
         user_id = ${userId},
         qra = ${qra || null},
         porto_name_hint = ${porto_name_hint || null},
+        phone = CASE WHEN ${rawPhone !== undefined} THEN ${phone} ELSE phone END,
         name = ${name},
         email = ${email},
         commission_percentage = ${Number(commission_percentage) > 0 ? commission_percentage : 25},

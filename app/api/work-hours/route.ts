@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless';
-import { NextRequest, NextResponse } from 'next/server';
+import { after, NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
+import { notifyJustified } from '@/lib/whatsapp/notifications';
 import { applyWorkHourEntries, getActiveTechnicianIds, getIsoWeekNumber, type AttendanceStatus, type WorkHourEntry } from '@/lib/work-hours-service';
 
 const sql = neon(process.env.DATABASE_URL!);
@@ -142,6 +143,20 @@ export async function POST(request: NextRequest) {
 
       if (!count) {
         return NextResponse.json({ error: 'Nenhum apontamento para tecnico ativo foi informado.' }, { status: 400 });
+      }
+
+      const justifiedEntries = parsedEntries
+        .filter((entry) => entry.attendance_status === 'justified')
+        .map((entry) => ({ technicianId: entry.technician_id, date: entry.date, notes: entry.notes }));
+
+      if (justifiedEntries.length) {
+        after(async () => {
+          try {
+            await notifyJustified(justifiedEntries);
+          } catch (error) {
+            console.error('[work-hours] WhatsApp notification failed:', error);
+          }
+        });
       }
 
       return NextResponse.json({ workHours, schedules, count, skippedInactive }, { status: 201 });
