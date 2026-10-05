@@ -82,21 +82,7 @@ export function ConnectionPanel({ form, onChange, technicians, unsaved }: Connec
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)] xl:items-start">
       <div className="space-y-5">
         <DataPanel title="Conexão" description="O WhatsApp da empresa, que envia as notificações para os técnicos.">
-          <div className="space-y-4">
-            <InstanceCard onStatus={(status) => setConnected(status.state === 'connected')} />
-
-            <label className="block text-sm">
-              <span className="mb-1.5 block font-medium">Link do sistema (opcional)</span>
-              <input
-                type="url"
-                value={form.appUrl}
-                onChange={(event) => onChange({ appUrl: event.target.value })}
-                placeholder="https://seu-sistema.vercel.app"
-                className={inputClassName}
-              />
-              <span className="mt-1 block text-xs text-muted-foreground">Usado pela variável {'{link}'} nas mensagens.</span>
-            </label>
-          </div>
+          <InstanceCard onStatus={(status) => setConnected(status.state === 'connected')} />
         </DataPanel>
 
         <DataPanel

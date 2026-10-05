@@ -18,10 +18,9 @@ Tela: **Admin → WhatsApp** (`/admin/whatsapp`). Envio via Evolution API (a mes
    - **Aguardando leitura / Desconectado**: **Gerar QR Code**. O código é renovado a cada 30 s e a tela verifica a cada 4 s se foi lido; quando a Evolution devolve um código de pareamento, ele aparece junto.
    - **Não conectado** (instância inexistente no servidor): **Conectar WhatsApp** cria a instância com o nome de `EVOLUTION_INSTANCE` e mostra o primeiro QR Code. Uma instância que já existe nunca é recriada.
    - Criar e desconectar ficam registrados no log do servidor (`[whatsapp] Instance ...`).
-3. Ainda na aba Conexão, o **Link do sistema** alimenta a variável `{link}` das mensagens (ex.: folha fechada).
-4. Cadastre o WhatsApp de cada técnico em **Técnicos → Editar**. Técnicos sem número aparecem listados na aba Conexão.
-5. **Área de teste**: o switch **Modo teste** ligado faz todas as notificações irem para o **Número de teste**, e nenhum técnico recebe. Esses envios não contam como entregues, então ao desligar o modo cada técnico ainda recebe a mensagem dele. O número digitado continua lá com o modo desligado e serve para a **Mensagem de teste**, que só pode ser enviada com o WhatsApp conectado.
-6. Ligue a **automação** pela chave no cabeçalho da página. Ao ligar, um diálogo pergunta quais notificações ativar (**Ativar todas** ou **Ativar selecionadas**), para a automação nunca ficar ligada com todas as notificações desligadas. Horários e textos ficam na aba **Notificações**.
+3. Cadastre o WhatsApp de cada técnico em **Técnicos → Editar**. Técnicos sem número aparecem listados na aba Conexão.
+4. **Área de teste**: o switch **Modo teste** ligado faz todas as notificações irem para o **Número de teste**, e nenhum técnico recebe. Esses envios não contam como entregues, então ao desligar o modo cada técnico ainda recebe a mensagem dele. O número digitado continua lá com o modo desligado e serve para a **Mensagem de teste**, que só pode ser enviada com o WhatsApp conectado.
+5. Ligue a **automação** pela chave no cabeçalho da página. Ao ligar, um diálogo pergunta quais notificações ativar (**Ativar todas** ou **Ativar selecionadas**), para a automação nunca ficar ligada com todas as notificações desligadas. Horários e textos ficam na aba **Notificações**. A variável `{link}` usa o link do sistema já salvo em `whatsapp_config.app_url` (não é mais editável pela tela).
 
 > **Trocar número desconecta o WhatsApp em uso.** Para testar a tela, aponte `EVOLUTION_INSTANCE` no `.env.local` para uma instância de teste (ex.: `central-teste`) e conecte um celular de teste. Nunca teste contra a instância de produção.
 
