@@ -1,12 +1,5 @@
 import type { NotificationSettings } from '@/lib/whatsapp/notification-types';
 
-/** The Evolution connection as read from the server's EVOLUTION_* env vars — display only. */
-export interface EnvConnection {
-  apiUrl: string;
-  instance: string;
-  hasApiKey: boolean;
-}
-
 export interface WhatsAppConfigForm {
   enabled: boolean;
   testPhone: string;

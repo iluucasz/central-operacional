@@ -1,6 +1,7 @@
 /**
  * Minimal Evolution API client — plain fetch, no SDK. Same approach as the EssencialCentro
- * integration; the connection comes from the admin screen, falling back to the EVOLUTION_* env vars.
+ * integration; the server (URL + global key) and the instance name come from the EVOLUTION_* env
+ * vars, and the admin screen connects that instance by QR code (see instance.ts).
  * Never throws: every failure comes back as a structured result the caller records in history.
  */
 
@@ -126,5 +127,116 @@ export async function checkWhatsAppNumber(connection: EvolutionConnection, phone
     return { exists: Boolean(match?.exists), jid: match?.jid ?? null, error: null };
   } catch (error) {
     return { exists: false, jid: null, error: describeError(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Instance lifecycle (the single EVOLUTION_INSTANCE, connected from the admin screen)
+// ---------------------------------------------------------------------------------------------
+
+/** The Evolution server: URL and global key, from the environment only. */
+export interface EvolutionServer {
+  apiUrl: string;
+  apiKey: string;
+}
+
+export interface EvolutionQrCode {
+  /** data:image/png;base64,... ready for an <img>. */
+  base64: string | null;
+  /** 8-character code for "connect with phone number" in WhatsApp, when Evolution provides it. */
+  pairingCode: string | null;
+}
+
+export interface EvolutionInstanceInfo {
+  exists: boolean;
+  /** open = connected, connecting = waiting for the QR scan, close = disconnected. */
+  state: string | null;
+  /** Connected number (digits), from the owner JID. */
+  number: string | null;
+  profileName: string | null;
+  error: string | null;
+}
+
+const asConnection = (server: EvolutionServer, instance: string): EvolutionConnection => ({ ...server, instance });
+
+function readQr(data: unknown): EvolutionQrCode {
+  const source = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+  const qr = (source.qrcode && typeof source.qrcode === 'object' ? source.qrcode : source) as Record<string, unknown>;
+  const base64 = typeof qr.base64 === 'string' && qr.base64 ? qr.base64 : null;
+  return {
+    base64: base64 && !base64.startsWith('data:') ? `data:image/png;base64,${base64}` : base64,
+    pairingCode: typeof qr.pairingCode === 'string' && qr.pairingCode ? qr.pairingCode : null,
+  };
+}
+
+async function failure(response: Response) {
+  const body = await response.text().catch(() => '');
+  return `Evolution API respondeu ${response.status}${body ? `: ${body.slice(0, 200)}` : ''}`;
+}
+
+/** Creates the instance (Baileys) and returns its first QR code. */
+export async function createEvolutionInstance(server: EvolutionServer, instance: string): Promise<EvolutionResult & { qr: EvolutionQrCode | null }> {
+  try {
+    const response = await request(asConnection(server, instance), '/instance/create', {
+      method: 'POST',
+      body: JSON.stringify({ instanceName: instance, integration: 'WHATSAPP-BAILEYS', qrcode: true }),
+    });
+    if (!response.ok) return { ok: false, error: await failure(response), qr: null };
+    return { ok: true, error: null, qr: readQr(await response.json().catch(() => null)) };
+  } catch (error) {
+    return { ok: false, error: describeError(error), qr: null };
+  }
+}
+
+/** Looks the instance up on the server (v2 and v1 response shapes). */
+export async function fetchEvolutionInstance(server: EvolutionServer, instance: string): Promise<EvolutionInstanceInfo> {
+  try {
+    const response = await request(asConnection(server, instance), `/instance/fetchInstances?instanceName=${encodeURIComponent(instance)}`, { method: 'GET' });
+    // Some versions answer 404 when the instance doesn't exist.
+    if (response.status === 404) return { exists: false, state: null, number: null, profileName: null, error: null };
+    if (!response.ok) return { exists: false, state: null, number: null, profileName: null, error: await failure(response) };
+
+    const data = await response.json().catch(() => null);
+    const list = (Array.isArray(data) ? data : data ? [data] : []) as Array<Record<string, unknown>>;
+    const item = list
+      .map((entry) => (entry.instance && typeof entry.instance === 'object' ? { ...entry, ...(entry.instance as Record<string, unknown>) } : entry))
+      .find((entry) => (entry.name ?? entry.instanceName) === instance);
+    if (!item) return { exists: false, state: null, number: null, profileName: null, error: null };
+
+    const jid = String(item.ownerJid ?? item.owner ?? '');
+    const number = jid ? jid.split('@')[0].split(':')[0].replace(/\D/g, '') || null : typeof item.number === 'string' ? item.number : null;
+    return {
+      exists: true,
+      state: String(item.connectionStatus ?? item.status ?? item.state ?? '') || null,
+      number,
+      profileName: (item.profileName as string | null | undefined) ?? null,
+      error: null,
+    };
+  } catch (error) {
+    return { exists: false, state: null, number: null, profileName: null, error: describeError(error) };
+  }
+}
+
+/** A fresh QR code to connect the instance (Evolution renews it every ~40 seconds). */
+export async function connectEvolutionInstance(server: EvolutionServer, instance: string): Promise<EvolutionResult & { qr: EvolutionQrCode | null; state: string | null }> {
+  try {
+    const response = await request(asConnection(server, instance), `/instance/connect/${encodeURIComponent(instance)}`, { method: 'GET' });
+    if (!response.ok) return { ok: false, error: await failure(response), qr: null, state: null };
+    const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const state = (data?.instance as { state?: string } | undefined)?.state ?? null;
+    return { ok: true, error: null, qr: state === 'open' ? null : readQr(data), state };
+  } catch (error) {
+    return { ok: false, error: describeError(error), qr: null, state: null };
+  }
+}
+
+/** Disconnects the WhatsApp number from the instance (the instance itself stays). */
+export async function logoutEvolutionInstance(server: EvolutionServer, instance: string): Promise<EvolutionResult> {
+  try {
+    const response = await request(asConnection(server, instance), `/instance/logout/${encodeURIComponent(instance)}`, { method: 'DELETE' });
+    if (!response.ok) return { ok: false, error: await failure(response) };
+    return { ok: true, error: null };
+  } catch (error) {
+    return { ok: false, error: describeError(error) };
   }
 }

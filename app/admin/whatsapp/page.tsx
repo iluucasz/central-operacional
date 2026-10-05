@@ -1,20 +1,22 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, History, Loader2, MessageCircle, Settings2, TriangleAlert } from 'lucide-react';
+import { Check, History, Loader2, MessageCircle, Power, Settings2, TriangleAlert } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { LoadingShell } from '@/components/page-skeleton';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAppSession } from '@/hooks/use-app-session';
-import { createDefaultNotificationSettings } from '@/lib/whatsapp/notification-types';
+import { createDefaultNotificationSettings, NOTIFICATION_TYPES, type NotificationType } from '@/lib/whatsapp/notification-types';
 import { validatePhone } from '@/lib/whatsapp/phone';
 import { ConnectionPanel } from './connection-panel';
+import { EnableAutomationDialog } from './enable-automation-dialog';
 import { HistoryPanel } from './history-panel';
 import { NotificationsPanel } from './notifications-panel';
-import type { EnvConnection, TechnicianOption, WhatsAppConfigForm } from './types';
+import type { TechnicianOption, WhatsAppConfigForm } from './types';
 
 const emptyForm: WhatsAppConfigForm = {
   enabled: false,
@@ -26,7 +28,6 @@ const emptyForm: WhatsAppConfigForm = {
 export default function AdminWhatsAppPage() {
   const { user, loading } = useAppSession();
   const [form, setForm] = useState<WhatsAppConfigForm>(emptyForm);
-  const [connection, setConnection] = useState<EnvConnection>({ apiUrl: '', instance: '', hasApiKey: false });
   const [technicians, setTechnicians] = useState<TechnicianOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -34,6 +35,7 @@ export default function AdminWhatsAppPage() {
   const [saveError, setSaveError] = useState('');
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [askNotifications, setAskNotifications] = useState(false);
   // What the server already has. Compared after each save so edits made *while* saving aren't
   // marked as saved, and so nothing is sent when nothing actually changed.
   const savedPayload = useRef('');
@@ -54,11 +56,6 @@ export default function AdminWhatsAppPage() {
         testPhone: configData.testPhone ?? '',
         appUrl: configData.appUrl ?? '',
         notifications: configData.notifications ?? createDefaultNotificationSettings(),
-      });
-      setConnection({
-        apiUrl: configData.connection?.apiUrl ?? '',
-        instance: configData.connection?.instance ?? '',
-        hasApiKey: Boolean(configData.connection?.hasApiKey),
       });
       setTechnicians(
         (Array.isArray(techniciansData?.technicians) ? techniciansData.technicians : []).map((technician: Record<string, unknown>) => ({
@@ -188,10 +185,34 @@ export default function AdminWhatsAppPage() {
       <PageHeader
         eyebrow="Integrações"
         title="WhatsApp"
-        description="Conexão com a Evolution API, notificações automáticas para os técnicos e histórico de envios."
+        description="WhatsApp da empresa, notificações automáticas para os técnicos e histórico de envios."
       >
-        <StatusBadge tone={form.enabled ? 'success' : 'neutral'}>{form.enabled ? 'Automação ativa' : 'Automação desligada'}</StatusBadge>
         {form.testPhone ? <StatusBadge tone="warning">Modo teste: envios desviados</StatusBadge> : null}
+        {/* The master switch: every automatic notification depends on it. */}
+        <label
+          className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-2.5 transition-colors ${
+            form.enabled ? 'border-emerald-300 bg-emerald-50' : 'border-border bg-card'
+          } ${isLoading ? 'pointer-events-none opacity-60' : ''}`}
+        >
+          <span
+            className={`grid h-9 w-9 place-items-center rounded-lg ${form.enabled ? 'bg-emerald-600 text-white' : 'bg-secondary text-muted-foreground'}`}
+            aria-hidden="true"
+          >
+            <Power className="h-4 w-4" />
+          </span>
+          <span className="text-sm leading-tight">
+            <span className="block font-semibold">{form.enabled ? 'Automação ligada' : 'Automação desligada'}</span>
+            <span className="block text-xs text-muted-foreground">
+              {form.enabled ? 'Notificações automáticas ativas' : 'Nenhuma notificação automática sai'}
+            </span>
+          </span>
+          <Switch
+            checked={form.enabled}
+            onCheckedChange={(enabled) => (enabled ? setAskNotifications(true) : updateForm({ enabled: false }))}
+            disabled={isLoading}
+            aria-label="Ligar ou desligar a automação do WhatsApp"
+          />
+        </label>
       </PageHeader>
 
       {loadError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{loadError}</div> : null}
@@ -219,7 +240,7 @@ export default function AdminWhatsAppPage() {
           </TabsList>
 
           <TabsContent value="connection" className="space-y-5">
-            <ConnectionPanel form={form} connection={connection} onChange={updateForm} technicians={technicians} unsaved={unsaved} />
+            <ConnectionPanel form={form} onChange={updateForm} technicians={technicians} unsaved={unsaved} />
           </TabsContent>
 
           <TabsContent value="notifications" className="space-y-5">
@@ -231,6 +252,22 @@ export default function AdminWhatsAppPage() {
           </TabsContent>
         </Tabs>
       )}
+
+      <EnableAutomationDialog
+        open={askNotifications}
+        notifications={form.notifications}
+        onCancel={() => setAskNotifications(false)}
+        onConfirm={(types: NotificationType[]) => {
+          const chosen = new Set(types);
+          updateForm({
+            enabled: true,
+            notifications: Object.fromEntries(
+              NOTIFICATION_TYPES.map((type) => [type, { ...form.notifications[type], enabled: chosen.has(type) }]),
+            ) as typeof form.notifications,
+          });
+          setAskNotifications(false);
+        }}
+      />
 
       {saveStatus}
     </AppShell>

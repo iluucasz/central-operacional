@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { normalizeNotificationSettings } from '@/lib/whatsapp/notification-types';
 import { validatePhone } from '@/lib/whatsapp/phone';
 import { requireWhatsAppAdmin } from '@/lib/whatsapp/require-admin';
-import { evolutionEnv, getWhatsAppConfig, saveWhatsAppConfig } from '@/lib/whatsapp/store';
+import { getWhatsAppConfig, saveWhatsAppConfig } from '@/lib/whatsapp/store';
 
 export const runtime = 'nodejs';
 
@@ -12,11 +12,10 @@ export async function GET(request: NextRequest) {
 
   try {
     const config = await getWhatsAppConfig();
-    const env = evolutionEnv();
 
-    // Read-only view of the env connection. The API key itself never leaves the server.
+    // The Evolution server's URL and key never leave the backend; the connection itself is read
+    // from /api/whatsapp/instance.
     return NextResponse.json({
-      connection: { apiUrl: env.apiUrl, instance: env.instance, hasApiKey: Boolean(env.apiKey) },
       enabled: config.enabled,
       testPhone: config.testPhone,
       appUrl: config.appUrl,

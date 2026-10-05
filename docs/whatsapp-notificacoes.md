@@ -4,7 +4,7 @@ Tela: **Admin → WhatsApp** (`/admin/whatsapp`). Envio via Evolution API (a mes
 
 ## Configuração
 
-1. A conexão vem das mesmas variáveis do projeto EssencialCentro:
+1. O servidor e a instância vêm das mesmas variáveis do projeto EssencialCentro:
 
    ```env
    EVOLUTION_API_URL=https://evolution-whatsapp.duckdns.org
@@ -12,11 +12,18 @@ Tela: **Admin → WhatsApp** (`/admin/whatsapp`). Envio via Evolution API (a mes
    EVOLUTION_INSTANCE=...
    ```
 
-   Configure-as no `.env.local`, na Vercel **e** no container do worker na VPS. A conexão vem só do `.env`: a aba **Conexão** apenas mostra o que foi lido (com a key mascarada) e testa a conexão.
-2. Na aba **Conexão**, use **Testar conexão** e **Mensagem de teste**.
-3. Cadastre o WhatsApp de cada técnico em **Técnicos → Editar**. Técnicos sem número aparecem listados na aba Conexão.
-4. Para validar antes de liberar, preencha o **Número de teste**: todas as notificações vão para ele e nenhum técnico recebe. Esses envios não contam como entregues, então ao esvaziar o campo cada técnico ainda recebe a mensagem dele.
-5. Ligue **Automação ativa** e as notificações desejadas na aba **Notificações**.
+   Configure-as no `.env.local`, na Vercel **e** no container do worker na VPS. A URL e a key nunca saem do backend.
+2. Na aba **Conexão**, o cartão **WhatsApp da empresa** mostra o estado da instância `EVOLUTION_INSTANCE`, lido ao vivo da Evolution (nada fica no banco):
+   - **Conectado**: número e nome do perfil, com **Verificar conexão** e **Trocar número** (desconecta o número atual, com confirmação; a instância continua e fica pronta para um novo QR Code).
+   - **Aguardando leitura / Desconectado**: **Gerar QR Code**. O código é renovado a cada 30 s e a tela verifica a cada 4 s se foi lido; quando a Evolution devolve um código de pareamento, ele aparece junto.
+   - **Não conectado** (instância inexistente no servidor): **Conectar WhatsApp** cria a instância com o nome de `EVOLUTION_INSTANCE` e mostra o primeiro QR Code. Uma instância que já existe nunca é recriada.
+   - Criar e desconectar ficam registrados no log do servidor (`[whatsapp] Instance ...`).
+3. Ainda na aba Conexão, o **Link do sistema** alimenta a variável `{link}` das mensagens (ex.: folha fechada).
+4. Cadastre o WhatsApp de cada técnico em **Técnicos → Editar**. Técnicos sem número aparecem listados na aba Conexão.
+5. **Área de teste**: o switch **Modo teste** ligado faz todas as notificações irem para o **Número de teste**, e nenhum técnico recebe. Esses envios não contam como entregues, então ao desligar o modo cada técnico ainda recebe a mensagem dele. O número digitado continua lá com o modo desligado e serve para a **Mensagem de teste**, que só pode ser enviada com o WhatsApp conectado.
+6. Ligue a **automação** pela chave no cabeçalho da página. Ao ligar, um diálogo pergunta quais notificações ativar (**Ativar todas** ou **Ativar selecionadas**), para a automação nunca ficar ligada com todas as notificações desligadas. Horários e textos ficam na aba **Notificações**.
+
+> **Trocar número desconecta o WhatsApp em uso.** Para testar a tela, aponte `EVOLUTION_INSTANCE` no `.env.local` para uma instância de teste (ex.: `central-teste`) e conecte um celular de teste. Nunca teste contra a instância de produção.
 
 Recomendação: usar uma instância própria para este sistema, não a do WhatsApp da clínica.
 
