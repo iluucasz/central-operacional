@@ -46,5 +46,8 @@ no dia em que a tela entrou no ar.
 | WhatsApp para alertas do robô | vazio | Worker: aviso quando uma execução automática falha, termina com avisos de saúde ou fica travada (>2h). Vazio = sem alertas. |
 | Aviso de vencimento | 7 dias | Controle de despesas ("A vencer"). |
 | Categorias de despesa | lista anterior | Sugestões do campo Categoria no controle de despesas. |
+| Assistente de IA ligado | sim | `/admin/assistente` e o chat flutuante. Desligado, o assistente não responde. |
+| Limite de gasto por mês | R$ 50 | Assistente: ao atingir, para de responder até o mês seguinte (0 = sem limite). |
+| Preço da entrada / saída | R$ 1,55 / R$ 2,30 por milhão de tokens | Custo de cada resposta (aba Consumo e limite mensal). Preço do `deepseek-chat` (US$ 0,28 / 0,42) a ~R$ 5,50 — conferir em platform.deepseek.com. |
 
 Folhas já salvas guardam os valores calculados e não são recalculadas quando as configurações mudam.

@@ -65,6 +65,14 @@ export type OrganizationSettings = {
   financeDueSoonDays: number;
   /** Expense categories offered on the finance screen. */
   financeCategories: string[];
+
+  // AI assistant (DeepSeek)
+  aiAssistantEnabled: boolean;
+  /** Spending cap per month in R$; the assistant stops answering once it's reached (0 = no cap). */
+  aiMonthlyBudget: number;
+  /** DeepSeek's price per million tokens, in R$, to turn each answer's usage into a cost. */
+  aiInputCostPerMillion: number;
+  aiOutputCostPerMillion: number;
 };
 
 /** Fixed marker the hours job and the "never recompute a warned day" rule look for. Never editable. */
@@ -123,6 +131,12 @@ export const DEFAULT_ORGANIZATION_SETTINGS: OrganizationSettings = {
     'Investimentos',
     'Outros',
   ],
+
+  aiAssistantEnabled: true,
+  aiMonthlyBudget: 50,
+  // deepseek-chat at US$ 0.28 (input) and US$ 0.42 (output) per million tokens, ~R$ 5.50/US$.
+  aiInputCostPerMillion: 1.55,
+  aiOutputCostPerMillion: 2.3,
 };
 
 /** What a technician's own screens may read — salaries and commission never leave the admin side. */
@@ -256,6 +270,10 @@ function parseFields(source: Record<string, unknown>): ParsedFields {
     portoAlertPhone: text('portoAlertPhone'),
     financeDueSoonDays: number('financeDueSoonDays'),
     financeCategories: normalizeCategories(pick(source, 'financeCategories')),
+    aiAssistantEnabled: bool('aiAssistantEnabled'),
+    aiMonthlyBudget: number('aiMonthlyBudget'),
+    aiInputCostPerMillion: number('aiInputCostPerMillion'),
+    aiOutputCostPerMillion: number('aiOutputCostPerMillion'),
   };
 }
 
@@ -317,6 +335,11 @@ function validateField(key: keyof OrganizationSettings, value: unknown, all: Org
       const normalized = categories.map((category) => category.toLocaleLowerCase('pt-BR'));
       return new Set(normalized).size === normalized.length ? null : 'Duas categorias de despesa não podem ter o mesmo nome.';
     }
+    case 'aiMonthlyBudget':
+      return n >= 0 && n <= 100000 ? null : 'O limite mensal do assistente deve ficar entre R$ 0 (sem limite) e R$ 100.000.';
+    case 'aiInputCostPerMillion':
+    case 'aiOutputCostPerMillion':
+      return n >= 0 && n <= 1000 ? null : 'O preço por milhão de tokens deve ficar entre R$ 0 e R$ 1.000.';
     default:
       return null;
   }
@@ -378,6 +401,10 @@ const MISSING_FIELD_MESSAGES: Record<keyof OrganizationSettings, string> = {
   portoAlertPhone: 'O WhatsApp para alertas precisa de DDD e número (ou fica vazio).',
   financeDueSoonDays: 'O aviso de vencimento deve ser um número inteiro de 0 a 60 dias.',
   financeCategories: 'Informe ao menos uma categoria de despesa.',
+  aiAssistantEnabled: 'Escolha se o assistente de IA fica ligado.',
+  aiMonthlyBudget: 'O limite mensal do assistente deve ficar entre R$ 0 (sem limite) e R$ 100.000.',
+  aiInputCostPerMillion: 'O preço por milhão de tokens deve ficar entre R$ 0 e R$ 1.000.',
+  aiOutputCostPerMillion: 'O preço por milhão de tokens deve ficar entre R$ 0 e R$ 1.000.',
 };
 
 /** The award of the highest tier reached in the month, or 0 when none was reached. */

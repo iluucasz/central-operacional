@@ -34,10 +34,13 @@ type NumericKey =
   | 'portoMaxShiftHours'
   | 'portoNextMonthLookaheadDays'
   | 'portoFullDayOffPercent'
-  | 'financeDueSoonDays';
+  | 'financeDueSoonDays'
+  | 'aiMonthlyBudget'
+  | 'aiInputCostPerMillion'
+  | 'aiOutputCostPerMillion';
 
 type TimeKey = 'defaultShiftStart' | 'defaultShiftEnd' | 'portoHoursImportTime' | 'portoScheduleImportTime';
-type BooleanKey = 'chargeCancelledServicePlanned' | 'portoUseLaudoConclusion' | 'portoWarningEnabled' | 'portoRecordCancelledDays';
+type BooleanKey = 'chargeCancelledServicePlanned' | 'portoUseLaudoConclusion' | 'portoWarningEnabled' | 'portoRecordCancelledDays' | 'aiAssistantEnabled';
 
 type FormState = Record<NumericKey, string> &
   Record<TimeKey, string> &
@@ -82,6 +85,9 @@ function toForm(settings: OrganizationSettings): FormState {
     portoNextMonthLookaheadDays: String(settings.portoNextMonthLookaheadDays),
     portoFullDayOffPercent: formatNumber(settings.portoFullDayOffPercent),
     financeDueSoonDays: String(settings.financeDueSoonDays),
+    aiMonthlyBudget: formatNumber(settings.aiMonthlyBudget),
+    aiInputCostPerMillion: formatNumber(settings.aiInputCostPerMillion),
+    aiOutputCostPerMillion: formatNumber(settings.aiOutputCostPerMillion),
     defaultShiftStart: settings.defaultShiftStart,
     defaultShiftEnd: settings.defaultShiftEnd,
     portoHoursImportTime: settings.portoHoursImportTime,
@@ -90,6 +96,7 @@ function toForm(settings: OrganizationSettings): FormState {
     portoUseLaudoConclusion: settings.portoUseLaudoConclusion,
     portoWarningEnabled: settings.portoWarningEnabled,
     portoRecordCancelledDays: settings.portoRecordCancelledDays,
+    aiAssistantEnabled: settings.aiAssistantEnabled,
     portoWarningText: settings.portoWarningText,
     portoAlertPhone: settings.portoAlertPhone,
     tiers: settings.serviceAwardTiers.map((tier) => ({ id: nextTierId++, minServices: String(tier.minServices), amount: formatNumber(tier.amount) })),
@@ -126,6 +133,10 @@ function toPayload(form: FormState) {
     portoRecordCancelledDays: form.portoRecordCancelledDays,
     financeDueSoonDays: number('financeDueSoonDays'),
     financeCategories: form.financeCategories,
+    aiAssistantEnabled: form.aiAssistantEnabled,
+    aiMonthlyBudget: number('aiMonthlyBudget'),
+    aiInputCostPerMillion: number('aiInputCostPerMillion'),
+    aiOutputCostPerMillion: number('aiOutputCostPerMillion'),
   };
 }
 
@@ -468,6 +479,22 @@ export default function ConfiguracoesPage() {
                 </Button>
               </div>
             </FieldShell>
+          </div>
+        </DataPanel>
+
+        <DataPanel title="Assistente de IA" description="O assistente (DeepSeek) responde perguntas sobre a operação consultando os dados do sistema, sem alterar nada.">
+          <div className="flex flex-col gap-4">
+            <ToggleRow
+              title="Assistente de IA ligado"
+              description="Desligado, o menu e o chat continuam aparecendo, mas o assistente não responde."
+              checked={form.aiAssistantEnabled}
+              onChange={(value) => update('aiAssistantEnabled', value)}
+            />
+            <div className="grid gap-4 sm:grid-cols-3">
+              <NumberField id="ai-budget" label="Limite de gasto por mês" unit="R$" unitPosition="start" hint="Ao chegar nele, o assistente para de responder até o mês seguinte. 0 = sem limite." value={form.aiMonthlyBudget} onChange={(value) => update('aiMonthlyBudget', value)} />
+              <NumberField id="ai-input-cost" label="Preço da entrada" unit="R$ / milhão de tokens" hint="O que a DeepSeek cobra pelo texto enviado (pergunta + dados consultados)." value={form.aiInputCostPerMillion} onChange={(value) => update('aiInputCostPerMillion', value)} />
+              <NumberField id="ai-output-cost" label="Preço da saída" unit="R$ / milhão de tokens" hint="O que a DeepSeek cobra pela resposta. Confira os preços atuais em platform.deepseek.com." value={form.aiOutputCostPerMillion} onChange={(value) => update('aiOutputCostPerMillion', value)} />
+            </div>
           </div>
         </DataPanel>
 

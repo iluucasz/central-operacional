@@ -9,6 +9,7 @@ import { resetTechnicianVisibilityCache, useTechnicianVisibility } from '@/hooks
 import { resetOrganizationSettingsCache } from '@/hooks/use-organization-settings';
 import { TechnicianVisibilityDialog } from '@/components/technician-visibility-dialog';
 import { MaintenanceBanner } from '@/components/maintenance-banner';
+import { AssistantWidget } from '@/components/assistant/widget';
 import {
   BookOpen,
   ChartNoAxesCombined,
@@ -25,6 +26,7 @@ import {
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   TrendingUp,
   Users,
   WalletCards,
@@ -64,6 +66,7 @@ const adminLinks: NavItem[] = [
   { href: '/admin/faturamento', label: 'Faturamento', icon: TrendingUp },
   { href: '/admin/financeiro', label: 'Controle de Despesas', icon: Landmark },
   { href: '/admin/library', label: 'Biblioteca', icon: BookOpen },
+  { href: '/admin/assistente', label: 'Assistente IA', icon: Sparkles },
   { href: '/admin/whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { href: '/admin/config-porto', label: 'Config. Porto', icon: ShieldCheck },
   { href: '/admin/configuracoes', label: 'Configurações', icon: SlidersHorizontal },
@@ -415,6 +418,7 @@ export function AppShell({ children, role, userName }: AppShellProps) {
           {children}
         </div>
       </main>
+      {role === 'admin' && !previewMode ? <AssistantWidget /> : null}
       </div>
     </>
   );
