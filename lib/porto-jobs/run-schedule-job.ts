@@ -1,6 +1,6 @@
 import { decryptPortoPassword } from '../porto-crypto';
 import { launchAuthenticatedPortoSession } from '../porto-integration/browser';
-import { getEscalaForCurrentMonth } from '../porto-integration/escala';
+import { getEscalaForMonth } from '../porto-integration/escala';
 import { PortoLoginError } from '../porto-integration/login';
 import { listSocorristas } from '../porto-integration/socorristas';
 import { resolveTechnicianByQra } from '../porto-integration/technician-match';
@@ -56,10 +56,14 @@ function getTodayKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
-function getMonthDateRange() {
+/** How many days before the end of the month the next month's escala starts being imported. */
+const NEXT_MONTH_LOOKAHEAD_DAYS = 7;
+
+function getMonthDateRange(monthOffset: number) {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  const target = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+  const year = target.getFullYear();
+  const month = target.getMonth() + 1;
   const lastDay = new Date(year, month, 0).getDate();
   const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -104,10 +108,18 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
       // mid-month never reached the schedule — which the WhatsApp shift reminders read. Past days
       // are left alone (they hold what actually happened), as are completed and manual rows.
       const socorristas = await listSocorristas(page);
-      const { year, month, endDate } = getMonthDateRange();
-      const startDate = getTodayKey();
-      const rows: ScheduleSeedRow[] = [];
-      const resolvedTechnicianIds: string[] = [];
+      const todayKey = getTodayKey();
+      const current = getMonthDateRange(0);
+      // In the month's last days the next month is read too, so the shift reminder for the 1st
+      // (sent the evening before) has an escala to read. Imported only for technicians whose next
+      // month is already published on Porto (validated live 06/10/2026: November was).
+      const months = [{ offset: 0, ...current, startDate: todayKey }];
+      if (Number(current.endDate.slice(8, 10)) - Number(todayKey.slice(8, 10)) < NEXT_MONTH_LOOKAHEAD_DAYS) {
+        const next = getMonthDateRange(1);
+        months.push({ offset: 1, ...next, startDate: `${next.year}-${String(next.month).padStart(2, '0')}-01` });
+      }
+      const rowsByMonth = months.map(() => [] as ScheduleSeedRow[]);
+      const technicianIdsByMonth = months.map(() => [] as string[]);
 
       for (const socorrista of socorristas) {
         techniciansProcessed++;
@@ -117,55 +129,64 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
           continue;
         }
 
-        let escalaDays;
-        try {
-          escalaDays = await getEscalaForCurrentMonth(page, socorrista.qra);
-        } catch (escalaError) {
-          // A navigation hiccup for one technician shouldn't abort the whole month's import —
-          // log it and move on; the shortfall is visible via technicians_processed vs. days count.
-          details.push({ qra: socorrista.qra, technician_id: technician.id, technician_name: technician.name, action: 'escala_fetch_failed', error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
-          continue;
-        }
-
-        resolvedTechnicianIds.push(technician.id);
-
-        let daysWithoutEscalaData = 0;
-        for (const day of escalaDays) {
-          // Some accounts have no escala time at all for any day (confirmed live: the account
-          // owner's own QRA, plus at least one technician on extended leave — Porto just renders
-          // an empty cell, not an indisponibilidade-marked one). Writing "scheduled 00:00-00:00"
-          // for those is misleading (looks like a real, zero-length shift) — skip the row entirely
-          // instead when there's truly nothing to report.
-          if (!day.startTime && !day.endTime && !day.unavailable) {
-            daysWithoutEscalaData++;
+        for (const [index, { offset, year, month, startDate }] of months.entries()) {
+          let escalaDays;
+          try {
+            escalaDays = await getEscalaForMonth(page, socorrista.qra, { monthOffset: offset });
+          } catch (escalaError) {
+            // A navigation hiccup for one technician shouldn't abort the whole import — log it and
+            // move on; that technician's rows for the month are left untouched.
+            details.push({ qra: socorrista.qra, technician_id: technician.id, technician_name: technician.name, action: 'escala_fetch_failed', month: `${year}-${month}`, error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
             continue;
           }
 
-          const dateKey = `${year}-${String(month).padStart(2, '0')}-${String(day.day).padStart(2, '0')}`;
-          if (dateKey < startDate) continue;
-          const reason = day.unavailable ? day.reason || 'indisponibilidade' : 'escala normal';
+          const published = escalaDays.some((day) => day.startTime || day.endTime || day.unavailable);
+          if (offset > 0 && !published) {
+            details.push({ qra: socorrista.qra, technician_id: technician.id, technician_name: technician.name, action: 'next_month_not_published', month: `${year}-${month}` });
+            continue;
+          }
+          technicianIdsByMonth[index].push(technician.id);
 
-          // schedule.start_time/end_time expect a valid time literal even on non-working days —
-          // mirrors the fallback convention already used by buildPersistedSchedule in schedule-planner.ts.
-          rows.push({
+          let daysWithoutEscalaData = 0;
+          for (const day of escalaDays) {
+            // Some accounts have no escala time at all for any day (confirmed live: the account
+            // owner's own QRA, plus at least one technician on extended leave — Porto just renders
+            // an empty cell, not an indisponibilidade-marked one). Writing "scheduled 00:00-00:00"
+            // for those is misleading (looks like a real, zero-length shift) — skip the row entirely
+            // instead when there's truly nothing to report.
+            if (!day.startTime && !day.endTime && !day.unavailable) {
+              daysWithoutEscalaData++;
+              continue;
+            }
+
+            const dateKey = `${year}-${String(month).padStart(2, '0')}-${String(day.day).padStart(2, '0')}`;
+            if (dateKey < startDate) continue;
+            const reason = day.unavailable ? day.reason || 'indisponibilidade' : 'escala normal';
+
+            // schedule.start_time/end_time expect a valid time literal even on non-working days —
+            // mirrors the fallback convention already used by buildPersistedSchedule in schedule-planner.ts.
+            rowsByMonth[index].push({
+              technician_id: technician.id,
+              date: dateKey,
+              start_time: day.startTime ?? '00:00',
+              end_time: day.endTime ?? '00:00',
+              status: day.unavailable ? 'cancelled' : 'scheduled',
+              notes: `${PORTO_SCHEDULE_NOTE_PREFIX} ${reason}`,
+            });
+          }
+
+          details.push({
+            qra: socorrista.qra,
             technician_id: technician.id,
-            date: dateKey,
-            start_time: day.startTime ?? '00:00',
-            end_time: day.endTime ?? '00:00',
-            status: day.unavailable ? 'cancelled' : 'scheduled',
-            notes: `${PORTO_SCHEDULE_NOTE_PREFIX} ${reason}`,
+            technician_name: technician.name,
+            action: 'imported',
+            month: `${year}-${month}`,
+            days: escalaDays.length - daysWithoutEscalaData,
+            daysWithoutEscalaData: daysWithoutEscalaData || undefined,
           });
         }
-
-        details.push({
-          qra: socorrista.qra,
-          technician_id: technician.id,
-          technician_name: technician.name,
-          action: 'imported',
-          days: escalaDays.length - daysWithoutEscalaData,
-          daysWithoutEscalaData: daysWithoutEscalaData || undefined,
-        });
       }
+      const rows = rowsByMonth.flat();
 
       const dryRun = options.forceWrite ? false : options.manual || config.dry_run_only !== false;
 
@@ -182,17 +203,18 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: rowsWritten, summary: summarizeDetails(details), details };
       }
 
-      if (resolvedTechnicianIds.length && rows.length) {
+      for (const [index, { startDate, endDate }] of months.entries()) {
+        if (!technicianIdsByMonth[index].length || !rowsByMonth[index].length) continue;
         const { inserted } = await replacePortoScheduleRows({
-          technicianIds: resolvedTechnicianIds,
+          technicianIds: technicianIdsByMonth[index],
           startDate,
           endDate,
-          rows,
+          rows: rowsByMonth[index],
         });
-        rowsWritten = inserted.length;
+        rowsWritten += inserted.length;
       }
 
-      const overallStatus = resolvedTechnicianIds.length ? 'success' : 'partial';
+      const overallStatus = technicianIdsByMonth[0].length ? 'success' : 'partial';
       await recordScheduleImportResult({ monthKey: currentMonthKey, status: overallStatus });
       await finishSyncLog(logId, {
         status: overallStatus,

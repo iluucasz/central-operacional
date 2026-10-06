@@ -2,7 +2,7 @@ import { neon } from '@neondatabase/serverless';
 import { after, NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { notifyJustified } from '@/lib/whatsapp/notifications';
-import { applyWorkHourEntries, getActiveTechnicianIds, getIsoWeekNumber, type AttendanceStatus, type WorkHourEntry } from '@/lib/work-hours-service';
+import { applyWorkHourEntries, attendanceHasHours, getActiveTechnicianIds, getIsoWeekNumber, type AttendanceStatus, type WorkHourEntry } from '@/lib/work-hours-service';
 
 const sql = neon(process.env.DATABASE_URL!);
 
@@ -27,7 +27,7 @@ function parseHours(value: unknown) {
 }
 
 function isAttendanceStatus(value: unknown): value is AttendanceStatus {
-  return value === 'worked' || value === 'day_off' || value === 'missed' || value === 'justified';
+  return value === 'worked' || value === 'day_off' || value === 'missed' || value === 'justified' || value === 'cancelled_service';
 }
 
 export async function GET(request: NextRequest) {
@@ -106,14 +106,15 @@ export async function POST(request: NextRequest) {
           const endTime = normalizeTime(raw.end_time);
           const plannedStartTime = normalizeTime(raw.planned_start_time) || startTime;
           const plannedEndTime = normalizeTime(raw.planned_end_time) || endTime;
-          const parsedHoursWorked = attendanceStatus === 'worked' ? parseHours(raw.hours_worked) : 0;
+          const hasHours = attendanceHasHours(attendanceStatus);
+          const parsedHoursWorked = hasHours ? parseHours(raw.hours_worked) : 0;
 
           if (
             !technicianId ||
             !isValidDateKey(date) ||
             !isValidTime(plannedStartTime) ||
             !isValidTime(plannedEndTime) ||
-            (attendanceStatus === 'worked' && (!isValidTime(startTime) || !isValidTime(endTime) || parsedHoursWorked === null))
+            (hasHours && (!isValidTime(startTime) || !isValidTime(endTime) || parsedHoursWorked === null))
           ) {
             return null;
           }
@@ -121,8 +122,8 @@ export async function POST(request: NextRequest) {
           return {
             technician_id: technicianId,
             date,
-            start_time: attendanceStatus === 'worked' ? startTime : plannedStartTime,
-            end_time: attendanceStatus === 'worked' ? endTime : plannedEndTime,
+            start_time: hasHours ? startTime : plannedStartTime,
+            end_time: hasHours ? endTime : plannedEndTime,
             planned_start_time: plannedStartTime,
             planned_end_time: plannedEndTime,
             hours_worked: parsedHoursWorked ?? 0,

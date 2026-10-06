@@ -172,12 +172,14 @@ export function aggregateOperations(
       ?.toLowerCase();
     const missed = status?.includes('falta') ?? false;
     const justified = status?.includes('justificado') ?? false;
+    // Hours count, but the day's planned hours aren't charged — the cancellation isn't the technician's doing.
+    const cancelledService = /servi[cç]o cancelado/.test(status ?? '');
     const off = status?.includes('folga') || (schedule?.status === 'cancelled' && !status);
     const worked = day.worked > 0 || status?.includes('trabalhou') || schedule?.status === 'completed';
     const pending = !missed && !justified && !off && !worked && schedule?.status === 'scheduled' && day.date < today;
     const plannedMatch = schedule?.notes?.match(/(?:^|;\s*)previsto=(\d{1,2}:\d{2})-(\d{1,2}:\d{2})/i);
     const planned =
-      schedule && !off && !justified && (missed || worked)
+      schedule && !off && !justified && !cancelledService && (missed || worked)
         ? plannedHours(plannedMatch?.[1] ?? schedule.start, plannedMatch?.[2] ?? schedule.end)
         : 0;
     // A missing time record or an unknown shift is not proof of an hours debit/credit.

@@ -96,7 +96,12 @@ interface ScheduleBuilderForm {
   overrides: OverrideDraft[];
 }
 
-type AttendanceStatus = 'not_marked' | 'worked' | 'day_off' | 'missed' | 'justified';
+type AttendanceStatus = 'not_marked' | 'worked' | 'day_off' | 'missed' | 'justified' | 'cancelled_service';
+
+/** Statuses with real hours (start/end times). "Serviço cancelado" records hours like "Trabalhou". */
+function attendanceHasHours(status: AttendanceStatus | undefined) {
+  return status === 'worked' || status === 'cancelled_service';
+}
 type AttendanceMode = 'day' | 'month' | 'spreadsheet';
 type HourBankPeriodMode = 'day' | 'week' | 'month' | 'year';
 
@@ -271,7 +276,9 @@ function parseManualAttendanceNote(notes: string | null | undefined) {
   const observationMatch = value.match(/(?:^|;\s*)obs=(.*)$/i);
   let attendance_status: AttendanceStatus | undefined;
 
-  if (normalizedStatus.includes('folga')) {
+  if (normalizedStatus.includes('servico cancelado')) {
+    attendance_status = 'cancelled_service';
+  } else if (normalizedStatus.includes('folga')) {
     attendance_status = 'day_off';
   } else if (normalizedStatus.includes('falta')) {
     attendance_status = 'missed';
@@ -294,6 +301,7 @@ function getAttendanceStatusLabel(status: AttendanceStatus | undefined) {
   if (status === 'day_off') return 'Folgou';
   if (status === 'missed') return 'Faltou';
   if (status === 'justified') return 'Justificou';
+  if (status === 'cancelled_service') return 'Serviço cancelado';
   return 'Sem apontamento';
 }
 
@@ -413,11 +421,14 @@ function getAttendanceBalance(draft: AttendanceDraft) {
   if (!isAttendanceSelected(draft)) return 0;
   if (draft.attendance_status === 'day_off' || draft.attendance_status === 'justified') return 0;
   if (draft.attendance_status === 'missed') return -draft.planned_hours;
+  // The cancellation isn't the technician's doing: the hours count, the planned ones aren't charged.
+  if (draft.attendance_status === 'cancelled_service') return getAttendanceWorkedHours(draft);
 
   return getAttendanceWorkedHours(draft) - draft.planned_hours;
 }
 
 function getAttendanceResultLabel(draft: AttendanceDraft, hoursWorked: number) {
+  if (draft.attendance_status === 'cancelled_service') return `Serviço cancelado: ${formatHours(hoursWorked)}`;
   if (draft.attendance_status === 'day_off') return 'Folga registrada';
   if (draft.attendance_status === 'justified') return 'Justificado';
   if (draft.attendance_status === 'missed') return 'Falta registrada';
@@ -556,7 +567,7 @@ function getScheduleDisplayTone(entry: Schedule | undefined) {
   const manualStatus = parseManualAttendanceNote(entry?.notes).attendance_status;
   if (manualStatus === 'worked') return 'success' as const;
   if (manualStatus === 'missed') return 'danger' as const;
-  if (manualStatus === 'day_off' || manualStatus === 'justified') return 'warning' as const;
+  if (manualStatus === 'day_off' || manualStatus === 'justified' || manualStatus === 'cancelled_service') return 'warning' as const;
   if (!entry) return 'neutral' as const;
 
   return getStatusTone(entry.status);
@@ -587,7 +598,7 @@ function getSchedulePlannedHoursForBank(entry: Schedule | undefined) {
   const manualStatus = parseManualAttendanceNote(entry.notes).attendance_status;
   const { startTime, endTime } = getSchedulePlannedTimes(entry);
 
-  if (manualStatus === 'day_off' || manualStatus === 'justified') return 0;
+  if (manualStatus === 'day_off' || manualStatus === 'justified' || manualStatus === 'cancelled_service') return 0;
   if (manualStatus === 'missed' || manualStatus === 'worked') return getHoursBetween(startTime, endTime);
   if (entry.status === 'completed') return getHoursBetween(startTime, endTime);
 
@@ -597,7 +608,7 @@ function getSchedulePlannedHoursForBank(entry: Schedule | undefined) {
 function getScheduleTimeLabel(entry: Schedule) {
   const manualStatus = parseManualAttendanceNote(entry.notes).attendance_status;
 
-  if (manualStatus === 'worked') {
+  if (attendanceHasHours(manualStatus)) {
     const plannedTimes = getSchedulePlannedTimes(entry);
     return `${formatTimeRange(entry.start_time, entry.end_time)} (prev. ${formatTimeRange(plannedTimes.startTime, plannedTimes.endTime)})`;
   }
@@ -980,6 +991,16 @@ function getGrossHoursBetween(startTime: string, endTime: string) {
   return Number(((endWithRollover - start) / 60).toFixed(2));
 }
 
+/**
+ * A spreadsheet row whose hours are the raw Entrada→Saída span — i.e. without the 1h lunch break
+ * every other path (manual entry, Porto import) nets out. Rows already netted, or shorter than the
+ * break, don't count.
+ */
+function importRowMissingLunchBreak(row: { start_time: string; end_time: string; hours_worked: number }) {
+  const gross = getGrossHoursBetween(row.start_time, row.end_time);
+  return gross > DAILY_BREAK_HOURS && Math.abs(row.hours_worked - gross) < 0.02;
+}
+
 function parseImportedHours(value: unknown, startTime: string, endTime: string) {
   const parsed = parseImportNumber(value);
   if (parsed !== null && parsed > 0 && parsed <= 24) {
@@ -1241,6 +1262,8 @@ export function AdminScheduleBuilderPage() {
   const [attendanceImportErrors, setAttendanceImportErrors] = useState<AttendanceImportError[]>([]);
   const [showAllAttendanceImportErrors, setShowAllAttendanceImportErrors] = useState(false);
   const [isAttendanceImportParsing, setIsAttendanceImportParsing] = useState(false);
+  // How many loaded spreadsheet rows lack the 1h lunch break — opens the "descontar almoço?" prompt.
+  const [attendanceLunchPromptCount, setAttendanceLunchPromptCount] = useState(0);
   const [attendanceError, setAttendanceError] = useState('');
   const [attendanceMessage, setAttendanceMessage] = useState('');
   const [isAttendanceSubmitting, setIsAttendanceSubmitting] = useState(false);
@@ -1515,8 +1538,8 @@ export function AdminScheduleBuilderPage() {
         planned_start_time: plannedStartTime,
         planned_end_time: plannedEndTime,
         planned_hours: plannedHours,
-        actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, plannedStartTime) : attendanceStatus === 'worked' ? normalizeTimeInput(entry?.start_time, plannedStartTime) : plannedStartTime,
-        actual_end_time: workHour ? normalizeTimeInput(workHour.end_time, plannedEndTime) : attendanceStatus === 'worked' ? normalizeTimeInput(entry?.end_time, plannedEndTime) : plannedEndTime,
+        actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, plannedStartTime) : attendanceHasHours(attendanceStatus) ? normalizeTimeInput(entry?.start_time, plannedStartTime) : plannedStartTime,
+        actual_end_time: workHour ? normalizeTimeInput(workHour.end_time, plannedEndTime) : attendanceHasHours(attendanceStatus) ? normalizeTimeInput(entry?.end_time, plannedEndTime) : plannedEndTime,
         notes: manual.observation,
         schedule_status: entry?.status,
       };
@@ -1593,8 +1616,8 @@ export function AdminScheduleBuilderPage() {
         planned_start_time: startTime,
         planned_end_time: endTime,
         planned_hours: plannedHours,
-        actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, startTime) : attendanceStatus === 'worked' ? normalizeTimeInput(entry?.start_time, startTime) : startTime,
-        actual_end_time: workHour ? normalizeTimeInput(workHour.end_time, endTime) : attendanceStatus === 'worked' ? normalizeTimeInput(entry?.end_time, endTime) : endTime,
+        actual_start_time: workHour ? normalizeTimeInput(workHour.start_time, startTime) : attendanceHasHours(attendanceStatus) ? normalizeTimeInput(entry?.start_time, startTime) : startTime,
+        actual_end_time: workHour ? normalizeTimeInput(workHour.end_time, endTime) : attendanceHasHours(attendanceStatus) ? normalizeTimeInput(entry?.end_time, endTime) : endTime,
         notes: manual.observation,
         schedule_status: entry?.status,
       });
@@ -1819,6 +1842,16 @@ export function AdminScheduleBuilderPage() {
     setAttendanceImportRows([]);
     setAttendanceImportErrors([]);
     setShowAllAttendanceImportErrors(false);
+    setAttendanceLunchPromptCount(0);
+  }
+
+  function applyImportLunchBreak() {
+    const count = attendanceImportRows.filter(importRowMissingLunchBreak).length;
+    setAttendanceImportRows((rows) => rows.map((row) => (
+      importRowMissingLunchBreak(row) ? { ...row, hours_worked: Number((row.hours_worked - DAILY_BREAK_HOURS).toFixed(2)) } : row
+    )));
+    setAttendanceLunchPromptCount(0);
+    setAttendanceMessage(`Desconto de 1h de almoço aplicado em ${formatCount(count, 'apontamento', 'apontamentos')} da planilha.`);
   }
 
   function parseAttendanceWorkbook(workbook: XLSX.WorkBook, fileName: string) {
@@ -2020,6 +2053,7 @@ export function AdminScheduleBuilderPage() {
       }
 
       setAttendanceMessage(`${formatCount(parsed.rows.length, 'apontamento valido', 'apontamentos validos')} carregado(s) da planilha.`);
+      setAttendanceLunchPromptCount(parsed.rows.filter(importRowMissingLunchBreak).length);
     } catch (error) {
       setAttendanceError(error instanceof Error ? error.message : 'Nao foi possivel ler a planilha. Use XLSX, XLS ou CSV.');
     } finally {
@@ -2153,8 +2187,8 @@ export function AdminScheduleBuilderPage() {
 
     const entries = selectedDrafts.map((draft) => {
       const hoursWorked = getAttendanceWorkedHours(draft);
-      const startTime = normalizeTimeInput(draft.attendance_status === 'worked' ? draft.actual_start_time : draft.planned_start_time, DEFAULT_START_TIME);
-      const endTime = normalizeTimeInput(draft.attendance_status === 'worked' ? draft.actual_end_time : draft.planned_end_time, DEFAULT_END_TIME);
+      const startTime = normalizeTimeInput(attendanceHasHours(draft.attendance_status) ? draft.actual_start_time : draft.planned_start_time, DEFAULT_START_TIME);
+      const endTime = normalizeTimeInput(attendanceHasHours(draft.attendance_status) ? draft.actual_end_time : draft.planned_end_time, DEFAULT_END_TIME);
       const dateParts = draft.date.split('-').map(Number);
 
       return {
@@ -4622,13 +4656,14 @@ export function AdminScheduleBuilderPage() {
                                   actual_end_time: draft.actual_end_time || draft.planned_end_time || DEFAULT_END_TIME,
                                 });
                               }}
-                              className="min-h-10 w-36 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+                              className="min-h-10 w-44 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
                             >
                               <option value="not_marked">Não lançar</option>
                               <option value="worked">Trabalhou</option>
                               <option value="day_off">Folgou</option>
                               <option value="missed">Faltou</option>
                               <option value="justified">Justificou</option>
+                              <option value="cancelled_service">Serviço cancelado</option>
                             </select>
                           </td>
                           <td className="px-3 py-3 font-medium text-foreground">{draft.technician_name}</td>
@@ -4641,7 +4676,7 @@ export function AdminScheduleBuilderPage() {
                           <td className="px-3 py-3">
                             <input
                               type="time"
-                              disabled={draft.attendance_status !== 'worked'}
+                              disabled={!attendanceHasHours(draft.attendance_status)}
                               value={draft.actual_start_time}
                               onChange={(event) => updateAttendanceDraft(draft.key, { actual_start_time: event.target.value })}
                               className="min-h-10 w-28 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring disabled:opacity-60"
@@ -4650,7 +4685,7 @@ export function AdminScheduleBuilderPage() {
                           <td className="px-3 py-3">
                             <input
                               type="time"
-                              disabled={draft.attendance_status !== 'worked'}
+                              disabled={!attendanceHasHours(draft.attendance_status)}
                               value={draft.actual_end_time}
                               onChange={(event) => updateAttendanceDraft(draft.key, { actual_end_time: event.target.value })}
                               className="min-h-10 w-28 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring disabled:opacity-60"
@@ -4719,13 +4754,14 @@ export function AdminScheduleBuilderPage() {
                                     actual_end_time: draft.actual_end_time || draft.planned_end_time || DEFAULT_END_TIME,
                                   });
                                 }}
-                                className="min-h-10 w-36 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
+                                className="min-h-10 w-44 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
                               >
                                 <option value="not_marked">Não lançar</option>
                                 <option value="worked">Trabalhou</option>
                                 <option value="day_off">Folgou</option>
                                 <option value="missed">Faltou</option>
                                 <option value="justified">Justificou</option>
+                              <option value="cancelled_service">Serviço cancelado</option>
                               </select>
                             </td>
                             <td className="px-3 py-3 font-medium text-foreground">{draft.technician_name}</td>
@@ -4738,7 +4774,7 @@ export function AdminScheduleBuilderPage() {
                             <td className="px-3 py-3">
                               <input
                                 type="time"
-                                disabled={draft.attendance_status !== 'worked'}
+                                disabled={!attendanceHasHours(draft.attendance_status)}
                                 value={draft.actual_start_time}
                                 onChange={(event) => updateMonthlyAttendanceDraft(draft.key, { actual_start_time: event.target.value })}
                                 className="min-h-10 w-28 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring disabled:opacity-60"
@@ -4747,7 +4783,7 @@ export function AdminScheduleBuilderPage() {
                             <td className="px-3 py-3">
                               <input
                                 type="time"
-                                disabled={draft.attendance_status !== 'worked'}
+                                disabled={!attendanceHasHours(draft.attendance_status)}
                                 value={draft.actual_end_time}
                                 onChange={(event) => updateMonthlyAttendanceDraft(draft.key, { actual_end_time: event.target.value })}
                                 className="min-h-10 w-28 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring disabled:opacity-60"
@@ -4900,6 +4936,28 @@ export function AdminScheduleBuilderPage() {
               </div>
             </DialogFooter>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={attendanceLunchPromptCount > 0} onOpenChange={(open) => {
+        if (!open) setAttendanceLunchPromptCount(0);
+      }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Desconto de almoço</DialogTitle>
+            <DialogDescription>
+              {formatCount(attendanceLunchPromptCount, 'apontamento da planilha está', 'apontamentos da planilha estão')} com as horas sem o desconto de 1h de almoço (saída menos entrada).
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm font-medium text-foreground">Deseja adicionar o desconto de 1h de almoço para todos os técnicos?</p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setAttendanceLunchPromptCount(0)}>
+              Não, manter como está
+            </Button>
+            <Button type="button" onClick={applyImportLunchBreak}>
+              Sim, descontar 1h
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

@@ -41,11 +41,11 @@ function overlapMinutes(entryStart: number, entryEnd: number, shiftStart: number
 }
 
 /**
- * Opens a fresh navigation to the technician's escala page (same as getEscalaForCurrentMonth's own
+ * Opens a fresh navigation to the technician's escala page (same as getEscalaForMonth's own
  * navigation) and returns the resulting detail frame — kept separate so callers can request a
  * brand-new, un-mutated copy of the page on demand.
  */
-async function openTechnicianEscalaFrame(page: Page, qra: string): Promise<Frame | null> {
+async function openTechnicianEscalaFrame(page: Page, qra: string, monthOffset = 0): Promise<Frame | null> {
   const listFrame = await openPortalFrame(page, SOCORRISTAS_MENU_ID, SOCORRISTAS_URL);
   const link = listFrame.locator(`a[href*="numeroQRA=${qra}"]`).first();
 
@@ -58,7 +58,18 @@ async function openTechnicianEscalaFrame(page: Page, qra: string): Promise<Frame
     link.click(),
   ]);
 
-  return page.frames().find((f) => f.url().includes('ConDetSocor')) ?? listFrame;
+  const detailFrame = page.frames().find((f) => f.url().includes('ConDetSocor')) ?? listFrame;
+
+  // The calendar is a RichFaces component whose own nextMonth() swaps the grid to the following
+  // month — validated live (06/10/2026): October → November, with its shift times and
+  // indisponibilidade icons, no extra navigation needed.
+  for (let step = 0; step < monthOffset; step++) {
+    await detailFrame.evaluate(() => (document.getElementById('organizer') as unknown as { component: { nextMonth(): void } }).component.nextMonth());
+    await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => null);
+    await page.waitForTimeout(1000);
+  }
+
+  return detailFrame;
 }
 
 /**
@@ -78,8 +89,8 @@ async function openTechnicianEscalaFrame(page: Page, qra: string): Promise<Frame
  * a fresh reload is the only reliable way back) — costs one extra navigation per exception day,
  * not per day of the month, so it stays bounded (a technician typically has under 10 a month).
  */
-async function getIndisponibilidadeEntriesForDay(page: Page, qra: string, cellIndex: number, dateBr: string): Promise<IndisponibilidadeEntry[]> {
-  const detailFrame = await openTechnicianEscalaFrame(page, qra);
+async function getIndisponibilidadeEntriesForDay(page: Page, qra: string, cellIndex: number, dateBr: string, monthOffset: number): Promise<IndisponibilidadeEntry[]> {
+  const detailFrame = await openTechnicianEscalaFrame(page, qra, monthOffset);
   if (!detailFrame) return [];
 
   const cell = detailFrame.locator('.organizerDayCell').nth(cellIndex);
@@ -135,7 +146,7 @@ async function getIndisponibilidadeEntriesForDay(page: Page, qra: string, cellIn
  * socorristas list through its portal wrapper and clicks the technician's own link, exactly like
  * a real user would, rather than constructing the ConDetSocor.xhtml URL directly.
  */
-export async function getEscalaForCurrentMonth(
+export async function getEscalaForMonth(
   page: Page,
   qra: string,
   options: {
@@ -145,17 +156,32 @@ export async function getEscalaForCurrentMonth(
      * pass false and get the month grid alone — `unavailable` then just mirrors the icon.
      */
     resolveUnavailability?: boolean;
+    /** 0 = current month (default), 1 = next month — the calendar is advanced with its own nextMonth(). */
+    monthOffset?: number;
   } = {},
 ): Promise<PortoEscalaDay[]> {
-  const detailFrame = await openTechnicianEscalaFrame(page, qra);
+  const monthOffset = options.monthOffset ?? 0;
+  const detailFrame = await openTechnicianEscalaFrame(page, qra, monthOffset);
   if (!detailFrame) {
     return [];
   }
 
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  const target = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+  const year = target.getFullYear();
+  const month = target.getMonth() + 1;
   const daysInMonth = new Date(year, month, 0).getDate();
+
+  // Never read one month's grid as another's: the calendar must be showing the requested month.
+  const shownMonth = await detailFrame
+    .evaluate(() => {
+      const component = (document.getElementById('organizer') as unknown as { component?: { getCurrentYear(): number; getCurrentMonth(): number } } | null)?.component;
+      return component ? `${component.getCurrentYear()}-${component.getCurrentMonth() + 1}` : null;
+    })
+    .catch(() => null);
+  if (shownMonth && shownMonth !== `${year}-${month}`) {
+    throw new Error(`O calendário do Porto mostrou ${shownMonth} em vez de ${year}-${month}.`);
+  }
 
   const parsed = await detailFrame.evaluate((daysInMonth) => {
     const cells = Array.from(document.querySelectorAll('.organizerDayCell'));
@@ -215,7 +241,7 @@ export async function getEscalaForCurrentMonth(
 
     const dateBr = `${String(day.day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
     try {
-      const indispEntries = await getIndisponibilidadeEntriesForDay(page, qra, cellIndex, dateBr);
+      const indispEntries = await getIndisponibilidadeEntriesForDay(page, qra, cellIndex, dateBr, monthOffset);
       const shiftStart = day.startTime ? timeToMinutes(day.startTime) : null;
       const shiftEnd = day.endTime ? timeToMinutes(day.endTime) : null;
 

@@ -1,7 +1,17 @@
 import { sql } from './db';
 import { ensurePortoConfigSchema } from './porto-config-schema';
 
-export type AttendanceStatus = 'worked' | 'day_off' | 'missed' | 'justified';
+/**
+ * `cancelled_service`: a day whose services were all cancelled (set by the Porto import, or by
+ * hand). Its hours are recorded like `worked`, but the day's planned hours aren't charged — the
+ * cancellation isn't the technician's doing.
+ */
+export type AttendanceStatus = 'worked' | 'day_off' | 'missed' | 'justified' | 'cancelled_service';
+
+/** Statuses that record real hours (a work_hours row), as opposed to an absence. */
+export function attendanceHasHours(status: AttendanceStatus) {
+  return status === 'worked' || status === 'cancelled_service';
+}
 export type WorkHourSource = 'manual' | 'porto';
 
 export type WorkHourEntry = {
@@ -28,7 +38,7 @@ export function getIsoWeekNumber(dateKey: string) {
 }
 
 function getScheduleStatusForAttendance(status: AttendanceStatus) {
-  return status === 'worked' ? 'completed' : 'cancelled';
+  return attendanceHasHours(status) ? 'completed' : 'cancelled';
 }
 
 /**
@@ -52,6 +62,7 @@ function getAttendanceLabel(status: AttendanceStatus) {
   if (status === 'day_off') return 'folga';
   if (status === 'missed') return 'falta';
   if (status === 'justified') return 'justificado';
+  if (status === 'cancelled_service') return 'serviço cancelado';
   return 'trabalhou';
 }
 
@@ -200,7 +211,7 @@ export async function applyWorkHourEntries(
         AND date = ${entry.date}
     `;
 
-    if (entry.attendance_status === 'worked') {
+    if (attendanceHasHours(entry.attendance_status)) {
       const inserted = await sql`
         INSERT INTO work_hours (
           technician_id, date, start_time, end_time, hours_worked,

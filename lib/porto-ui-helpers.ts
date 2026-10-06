@@ -60,6 +60,10 @@ export function jobDetailActionLabel(action: string | undefined) {
       return 'Falha ao abrir detalhe de um serviço (pulado)';
     case 'start_time_fallback_escala':
       return 'Sem "Hora Prevista" válida — usou horário da escala como aproximação';
+    case 'start_from_timeline':
+      return 'Hora Prevista depois do fim — início pelo horário "Em Execução" do serviço';
+    case 'next_month_not_published':
+      return 'Escala do mês seguinte ainda não publicada no Porto (não importada)';
     case 'warning_kept':
       return 'Dia com advertência — mantido, não é recalculado';
     case 'manual_entry_kept':

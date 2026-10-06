@@ -46,6 +46,13 @@ export type PortoServiceEndTime = {
   endSource: 'laudo_assinatura' | 'laudo_conclusao' | 'concluido' | null;
   laudo: PortoLaudoState;
   laudoError?: string;
+  /**
+   * "HH:mm" the work on this service began per its status timeline ("Em Execução", else "Em
+   * Deslocamento"), on the service day — used as the day's start when "Hora Prev." can't be (it's
+   * a forecast and can even fall after the service's end). Null when the timeline has neither
+   * (cancelled services have an empty timeline).
+   */
+  timelineStart: string | null;
 };
 
 export type PortoDateRange = { startDateKey: string; endDateKey: string };
@@ -240,6 +247,8 @@ async function readLaudoLink(frame: Frame): Promise<LaudoLink> {
 // one row, their timestamps in the next, each cell anchored by an HTML comment — validated live:
 // `<!-- BT Concluir --><td ...><span ...><span class="pv-campo-padrao">05/10/2026 18:21</span>`.
 const CONCLUIR_CELL_PATTERN = /<!--\s*BT Concluir\s*-->\s*<td[^>]*>([\s\S]*?)<\/td>/i;
+const EXECUCAO_CELL_PATTERN = /<!--\s*BT Em Execu[çc][ãa]o\s*-->\s*<td[^>]*>([\s\S]*?)<\/td>/i;
+const DESLOCAMENTO_CELL_PATTERN = /<!--\s*BT Em Deslocamento\s*-->\s*<td[^>]*>([\s\S]*?)<\/td>/i;
 const TIMESTAMP_PATTERN = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/;
 
 /**
@@ -328,7 +337,7 @@ export async function getServicoEndTime(
   const link = frame.locator(`a[onclick*="changeUrlAW(this, ${params.anoServico}, ${params.numeroServico}"]`).first();
 
   if (!(await link.count())) {
-    return { situacaoAtual: '', endTime: null, endDate: null, endSource: null, laudo: 'not_found', laudoError: 'Serviço não encontrado na busca do dia.' };
+    return { situacaoAtual: '', endTime: null, endDate: null, endSource: null, laudo: 'not_found', laudoError: 'Serviço não encontrado na busca do dia.', timelineStart: null };
   }
 
   await Promise.all([
@@ -341,6 +350,10 @@ export async function getServicoEndTime(
   const html = await frame.content();
   const situacaoAtual = html.match(/Situa[çc][ãa]o Atual[\s\S]{0,200}?pv-campo-padrao">([^<]*)</i)?.[1]?.trim() ?? '';
   const concluido = readConcluidoTimestamp(html, acceptedBrDates);
+  const timelineStart =
+    [EXECUCAO_CELL_PATTERN, DESLOCAMENTO_CELL_PATTERN]
+      .map((pattern) => (html.match(pattern)?.[1] ?? '').match(TIMESTAMP_PATTERN))
+      .find((match) => match && match[1] === acceptedBrDates[0])?.[2] ?? null;
   const fromConcluido = (laudo: PortoLaudoState, laudoError?: string): PortoServiceEndTime => ({
     situacaoAtual,
     endTime: concluido?.time ?? null,
@@ -348,6 +361,7 @@ export async function getServicoEndTime(
     endSource: concluido ? 'concluido' : null,
     laudo,
     laudoError,
+    timelineStart,
   });
 
   const laudoLink = await readLaudoLink(frame);
@@ -360,7 +374,7 @@ export async function getServicoEndTime(
     if (!laudo) {
       return fromConcluido('failed', 'Laudo aberto, mas sem "Data da assinatura" do dia do serviço.');
     }
-    return { situacaoAtual, endTime: laudo.time, endDate: laudo.date, endSource: laudo.source, laudo: 'available' };
+    return { situacaoAtual, endTime: laudo.time, endDate: laudo.date, endSource: laudo.source, laudo: 'available', timelineStart };
   } catch (error) {
     return fromConcluido('failed', error instanceof Error ? error.message.slice(0, 300) : String(error));
   }

@@ -353,3 +353,26 @@ refazer a busca do dia.
   um horário anterior às 23:00 (em produção estava 17:30) marcava o dia como enviado sem horas, e o
   envio após a importação era bloqueado — a mensagem nunca saía. O envio após a importação usa o dia
   da execução, mesmo que ela termine depois da meia-noite, e só acontece se a importação deu certo.
+
+## Ajustes de 2026-10-06 (tarde)
+
+- **Início pela linha do tempo:** quando a Hora Prev. está vazia ou cai depois do fim do dia (ex.: um
+  único serviço previsto para 17:00 e assinado às 14:00), o início vem do horário "Em Execução" (ou
+  "Em Deslocamento") da linha do tempo dos serviços já abertos — `timelineStart` em
+  `getServicoEndTime`. Validado ao vivo: 6054881/26 → 16:23.
+- **Dia só com serviço cancelado → situação "Serviço cancelado"** (`attendance_status =
+  'cancelled_service'`, nota `Apontamento manual: serviço cancelado`). Serviço cancelado tem a linha do
+  tempo vazia (validado ao vivo em 4 serviços); as horas vão da Hora Prev. até a assinatura/conclusão
+  do laudo quando há laudo, senão o dia entra com 0h e a observação pedindo ajuste manual. As horas
+  contam, mas as horas previstas do dia **não** são cobradas no banco de horas (tela e dashboard
+  gerencial). A situação também aparece no menu "Situação" do apontamento.
+- **Escala do mês seguinte:** nos últimos 7 dias do mês, a execução das 03:00 também lê o mês
+  seguinte (o calendário é um componente RichFaces; `component.nextMonth()` troca para o mês seguinte
+  — validado ao vivo: novembro já estava publicado em 06/10). Só é importado para técnicos com escala
+  publicada; senão registra `next_month_not_published` e não grava nada. Assim o lembrete de turno do
+  dia 1 sai na noite anterior; a deduplicação por técnico/dia garante um envio só.
+- **Planilha de horas:** ao carregar, linhas cujas horas são o intervalo bruto (saída − entrada, sem
+  o almoço) disparam o modal "Deseja adicionar o desconto de 1h de almoço para todos os técnicos?". Sim
+  desconta 1h dessas linhas; Não mantém como está.
+- **"Data de separação do laudo":** esclarecido com a cliente — ela pedia usar o laudo em vez do
+  Concluído, que é o que já é feito.
