@@ -6,7 +6,16 @@ import { listSocorristas } from '../porto-integration/socorristas';
 import { getServicoEndTime, searchServicosByDateRange, type PortoServiceEndTime, type PortoServiceRow } from '../porto-integration/servicos';
 import { resolveTechnicianByQra } from '../porto-integration/technician-match';
 import { finishSyncLog, getPortoConfig, recordHoursImportResult, startSyncLog } from '../porto-sync-log';
-import { applyWorkHourEntries, getExistingPortoImportedDates, getIsoWeekNumber, getManualWorkHourDates, type WorkHourEntry } from '../work-hours-service';
+import { sql } from '../db';
+import {
+  applyWorkHourEntries,
+  getExistingPortoImportedDates,
+  getIsoWeekNumber,
+  getManualWorkHourDates,
+  getPortoWarningDates,
+  getStoredPlannedTimes,
+  type WorkHourEntry,
+} from '../work-hours-service';
 import type { Technician } from '../types';
 
 const MAX_PLAUSIBLE_SHIFT_HOURS = 16;
@@ -123,14 +132,16 @@ function buildDateChunks(startKey: string, endKey: string): { startDateKey: stri
 }
 
 /**
- * Handles shifts that cross midnight (e.g. 22:00 -> 02:00) by wrapping the end time forward a day,
- * and nets out DAILY_BREAK_HOURS once the raw span exceeds it (see the constant's comment above).
+ * Uses the end's actual date rather than guessing: a shift crossing midnight (end on the next day)
+ * adds 24h, while an end earlier than the start on the same day stays negative — and so invalid.
+ * Before, any end past the start wrapped silently, so a service closed the next morning (e.g. start
+ * 08:00, "Concluído" 08:30 the next day) was recorded as 0.5h instead of being rejected. Nets out
+ * DAILY_BREAK_HOURS once the raw span exceeds it (see the constant's comment above).
  */
-function diffHours(startTime: string, endTime: string) {
+function diffHours(startTime: string, endTime: string, endsNextDay: boolean) {
   const [sh, sm] = startTime.split(':').map(Number);
   const [eh, em] = endTime.split(':').map(Number);
-  let minutes = eh * 60 + em - (sh * 60 + sm);
-  if (minutes < 0) minutes += 24 * 60;
+  const minutes = eh * 60 + em - (sh * 60 + sm) + (endsNextDay ? 24 * 60 : 0);
   const grossHours = minutes / 60;
   const netHours = grossHours > DAILY_BREAK_HOURS ? grossHours - DAILY_BREAK_HOURS : grossHours;
   return Number(netHours.toFixed(2));
@@ -190,8 +201,12 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
     const { browser, page } = await launchAuthenticatedPortoSession({ cpf: config.cpf as string, password });
 
     try {
-      const monthStartKey = options.dateRange?.startDateKey ?? getMonthStartKey();
       const todayKey = options.dateRange?.endDateKey ?? getTodayKey();
+      // Unattended runs sweep the month so far plus yesterday — on the 1st that's the previous
+      // month's last day, which otherwise never got the reprocess every other day gets below.
+      const monthStartKey = getMonthStartKey();
+      const yesterdayKey = addDaysToKey(todayKey, -1);
+      const rangeStartKey = options.dateRange?.startDateKey ?? (yesterdayKey < monthStartKey ? yesterdayKey : monthStartKey);
 
       const socorristas = await listSocorristas(page);
 
@@ -207,11 +222,29 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         resolved.push({ qra: socorrista.qra, technician });
       }
 
+      // The list's "load more on scroll" endpoint answers 404 (checked live 2026-10-06), so the first
+      // page should be the whole roster — but if an active technician ever goes missing from it, say
+      // so instead of silently importing nothing for them.
+      const listedQras = new Set(socorristas.map((socorrista) => socorrista.qra));
+      const activeWithQra = await sql`SELECT id, name, qra FROM technicians WHERE status = 'active' AND COALESCE(qra, '') <> ''`;
+      for (const technician of activeWithQra) {
+        if (!listedQras.has(String(technician.qra))) {
+          details.push({ qra: technician.qra, technician_id: technician.id, technician_name: technician.name, action: 'technician_not_in_porto_list' });
+        }
+      }
+
       const technicianIds = resolved.map((r) => r.technician.id);
-      const existingDates = await getExistingPortoImportedDates(technicianIds, monthStartKey, todayKey);
+      const existingDates = await getExistingPortoImportedDates(technicianIds, rangeStartKey, todayKey);
       // Days an admin entered or corrected by hand always win over Porto — not even the reprocess
       // window below touches them.
-      const manualDates = await getManualWorkHourDates(technicianIds, monthStartKey, todayKey);
+      const manualDates = await getManualWorkHourDates(technicianIds, rangeStartKey, todayKey);
+      const storedPlanned = await getStoredPlannedTimes(technicianIds, rangeStartKey, todayKey);
+
+      // Days still flagged with a laudo warning are re-checked on every run: if the technician
+      // fills the laudo in later, its signature replaces the "Concluído" fallback and the warning.
+      for (const key of await getPortoWarningDates(technicianIds, rangeStartKey, todayKey)) {
+        existingDates.delete(key);
+      }
 
       // Porto's own escala calendar doesn't finalize a day's shift time until the day is over — a
       // same-day scrape sees a blank/missing time range for "today" (confirmed live: fetching
@@ -230,26 +263,47 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       }
 
       // One search per 15-day chunk covers the whole month-to-date, instead of one per day.
-      const chunks = buildDateChunks(monthStartKey, todayKey);
-      const allServices: PortoServiceRow[] = [];
+      const chunks = buildDateChunks(rangeStartKey, todayKey);
+      // Porto widens each search to its own 15-day window, so consecutive chunks overlap — keep each
+      // service once.
+      const servicesByCode = new Map<string, PortoServiceRow>();
       for (const chunk of chunks) {
-        const services = await searchServicosByDateRange(page, chunk);
-        allServices.push(...services);
+        for (const service of await searchServicosByDateRange(page, chunk)) {
+          servicesByCode.set(`${service.numeroServico}/${service.anoServico}`, service);
+        }
       }
+      const allServices = Array.from(servicesByCode.values());
 
       const escalaCache = new Map<string, PortoEscalaDay[]>();
       let budgetExceeded = false;
 
-      // Match each technician's services once up front (name-prefix match doesn't depend on date).
+      // The search results carry no QRA, only the socorrista's name cut to 20 characters — matched
+      // here against the full names in Porto's own socorristas list (which does carry the QRA), not
+      // against the names registered in this system. Validated live (21/09–05/10/2026): every name
+      // in the results maps to exactly one socorrista. A name matching none or several is reported
+      // and its services skipped rather than credited to the wrong technician.
+      const normalizeName = (value: string) => value.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+      const portoNames = socorristas.map((socorrista) => ({ qra: socorrista.qra, name: normalizeName(socorrista.name) }));
+      const servicesByQra = new Map<string, PortoServiceRow[]>();
+      const unmatchedNames = new Set<string>();
+      const ambiguousNames = new Set<string>();
+      for (const service of allServices) {
+        const fragment = normalizeName(service.technicianNameFragment);
+        const owners = portoNames.filter((socorrista) => socorrista.name.startsWith(fragment));
+        if (owners.length === 1) {
+          const list = servicesByQra.get(owners[0].qra) ?? [];
+          list.push(service);
+          servicesByQra.set(owners[0].qra, list);
+        } else {
+          (owners.length ? ambiguousNames : unmatchedNames).add(fragment);
+        }
+      }
+      if (unmatchedNames.size) details.push({ action: 'service_name_not_in_porto_list', names: Array.from(unmatchedNames) });
+      if (ambiguousNames.size) details.push({ action: 'ambiguous_service_name', names: Array.from(ambiguousNames) });
+
       const technicianServicesByQra = new Map<string, { technician: Technician; services: PortoServiceRow[] }>();
       for (const { qra, technician } of resolved) {
-        // Prefer the admin-set Porto name hint (lib/types.ts Technician.porto_name_hint) when
-        // present — the registered `name` sometimes doesn't match how Porto displays the person
-        // (nickname, abbreviation, etc), and there's no stable ID in the search results to match
-        // on instead (see servicos.ts).
-        const nameSource = (technician.porto_name_hint || technician.name).trim();
-        const namePrefix = nameSource.toUpperCase().slice(0, 8);
-        const services = allServices.filter((service) => service.technicianNameFragment.toUpperCase().startsWith(namePrefix));
+        const services = servicesByQra.get(qra) ?? [];
         if (!services.length) {
           details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'no_services' });
           continue;
@@ -272,7 +326,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           // Porto's search returns a 15-day window of its own choosing, not the dates asked for
           // (see runServiceSearch) — never import a day outside this run's range (another month,
           // whose escala isn't the one loaded here, or a future day that hasn't happened yet).
-          if (!dateKey || dateKey < monthStartKey || dateKey > todayKey) continue;
+          if (!dateKey || dateKey < rangeStartKey || dateKey > todayKey) continue;
           const list = byDateForTechnician.get(dateKey) ?? [];
           list.push(service);
           byDateForTechnician.set(dateKey, list);
@@ -389,7 +443,15 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
 
           let plannedStart = '08:00';
           let plannedEnd = workEnd;
-          try {
+          const stored = storedPlanned.get(dedupKey);
+          if (!dateKey.startsWith(monthStartKey.slice(0, 7))) {
+            // Only the current month's escala is readable, so a day from another month (yesterday
+            // on the 1st, or a manual run over past dates) keeps the previsto already recorded.
+            if (stored) {
+              plannedStart = stored.start;
+              plannedEnd = stored.end;
+            }
+          } else try {
             if (!escalaCache.has(qra)) {
               // Only the shift times are needed here, so skip opening each indisponibilidade day
               // (measured live: 68s vs 5s per technician with 11 marked days).
@@ -413,7 +475,8 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           }
           const actualStart = earliestStart ?? plannedStart;
 
-          const hoursWorked = diffHours(actualStart, workEnd);
+          const endsNextDay = endInfo.endDate !== null && endInfo.endDate !== dateKey.split('-').reverse().join('/');
+          const hoursWorked = diffHours(actualStart, workEnd, endsNextDay);
           if (hoursWorked <= 0 || hoursWorked > MAX_PLAUSIBLE_SHIFT_HOURS) {
             details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'invalid_hours', date: dateKey, actualStart, workEnd, endSource: endInfo.endSource, service: serviceCode, hoursWorked });
             continue;
@@ -461,7 +524,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         });
       }
 
-      const range = { start: monthStartKey, end: todayKey };
+      const range = { start: rangeStartKey, end: todayKey };
       const summary = summarizeDetails(details);
 
       if (dryRun) {

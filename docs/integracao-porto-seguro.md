@@ -319,3 +319,36 @@ Tempos medidos ao vivo (05/10/2026, 12 socorristas, 47 serviços de 7 técnicos)
 
 Voltar da página de detalhe com `page.goBack()` não funciona (timeout) — cada serviço continua exigindo
 refazer a busca do dia.
+
+## Revisão de 2026-10-06
+
+- **Vínculo serviço → técnico pelo nome do próprio Porto.** A busca de serviços não traz QRA, só o
+  nome do socorrista cortado em 20 caracteres. Antes, ele era comparado com os 8 primeiros
+  caracteres do nome cadastrado aqui. Agora é comparado com o nome completo da lista de socorristas
+  do Porto, que traz o QRA. Validado ao vivo (21/09–05/10/2026): cada nome casa com exatamente um
+  socorrista. Nome que não casa com nenhum, ou com mais de um, é registrado no histórico e seus
+  serviços são ignorados. `technicians.porto_name_hint` deixou de ser usado pelo job.
+- **Lista de socorristas:** o "carregar mais ao rolar" (`LazyScrollTableSocorristas.jsp`) responde
+  404, então a primeira carga é a lista inteira (12 em 06/10/2026). Se um técnico ativo com QRA não
+  aparecer nela, o job registra `technician_not_in_porto_list`.
+- **Serviços duplicados:** os blocos de 15 dias se sobrepõem (janela própria do site); cada serviço
+  agora entra uma vez.
+- **Fim no dia seguinte:** a conta de horas usa a data real do fim. Antes, um Concluído na manhã
+  seguinte (ex.: início 08:00, fim 08:30 do dia seguinte) virava 0,5h; agora passa de 16h e é
+  rejeitado (`invalid_hours`).
+- **Advertências são revistas:** dias com advertência do mês corrente são recalculados em toda
+  execução; se o laudo for preenchido depois, a assinatura substitui o Concluído e a advertência sai.
+- **Virada do mês:** a execução automática cobre o mês corrente **mais ontem**, então o último dia do
+  mês anterior também é reprocessado no dia 1. Dias fora do mês corrente (esse caso, ou uma execução
+  manual de datas passadas) mantêm o "previsto" já gravado, porque só a escala do mês atual é lida.
+- **Escala reimportada todo dia (03:00), de hoje até o fim do mês.** Antes importava uma vez por mês
+  e depois só conferia o portal — folgas/trocas lançadas no Porto no meio do mês nunca chegavam, e os
+  lembretes de turno do WhatsApp leem essa escala. Dias passados, concluídos e manuais não são tocados.
+- **Uma sessão do Porto por vez no worker** (`worker/porto-lock.ts`): as execuções agendadas esperam;
+  pedidos da tela (testar login, buscar técnicos, testar/rodar agora) recebem 409 "já existe uma
+  execução em andamento". Um `docker exec ... --run=` é outro processo e não entra nessa trava.
+- **"Fim do expediente" (WhatsApp):** o horário configurado só dispara depois que a importação da
+  noite terminou para o dia (`porto_sync_log`: `range_end` ≥ dia e terminada no dia ou depois). Antes,
+  um horário anterior às 23:00 (em produção estava 17:30) marcava o dia como enviado sem horas, e o
+  envio após a importação era bloqueado — a mensagem nunca saía. O envio após a importação usa o dia
+  da execução, mesmo que ela termine depois da meia-noite, e só acontece se a importação deu certo.

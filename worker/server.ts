@@ -8,6 +8,7 @@ import { listSocorristas } from '../lib/porto-integration/socorristas';
 import { getPortoConfig } from '../lib/porto-sync-log';
 import { runHoursJob } from '../lib/porto-jobs/run-hours-job';
 import { runScheduleJob } from '../lib/porto-jobs/run-schedule-job';
+import { PortoBusyError, runWithPortoLock } from './porto-lock';
 
 const PORT = Number(process.env.PORTO_WORKER_PORT ?? 8090);
 const SECRET = process.env.PORTO_WORKER_SECRET;
@@ -45,17 +46,19 @@ async function handleTestLogin(res: ServerResponse) {
   }
 
   const password = decryptPortoPassword(config.encrypted_password as string);
-  const { browser, context } = await launchPortoBrowser();
-  try {
-    const page = await context.newPage();
-    await loginToPorto(page, { cpf: config.cpf as string, password });
-    sendJson(res, 200, { message: 'Login realizado com sucesso no Portal do Prestador.' });
-  } catch (error) {
-    const message = error instanceof PortoLoginError ? error.message : `Falha ao testar login no Porto: ${error instanceof Error ? error.message : String(error)}`;
-    sendJson(res, 400, { error: message });
-  } finally {
-    await browser.close().catch(() => {});
-  }
+  await runWithPortoLock('teste de login', async () => {
+    const { browser, context } = await launchPortoBrowser();
+    try {
+      const page = await context.newPage();
+      await loginToPorto(page, { cpf: config.cpf as string, password });
+      sendJson(res, 200, { message: 'Login realizado com sucesso no Portal do Prestador.' });
+    } catch (error) {
+      const message = error instanceof PortoLoginError ? error.message : `Falha ao testar login no Porto: ${error instanceof Error ? error.message : String(error)}`;
+      sendJson(res, 400, { error: message });
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  });
 }
 
 async function handleSocorristas(res: ServerResponse) {
@@ -66,24 +69,26 @@ async function handleSocorristas(res: ServerResponse) {
   }
 
   const password = decryptPortoPassword(config.encrypted_password as string);
-  const { browser, context } = await launchPortoBrowser();
-  try {
-    const page = await context.newPage();
-    await loginToPorto(page, { cpf: config.cpf as string, password });
-    const socorristas = await listSocorristas(page);
-    const technicians = await sql`
-      SELECT id, qra, porto_name_hint, name, email, commission_percentage, base_salary,
-             va_allowance, vr_allowance, status
-      FROM technicians
-      ORDER BY name ASC
-    `;
-    sendJson(res, 200, { socorristas, technicians });
-  } catch (error) {
-    const message = error instanceof PortoLoginError ? error.message : `Falha ao buscar técnicos do Porto: ${error instanceof Error ? error.message : String(error)}`;
-    sendJson(res, 400, { error: message });
-  } finally {
-    await browser.close().catch(() => {});
-  }
+  await runWithPortoLock('busca de técnicos', async () => {
+    const { browser, context } = await launchPortoBrowser();
+    try {
+      const page = await context.newPage();
+      await loginToPorto(page, { cpf: config.cpf as string, password });
+      const socorristas = await listSocorristas(page);
+      const technicians = await sql`
+        SELECT id, qra, porto_name_hint, name, email, commission_percentage, base_salary,
+               va_allowance, vr_allowance, status
+        FROM technicians
+        ORDER BY name ASC
+      `;
+      sendJson(res, 200, { socorristas, technicians });
+    } catch (error) {
+      const message = error instanceof PortoLoginError ? error.message : `Falha ao buscar técnicos do Porto: ${error instanceof Error ? error.message : String(error)}`;
+      sendJson(res, 400, { error: message });
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  });
 }
 
 async function handleRunHours(url: URL, res: ServerResponse) {
@@ -100,31 +105,35 @@ async function handleRunHours(url: URL, res: ServerResponse) {
   // keeps running here regardless (this process is a long-lived daemon, not a one-shot request
   // handler) and writes its result to porto_sync_log as it always did — the admin UI polls that.
   const respondOnce = onceResponder(res);
-  runHoursJob({
-    manual: true,
-    dateRange,
-    forceWrite,
-    onStarted: (logId) => respondOnce(202, { status: 'started', logId }),
-  })
+  runWithPortoLock('apontamento de horas (manual)', () =>
+    runHoursJob({
+      manual: true,
+      dateRange,
+      forceWrite,
+      onStarted: (logId) => respondOnce(202, { status: 'started', logId }),
+    }),
+  )
     .then((result) => respondOnce(result.status === 'error' ? 500 : 200, result))
     .catch((error) => {
       console.error('[worker/server] hours job failed before it could start:', error);
-      respondOnce(500, { status: 'error', error: error instanceof Error ? error.message : String(error) });
+      respondOnce(error instanceof PortoBusyError ? 409 : 500, { status: 'error', error: error instanceof Error ? error.message : String(error) });
     });
 }
 
 async function handleRunSchedule(url: URL, res: ServerResponse) {
   const forceWrite = url.searchParams.get('write') === '1';
   const respondOnce = onceResponder(res);
-  runScheduleJob({
-    manual: true,
-    forceWrite,
-    onStarted: (logId) => respondOnce(202, { status: 'started', logId }),
-  })
+  runWithPortoLock('escala (manual)', () =>
+    runScheduleJob({
+      manual: true,
+      forceWrite,
+      onStarted: (logId) => respondOnce(202, { status: 'started', logId }),
+    }),
+  )
     .then((result) => respondOnce(result.status === 'error' ? 500 : 200, result))
     .catch((error) => {
       console.error('[worker/server] schedule job failed before it could start:', error);
-      respondOnce(500, { status: 'error', error: error instanceof Error ? error.message : String(error) });
+      respondOnce(error instanceof PortoBusyError ? 409 : 500, { status: 'error', error: error instanceof Error ? error.message : String(error) });
     });
 }
 
@@ -171,6 +180,10 @@ export function startWorkerServer() {
 
         sendJson(res, 404, { error: 'Not found' });
       } catch (error) {
+        if (error instanceof PortoBusyError) {
+          sendJson(res, 409, { error: error.message });
+          return;
+        }
         console.error('[worker/server] unhandled error:', error);
         sendJson(res, 500, { error: 'Erro interno do worker.' });
       }

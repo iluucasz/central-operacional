@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { runHoursJob } from '../lib/porto-jobs/run-hours-job';
 import { runScheduleJob } from '../lib/porto-jobs/run-schedule-job';
 import { runDueNotifications } from '../lib/whatsapp/notifications';
+import { waitForPortoLock } from './porto-lock';
 import { startWorkerServer } from './server';
 
 function log(...args: unknown[]) {
@@ -14,17 +15,21 @@ const whatsappConfigured = Boolean(process.env.EVOLUTION_API_URL && process.env.
 
 async function runHours() {
   log('Iniciando job de apontamento de horas...');
+  // The day this run imports — the end-of-shift message below is about it even when the run
+  // (waiting on the lock, or a long catch-up) finishes after midnight.
+  const runDay = new Date();
   try {
-    const result = await runHoursJob({ manual: false });
+    const result = await waitForPortoLock('apontamento de horas (23:00)', () => runHoursJob({ manual: false }));
     log('Resultado (horas):', JSON.stringify(result));
+    if (result.status !== 'success' && result.status !== 'partial') return;
   } catch (error) {
     log('Job de horas falhou:', error);
     return;
   }
 
-  // The end-of-shift WhatsApp goes out as soon as today's hours are in, rather than waiting for
+  // The end-of-shift WhatsApp goes out as soon as the day's hours are in, rather than waiting for
   // its configured time — that time stays as the fallback (and it only ever sends once a day).
-  if (whatsappConfigured) await runWhatsApp({ only: 'daily_hours', ignoreTime: true });
+  if (whatsappConfigured) await runWhatsApp({ only: 'daily_hours', ignoreTime: true, now: runDay });
 }
 
 async function runWhatsApp(options: Parameters<typeof runDueNotifications>[0] = {}) {
@@ -39,7 +44,7 @@ async function runWhatsApp(options: Parameters<typeof runDueNotifications>[0] = 
 async function runSchedule() {
   log('Iniciando job de escala...');
   try {
-    const result = await runScheduleJob({ manual: false });
+    const result = await waitForPortoLock('escala (03:00)', () => runScheduleJob({ manual: false }));
     log('Resultado (escala):', JSON.stringify(result));
   } catch (error) {
     log('Job de escala falhou:', error);

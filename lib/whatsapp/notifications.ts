@@ -41,6 +41,26 @@ const PAUSE_BETWEEN_SENDS_MS = 350;
  */
 const CATCH_UP_WINDOW_MINUTES = 180;
 
+/**
+ * Whether the day's hours are in for "Fim do expediente". With the Porto import writing hours,
+ * they only exist once that night's import has finished for the day; otherwise (automation off or
+ * in test mode) hours are entered by hand and the configured time stands as is.
+ */
+async function dailyHoursReady(dateKey: string): Promise<boolean> {
+  const [config] = await sql`SELECT automation_enabled, dry_run_only FROM porto_config WHERE id = 1`;
+  if (!config?.automation_enabled || config.dry_run_only !== false) return true;
+  // Both conditions: the run covered the day and finished on it or later (Brasília time). The
+  // range alone isn't enough — runs from before the worker's timezone fix ended at 23:00 BRT with
+  // a range already reaching the next day.
+  const [run] = await sql`
+    SELECT 1 FROM porto_sync_log
+    WHERE job_type = 'hours' AND status IN ('success', 'partial') AND range_end >= ${dateKey}
+      AND (finished_at AT TIME ZONE 'America/Sao_Paulo')::date >= ${dateKey}::date
+    LIMIT 1
+  `;
+  return Boolean(run);
+}
+
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -453,6 +473,9 @@ export async function runDueNotifications(options: { now?: Date; only?: Notifica
     }
 
     const periodKey = monthly ? current.monthKey : current.dateKey;
+    // Claiming the day with no hours imported yet would send nothing and then block the send that
+    // follows the night's import (the configured time is often earlier than the 23:00 import).
+    if (type === 'daily_hours' && !options.ignoreTime && !(await dailyHoursReady(current.dateKey))) continue;
     if (!(await claimJobRun(type, periodKey))) continue;
 
     try {

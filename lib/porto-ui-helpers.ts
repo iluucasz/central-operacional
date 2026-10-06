@@ -60,6 +60,18 @@ export function jobDetailActionLabel(action: string | undefined) {
       return 'Falha ao abrir detalhe de um serviço (pulado)';
     case 'start_time_fallback_escala':
       return 'Sem "Hora Prevista" válida — usou horário da escala como aproximação';
+    case 'manual_entry_kept':
+      return 'Dia lançado à mão — mantido, o robô não sobrescreve';
+    case 'no_concluded_service':
+      return 'Nenhum serviço concluído no dia (só cancelados/aceitos)';
+    case 'laudo_unreadable_used_concluido':
+      return 'Laudo não pôde ser lido — usou o Concluído, sem advertência';
+    case 'technician_not_in_porto_list':
+      return 'Técnico ativo com QRA que não aparece na lista do Porto';
+    case 'service_name_not_in_porto_list':
+      return 'Serviços com nome de socorrista fora da lista do Porto (ignorados)';
+    case 'ambiguous_service_name':
+      return 'Nome de socorrista que bate com mais de um técnico (ignorado)';
     default:
       return action || '-';
   }

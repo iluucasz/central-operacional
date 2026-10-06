@@ -122,6 +122,54 @@ export async function getManualWorkHourDates(technicianIds: string[], startDate:
   return new Set(rows.map((row) => `${String(row.technician_id)}::${toDateKey(row.date)}`));
 }
 
+/**
+ * "technicianId::date" keys of Porto-imported days flagged with a laudo warning — the hours job
+ * re-checks these on every run of the month, so a laudo filled in late replaces the "Concluído"
+ * fallback (and drops the warning) instead of the day staying flagged forever.
+ */
+export async function getPortoWarningDates(technicianIds: string[], startDate: string, endDate: string): Promise<Set<string>> {
+  if (!technicianIds.length) return new Set();
+
+  const rows = await sql.query(
+    `
+      SELECT s.technician_id, s.date
+      FROM schedule s
+      JOIN work_hours w ON w.technician_id = s.technician_id AND w.date = s.date AND w.source = 'porto'
+      WHERE s.notes LIKE '%ADVERTÊNCIA%'
+        AND s.technician_id = ANY($1)
+        AND s.date >= $2
+        AND s.date <= $3
+    `,
+    [technicianIds, startDate, endDate],
+  );
+
+  return new Set(rows.map((row) => `${String(row.technician_id)}::${toDateKey(row.date)}`));
+}
+
+/** The "previsto" already recorded per "technicianId::date" (from the schedule note), when there is one. */
+export async function getStoredPlannedTimes(technicianIds: string[], startDate: string, endDate: string): Promise<Map<string, { start: string; end: string }>> {
+  if (!technicianIds.length) return new Map();
+
+  const rows = await sql.query(
+    `
+      SELECT technician_id, date, notes
+      FROM schedule
+      WHERE notes LIKE '%previsto=%'
+        AND technician_id = ANY($1)
+        AND date >= $2
+        AND date <= $3
+    `,
+    [technicianIds, startDate, endDate],
+  );
+
+  const planned = new Map<string, { start: string; end: string }>();
+  for (const row of rows) {
+    const match = String(row.notes).match(/previsto=(\d{2}:\d{2})-(\d{2}:\d{2})/);
+    if (match) planned.set(`${String(row.technician_id)}::${toDateKey(row.date)}`, { start: match[1], end: match[2] });
+  }
+  return planned;
+}
+
 export async function getActiveTechnicianIds(technicianIds: string[]) {
   if (!technicianIds.length) {
     return new Set<string>();
