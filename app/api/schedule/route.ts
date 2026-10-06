@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
+import { getPortoConfig } from '@/lib/porto-sync-log';
 import { replaceGeneratedScheduleRows } from '@/lib/schedule-write-service';
 import {
   buildPersistedSchedule,
@@ -427,11 +428,14 @@ export async function PUT(request: NextRequest) {
 
     const generatedRows = buildPersistedSchedule(parsedInput, targetTechnicianIds);
 
+    // Porto automation on: Porto owns the escala (its imported days are kept). Off: this generator does.
+    const portoAutomationEnabled = Boolean((await getPortoConfig())?.automation_enabled);
     const { inserted: persistedSchedules, preservedCount } = await replaceGeneratedScheduleRows({
       technicianIds: targetTechnicianIds,
       startDate,
       endDate,
       rows: generatedRows,
+      portoAutomationEnabled,
     });
 
     return NextResponse.json(
@@ -443,6 +447,7 @@ export async function PUT(request: NextRequest) {
           technicians: targetTechnicianIds.length,
           preservedCompleted: preservedCount,
           inserted: persistedSchedules.length,
+          portoAutomationEnabled,
         },
       },
       { status: 200 }

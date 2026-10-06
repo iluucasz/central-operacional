@@ -409,3 +409,12 @@ porque quem alerta é o próprio worker); WhatsApp desconectado (alertas e notif
 sessão do Porto expirando no meio de uma execução muito longa (os dias que falharem ficam para a
 próxima execução); serviço com "Data Comb." diferente do dia real de execução (as horas contam no
 dia combinado).
+
+## Quem manda na escala (decisão do dono do produto, 2026-10-06)
+
+- **Automação do Porto ligada:** o Porto manda. A escala é reimportada toda madrugada (de hoje até o
+  fim do mês) e substitui o que foi montado no sistema; o "Montar escala" mantém os dias importados do
+  Porto e avisa isso na mensagem ao salvar.
+- **Automação desligada:** o "Montar escala" manda. Ele pode substituir também os dias que vieram do
+  Porto (`replaceGeneratedScheduleRows` com `portoAutomationEnabled: false`).
+- Nos dois casos, dias concluídos e apontamentos manuais nunca são substituídos.

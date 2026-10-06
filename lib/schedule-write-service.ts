@@ -100,9 +100,15 @@ async function replaceScheduleRows(params: ReplaceScheduleRowsParams & { mode: P
   return { inserted, preservedCount: preservedKeys.size };
 }
 
-/** Used by the internal "Montar escala" generator. Never overwrites completed, manually-entered, or Porto-imported days. */
-export async function replaceGeneratedScheduleRows(params: ReplaceScheduleRowsParams) {
-  return replaceScheduleRows({ ...params, mode: 'generated' });
+/**
+ * Used by the internal "Montar escala" generator. Never overwrites completed or manually-entered
+ * days. Who owns the escala depends on the Porto automation (product owner, 2026-10-06): while it's
+ * on, Porto rules — its imported days stay protected here (and the daily import replaces generated
+ * rows anyway); while it's off, the generator rules — Porto-imported days are replaceable too.
+ */
+export async function replaceGeneratedScheduleRows(params: ReplaceScheduleRowsParams & { portoAutomationEnabled: boolean }) {
+  const { portoAutomationEnabled, ...rest } = params;
+  return replaceScheduleRows({ ...rest, mode: portoAutomationEnabled ? 'generated' : 'porto' });
 }
 
 /**

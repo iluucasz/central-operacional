@@ -830,8 +830,13 @@ function buildSuccessMessage(summary: {
   technicians: number;
   inserted: number;
   preservedCompleted: number;
+  portoAutomationEnabled?: boolean;
 }) {
-  return `Escala salva de ${formatDate(summary.startDate)} até ${formatDate(summary.endDate)} para ${formatCount(summary.technicians, 'técnico', 'técnicos')}. O sistema gravou ${formatCount(summary.inserted, 'linha', 'linhas')} e preservou ${formatCount(summary.preservedCompleted, 'linha concluída', 'linhas concluídas')}.`;
+  const base = `Escala salva de ${formatDate(summary.startDate)} até ${formatDate(summary.endDate)} para ${formatCount(summary.technicians, 'técnico', 'técnicos')}. O sistema gravou ${formatCount(summary.inserted, 'linha', 'linhas')} e preservou ${formatCount(summary.preservedCompleted, 'linha', 'linhas')} (dias concluídos, apontados à mão${summary.portoAutomationEnabled ? ' ou importados do Porto' : ''}).`;
+  // Porto automation on = Porto owns the escala: its daily import replaces what's built here.
+  return summary.portoAutomationEnabled
+    ? `${base} A automação do Porto está ligada: a escala do Porto prevalece e é reimportada toda madrugada.`
+    : base;
 }
 
 const attendanceImportColumnAliases = {
