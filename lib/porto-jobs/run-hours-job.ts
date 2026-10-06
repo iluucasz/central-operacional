@@ -12,7 +12,6 @@ import {
   getExistingPortoImportedDates,
   getIsoWeekNumber,
   getManualWorkHourDates,
-  getPortoWarningDates,
   getStoredPlannedTimes,
   type WorkHourEntry,
 } from '../work-hours-service';
@@ -239,12 +238,9 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       // window below touches them.
       const manualDates = await getManualWorkHourDates(technicianIds, rangeStartKey, todayKey);
       const storedPlanned = await getStoredPlannedTimes(technicianIds, rangeStartKey, todayKey);
-
-      // Days still flagged with a laudo warning are re-checked on every run: if the technician
-      // fills the laudo in later, its signature replaces the "Concluído" fallback and the warning.
-      for (const key of await getPortoWarningDates(technicianIds, rangeStartKey, todayKey)) {
-        existingDates.delete(key);
-      }
+      // A laudo warning is deliberately NOT re-checked past the reprocess window below (product
+      // owner, 2026-10-06): a laudo filled in days later must not turn the day back into a normal
+      // one. Only yesterday/today get recomputed, as for any other day.
 
       // Porto's own escala calendar doesn't finalize a day's shift time until the day is over — a
       // same-day scrape sees a blank/missing time range for "today" (confirmed live: fetching
