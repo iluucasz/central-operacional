@@ -33,6 +33,8 @@ type Status = {
   /** Monthly cap in R$ (0 = no cap). */
   budget: number;
   usage: Usage[];
+  /** Starter questions built from the current data. */
+  suggestions: string[];
   conversations: {
     id: string;
     title: string;
@@ -47,6 +49,8 @@ type Message = {
   toolsUsed: string[];
   /** What the answer cost, in R$. */
   cost: number | null;
+  /** Follow-up questions offered under an answer. */
+  suggestions?: string[];
   createdAt: string;
 };
 type Preferences = {
@@ -67,7 +71,8 @@ const tabs = [
   { id: 'usage', label: 'Consumo', icon: Wallet },
   { id: 'settings', label: 'Preferências', icon: Settings2 },
 ] as const;
-const suggestions = [
+/** Used only until the server's suggestions arrive (or if it sends none). */
+const fallbackSuggestions = [
   'Qual técnico mais produziu este mês?',
   'Quem recebeu advertência de laudo este mês?',
   'Quais folhas precisam de atenção?',
@@ -283,8 +288,8 @@ export function AssistantWorkspace({ compact = false }: { compact?: boolean }) {
       setOpening(false);
     }
   }
-  async function send() {
-    const content = question.trim();
+  async function send(text?: string) {
+    const content = (text ?? question).trim();
     if (!content || busy.current || opening || !status?.available) return;
     busy.current = true;
     setAsking(true);
@@ -518,26 +523,23 @@ export function AssistantWorkspace({ compact = false }: { compact?: boolean }) {
                       )}
                     </p>
                     <div className="ai-suggestions">
-                      {(compact ? suggestions.slice(0, 2) : suggestions).map(
-                        (text, index) => (
+                      {(status?.suggestions?.length ? status.suggestions : fallbackSuggestions)
+                        .slice(0, compact ? 4 : 6)
+                        .map((text, index) => (
                           <button
                             key={text}
                             disabled={!status?.available || asking}
-                            onClick={() => {
-                              setQuestion(text);
-                              input.current?.focus();
-                            }}
+                            onClick={() => void send(text)}
                           >
                             <span>0{index + 1}</span>
                             {text}
                             <ArrowUpRight size={17} />
                           </button>
-                        ),
-                      )}
+                        ))}
                     </div>
                   </div>
                 )}
-                {messages.map((message) => (
+                {messages.map((message, index) => (
                   <article
                     key={message.id}
                     className={`ai-message ${message.role === 'user' ? 'from-user' : 'from-assistant'}`}
@@ -591,6 +593,24 @@ export function AssistantWorkspace({ compact = false }: { compact?: boolean }) {
                         ].join(' · ')}
                       </div>
                     )}
+                    {message.role === 'assistant' &&
+                      index === messages.length - 1 &&
+                      !asking &&
+                      (message.suggestions?.length ?? 0) > 0 && (
+                        <div className="ai-followups" aria-label="Sugestões de próximas perguntas">
+                          {message.suggestions!.map((text) => (
+                            <button
+                              key={text}
+                              type="button"
+                              disabled={!status?.available || opening}
+                              onClick={() => void send(text)}
+                            >
+                              {text}
+                              <ArrowUpRight size={15} />
+                            </button>
+                          ))}
+                        </div>
+                      )}
                   </article>
                 ))}
                 {asking && (

@@ -36,6 +36,8 @@ export function ensureAiSchema() {
           created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `;
+      // Follow-up questions offered under an answer.
+      await sql`ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS suggestions JSONB`;
       await sql`CREATE INDEX IF NOT EXISTS ai_messages_conversation_idx ON ai_messages (conversation_id, created_at)`;
       await sql`CREATE INDEX IF NOT EXISTS ai_messages_created_idx ON ai_messages (created_at) WHERE role = 'assistant'`;
     })().catch((error) => {

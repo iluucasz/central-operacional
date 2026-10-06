@@ -17,6 +17,17 @@ SQL e nunca altera dados.
 - Conversas são por admin (`ai_conversations.user_id`). Arquivar só esconde (`archived_at`).
 - Até 6 rodadas de consultas por pergunta; as últimas 12 mensagens da conversa vão como contexto.
 
+## Sugestões
+
+- **Iniciais** (`lib/ai/suggestions.ts`): montadas a partir dos dados, com cache de 5 min. O que pede
+  atenção vem primeiro (advertências de laudo no mês, folhas do mês anterior em rascunho, última
+  execução do robô com erro/avisos); o resto é sorteado a cada abertura. Sempre de 4 a 6 (o chat
+  flutuante mostra 4, a tela mostra 6). Clicar já envia a pergunta.
+- **Depois de cada resposta:** o modelo termina com `[[SUGESTOES]] ["...", "...", "..."]`;
+  `splitFollowUps` tira isso do texto e guarda em `ai_messages.suggestions`. Elas aparecem como botões
+  embaixo da última resposta e também enviam ao clicar. Lista ausente ou malformada = resposta sem
+  sugestões (nunca quebra a resposta).
+
 ## Consultas (`lib/ai/tools.ts`)
 
 | Consulta | O que traz |
