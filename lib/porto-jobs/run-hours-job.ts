@@ -77,6 +77,12 @@ export type HoursJobResult = {
   range?: { start: string; end: string };
   /** Count of detail entries per `action`, so "12 processed, 2 written" is explained at a glance. */
   summary?: Record<string, number>;
+  /**
+   * Health checks that didn't stop the run but mean something is likely wrong (Porto changed its
+   * layout, a technician isn't registered, many pages failed…). Shown in the run history and sent
+   * to the admin's alert WhatsApp by the worker.
+   */
+  warnings?: string[];
   details: Array<Record<string, unknown>>;
 };
 
@@ -179,17 +185,18 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
   const config = await getPortoConfig();
   const missingCredentials = !config || !config.encrypted_password || !config.cpf;
   if (missingCredentials || (!options.manual && !config.automation_enabled)) {
-    const logId = await startSyncLog('hours');
+    const logId = await startSyncLog('hours', options.manual ? 'manual' : 'auto');
     options.onStarted?.(logId);
     const errorMessage = missingCredentials ? 'Credenciais não configuradas.' : 'Automação desligada.';
     await finishSyncLog(logId, { status: 'skipped', error_message: errorMessage });
     return { status: 'skipped', technicians_processed: 0, error: errorMessage, details: [] };
   }
 
-  const logId = await startSyncLog('hours');
+  const logId = await startSyncLog('hours', options.manual ? 'manual' : 'auto');
   options.onStarted?.(logId);
   const settings = await getOrganizationSettings();
   const details: Array<Record<string, unknown>> = [];
+  const warnings: string[] = [];
   let techniciansProcessed = 0;
   let importedCount = 0;
   let rowsWritten = 0;
@@ -209,6 +216,9 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       const rangeStartKey = options.dateRange?.startDateKey ?? (yesterdayKey < monthStartKey ? yesterdayKey : monthStartKey);
 
       const socorristas = await listSocorristas(page);
+      if (!socorristas.length) {
+        warnings.push('A lista de socorristas do Porto veio vazia — o portal pode ter mudado de layout.');
+      }
 
       // Resolve all technicians up front so we know which (technician, date) pairs to skip.
       const resolved: Array<{ qra: string; technician: Technician }> = [];
@@ -230,7 +240,11 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       for (const technician of activeWithQra) {
         if (!listedQras.has(String(technician.qra))) {
           details.push({ qra: technician.qra, technician_id: technician.id, technician_name: technician.name, action: 'technician_not_in_porto_list' });
+          warnings.push(`${technician.name} (QRA ${technician.qra}) está ativo no sistema mas não aparece na lista de socorristas do Porto.`);
         }
+      }
+      if (socorristas.length && !resolved.length) {
+        warnings.push('Nenhum socorrista do Porto corresponde a um técnico ativo do sistema — confira os QRAs no cadastro.');
       }
 
       const technicianIds = resolved.map((r) => r.technician.id);
@@ -270,6 +284,12 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         }
       }
       const allServices = Array.from(servicesByCode.values());
+      if (!allServices.length && rangeStartKey < todayKey) {
+        warnings.push(`A busca de serviços do Porto não trouxe nenhum serviço de ${rangeStartKey} a ${todayKey} — o portal pode ter mudado.`);
+      }
+      if (allServices.length && !allServices.some((service) => /conclu|cancel/i.test(service.status))) {
+        warnings.push('A coluna de status dos serviços não foi reconhecida (nenhum "Concluído"/"Cancelado") — nenhum serviço pôde ser contado.');
+      }
 
       const escalaCache = new Map<string, PortoEscalaDay[]>();
       let budgetExceeded = false;
@@ -295,8 +315,27 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           (owners.length ? ambiguousNames : unmatchedNames).add(fragment);
         }
       }
-      if (unmatchedNames.size) details.push({ action: 'service_name_not_in_porto_list', names: Array.from(unmatchedNames) });
-      if (ambiguousNames.size) details.push({ action: 'ambiguous_service_name', names: Array.from(ambiguousNames) });
+      if (unmatchedNames.size) {
+        details.push({ action: 'service_name_not_in_porto_list', names: Array.from(unmatchedNames) });
+        warnings.push(`Serviços com nome de socorrista que não está na lista do Porto (ignorados): ${Array.from(unmatchedNames).join(', ')}.`);
+      }
+      if (ambiguousNames.size) {
+        details.push({ action: 'ambiguous_service_name', names: Array.from(ambiguousNames) });
+        warnings.push(`Nome de socorrista que bate com mais de um técnico (serviços ignorados): ${Array.from(ambiguousNames).join(', ')}.`);
+      }
+      // A socorrista doing services on Porto with no active technician here: their hours are lost
+      // silently unless someone registers them (or their QRA) in the system.
+      const resolvedQras = new Set(resolved.map((entry) => entry.qra));
+      for (const [qra, services] of servicesByQra) {
+        const inRange = services.filter((service) => {
+          const dateKey = brDateToKey(service.dataProgramada);
+          return dateKey && dateKey >= rangeStartKey && dateKey <= todayKey;
+        });
+        if (!resolvedQras.has(qra) && inRange.length) {
+          const name = socorristas.find((socorrista) => socorrista.qra === qra)?.name ?? qra;
+          warnings.push(`${name} (QRA ${qra}) tem ${inRange.length} serviço(s) no Porto, mas não há técnico ativo com esse QRA — as horas não são importadas.`);
+        }
+      }
 
       const technicianServicesByQra = new Map<string, { technician: Technician; services: PortoServiceRow[] }>();
       for (const { qra, technician } of resolved) {
@@ -615,6 +654,16 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       const range = { start: rangeStartKey, end: todayKey };
       const summary = summarizeDetails(details);
 
+      // Many pages failing or laudos unreadable in one run usually means Porto changed something.
+      const failedPages = summary.service_detail_failed ?? 0;
+      if (failedPages >= 3) warnings.push(`${failedPages} serviço(s) não puderam ser abertos no Porto — os dias ficaram para a próxima execução.`);
+      const unreadableLaudos = summary.laudo_unreadable_used_concluido ?? 0;
+      if (unreadableLaudos >= 3) warnings.push(`${unreadableLaudos} laudo(s) não puderam ser lidos — o fim do dia usou o Concluído (sem advertência). A página do laudo pode ter mudado.`);
+      const invalidDays = summary.invalid_hours ?? 0;
+      if (invalidDays) warnings.push(`${invalidDays} dia(s) com horas fora do plausível (0 ou acima de ${settings.portoMaxShiftHours}h) ficaram sem apontamento — confira à mão.`);
+      if (budgetExceeded) warnings.push('A execução parou por limite de tempo; o restante fica para a próxima.');
+      const warningMessage = warnings.length ? `Atenção: ${warnings.join(' | ')}` : null;
+
       if (dryRun) {
         await finishSyncLog(logId, {
           status: 'dry_run',
@@ -622,26 +671,32 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           rows_written: importedCount,
           details,
           range,
+          error_message: warningMessage,
         });
-        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, partial: budgetExceeded, range, summary, details };
+        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, partial: budgetExceeded, range, summary, warnings, details };
       }
 
       const overallStatus = budgetExceeded ? 'partial' : importedCount ? 'success' : 'partial';
-      await recordHoursImportResult({ status: overallStatus });
+      await recordHoursImportResult({ status: overallStatus, error: warningMessage });
       await finishSyncLog(logId, {
         status: overallStatus,
         technicians_processed: techniciansProcessed,
         rows_written: rowsWritten,
         details,
         range,
+        error_message: warningMessage,
       });
 
-      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, partial: budgetExceeded, range, summary, details };
+      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, partial: budgetExceeded, range, summary, warnings, details };
     } finally {
       await browser.close();
     }
   } catch (error) {
-    const message = error instanceof PortoLoginError ? error.message : 'Erro inesperado ao importar horas do Porto.';
+    // The underlying error goes along (trimmed): it's what makes the history and the WhatsApp alert actionable.
+    const message =
+      error instanceof PortoLoginError
+        ? error.message
+        : `Erro inesperado ao importar horas do Porto: ${error instanceof Error ? error.message.split('\n')[0].slice(0, 200) : String(error)}`;
     console.error('[porto-jobs/hours] error:', error);
     if (!options.manual) {
       await recordHoursImportResult({ status: 'error', error: message });

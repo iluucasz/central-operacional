@@ -57,6 +57,8 @@ export type OrganizationSettings = {
   portoWarningText: string;
   /** Record days whose services were all cancelled as "Serviço cancelado". */
   portoRecordCancelledDays: boolean;
+  /** WhatsApp number warned when an automatic Porto run fails or looks wrong ('' = no alerts). */
+  portoAlertPhone: string;
 
   // Finance
   /** Bills due within this many days are flagged "vence em breve". */
@@ -99,6 +101,7 @@ export const DEFAULT_ORGANIZATION_SETTINGS: OrganizationSettings = {
   portoWarningEnabled: true,
   portoWarningText: 'laudo digital não preenchido no serviço {servico} — fim de jornada pelo horário de Concluído.',
   portoRecordCancelledDays: true,
+  portoAlertPhone: '',
 
   financeDueSoonDays: 7,
   financeCategories: [
@@ -250,6 +253,7 @@ function parseFields(source: Record<string, unknown>): ParsedFields {
     portoWarningEnabled: bool('portoWarningEnabled'),
     portoWarningText: text('portoWarningText'),
     portoRecordCancelledDays: bool('portoRecordCancelledDays'),
+    portoAlertPhone: text('portoAlertPhone'),
     financeDueSoonDays: number('financeDueSoonDays'),
     financeCategories: normalizeCategories(pick(source, 'financeCategories')),
   };
@@ -301,6 +305,10 @@ function validateField(key: keyof OrganizationSettings, value: unknown, all: Org
       return n >= 50 && n <= 100 ? null : 'O percentual para contar folga integral deve ficar entre 50 e 100.';
     case 'portoWarningText':
       return typeof value === 'string' && (value.trim() || !all.portoWarningEnabled) ? null : 'Escreva o texto da advertência (ou desligue a advertência).';
+    case 'portoAlertPhone': {
+      const digits = String(value).replace(/\D/g, '');
+      return !digits || (digits.length >= 10 && digits.length <= 13) ? null : 'O WhatsApp para alertas precisa de DDD e número (ou fica vazio).';
+    }
     case 'financeDueSoonDays':
       return isInteger(n) && n >= 0 && n <= 60 ? null : 'O aviso de vencimento deve ser um número inteiro de 0 a 60 dias.';
     case 'financeCategories': {
@@ -367,6 +375,7 @@ const MISSING_FIELD_MESSAGES: Record<keyof OrganizationSettings, string> = {
   portoWarningEnabled: 'Escolha se a advertência fica ligada.',
   portoWarningText: 'Escreva o texto da advertência (ou desligue a advertência).',
   portoRecordCancelledDays: 'Escolha se os dias de serviço cancelado são registrados.',
+  portoAlertPhone: 'O WhatsApp para alertas precisa de DDD e número (ou fica vazio).',
   financeDueSoonDays: 'O aviso de vencimento deve ser um número inteiro de 0 a 60 dias.',
   financeCategories: 'Informe ao menos uma categoria de despesa.',
 };

@@ -2,6 +2,7 @@
 // which has no `@/` path alias.
 import { sql } from '../db';
 import { getOrganizationSettings } from '../organization-settings-store';
+import { ensurePortoConfigSchema } from '../porto-config-schema';
 import {
   addDaysToKey,
   brasiliaNow,
@@ -47,6 +48,7 @@ const CATCH_UP_WINDOW_MINUTES = 180;
  * in test mode) hours are entered by hand and the configured time stands as is.
  */
 async function dailyHoursReady(dateKey: string): Promise<boolean> {
+  await ensurePortoConfigSchema();
   const [config] = await sql`SELECT automation_enabled, dry_run_only FROM porto_config WHERE id = 1`;
   if (!config?.automation_enabled || config.dry_run_only !== false) return true;
   // Both conditions: the run covered the day and finished on it or later (Brasília time). The
@@ -56,6 +58,8 @@ async function dailyHoursReady(dateKey: string): Promise<boolean> {
     SELECT 1 FROM porto_sync_log
     WHERE job_type = 'hours' AND status IN ('success', 'partial') AND range_end >= ${dateKey}
       AND (finished_at AT TIME ZONE 'America/Sao_Paulo')::date >= ${dateKey}::date
+      -- Only the night's automatic import: a manual afternoon run would send a partial day.
+      AND COALESCE(run_trigger, 'auto') = 'auto'
     LIMIT 1
   `;
   return Boolean(run);

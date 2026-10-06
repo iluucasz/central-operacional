@@ -4,9 +4,11 @@ import { runScheduleJob } from '../lib/porto-jobs/run-schedule-job';
 import { runDueNotifications } from '../lib/whatsapp/notifications';
 import { sql } from '../lib/db';
 import { getOrganizationSettings } from '../lib/organization-settings-store';
+import { sendPortoAlert } from '../lib/porto-alerts';
+import { ensurePortoConfigSchema } from '../lib/porto-config-schema';
 import { brasiliaNow } from '../lib/whatsapp/dates';
 import { isJobDue } from './job-schedule';
-import { waitForPortoLock } from './porto-lock';
+import { portoLockInfo, waitForPortoLock } from './porto-lock';
 import { startWorkerServer } from './server';
 
 function log(...args: unknown[]) {
@@ -25,9 +27,11 @@ async function runHours() {
   try {
     const result = await waitForPortoLock('apontamento de horas (automático)', () => runHoursJob({ manual: false }));
     log('Resultado (horas):', JSON.stringify(result));
+    await alertOnProblems('importação de horas', result);
     if (result.status !== 'success' && result.status !== 'partial') return;
   } catch (error) {
     log('Job de horas falhou:', error);
+    await sendPortoAlert('a importação de horas falhou', [error instanceof Error ? error.message : String(error)]);
     return;
   }
 
@@ -50,9 +54,22 @@ async function runSchedule() {
   try {
     const result = await waitForPortoLock('escala (automática)', () => runScheduleJob({ manual: false }));
     log('Resultado (escala):', JSON.stringify(result));
+    await alertOnProblems('importação da escala', result);
   } catch (error) {
     log('Job de escala falhou:', error);
+    await sendPortoAlert('a importação da escala falhou', [error instanceof Error ? error.message : String(error)]);
   }
+}
+
+/** WhatsApp to the admin (Configurações) when an automatic run failed or finished with warnings. */
+async function alertOnProblems(jobLabel: string, result: { status: string; error?: string; warnings?: string[] }) {
+  let alert: { sent: boolean; reason?: string } | null = null;
+  if (result.status === 'error') {
+    alert = await sendPortoAlert(`a ${jobLabel} falhou`, [result.error ?? 'Erro sem detalhe.']);
+  } else if (result.warnings?.length) {
+    alert = await sendPortoAlert(`a ${jobLabel} terminou com avisos`, result.warnings);
+  }
+  if (alert && !alert.sent) log(`Alerta da ${jobLabel} não enviado:`, alert.reason);
 }
 
 type ScheduledJob = 'hours' | 'schedule';
@@ -64,12 +81,15 @@ let lastRunDayLoaded = false;
  * at/after its configured time — so a restart right after 23:00 doesn't run the import twice.
  */
 async function loadLastRunDays() {
+  await ensurePortoConfigSchema();
   const settings = await getOrganizationSettings();
   const today = brasiliaNow().dateKey;
   const rows = await sql`
     SELECT job_type, MAX(to_char(started_at AT TIME ZONE 'America/Sao_Paulo', 'HH24:MI')) AS last_time
     FROM porto_sync_log
     WHERE (started_at AT TIME ZONE 'America/Sao_Paulo')::date = ${today}::date
+      -- A manual test/"Rodar agora" run doesn't replace the scheduled one.
+      AND COALESCE(run_trigger, 'auto') = 'auto'
     GROUP BY job_type
   `;
   for (const row of rows) {
@@ -80,8 +100,28 @@ async function loadLastRunDays() {
   lastRunDayLoaded = true;
 }
 
+/** A run holding the Porto lock this long is considered stuck (a normal night takes minutes). */
+const STUCK_RUN_ALERT_MS = 2 * 60 * 60 * 1000;
+let stuckAlertSentFor: string | null = null;
+
+/** Every later run waits on the lock, so a hung one would silently block the automation for good. */
+async function checkStuckRun() {
+  const held = portoLockInfo();
+  if (!held || held.heldForMs < STUCK_RUN_ALERT_MS) return;
+  const key = `${held.name}@${Math.floor((Date.now() - held.heldForMs) / 60000)}`;
+  if (stuckAlertSentFor === key) return;
+  stuckAlertSentFor = key;
+  const minutes = Math.round(held.heldForMs / 60000);
+  log(`Execução travada? "${held.name}" rodando há ${minutes} min.`);
+  await sendPortoAlert('uma execução parece travada', [
+    `"${held.name}" está rodando há ${minutes} minutos e bloqueia as próximas.`,
+    'Reinicie o worker na VPS (docker restart porto-worker) se continuar assim.',
+  ]);
+}
+
 async function runDueJobs() {
   try {
+    await checkStuckRun();
     if (!lastRunDayLoaded) await loadLastRunDays();
     const settings = await getOrganizationSettings();
     const now = brasiliaNow();

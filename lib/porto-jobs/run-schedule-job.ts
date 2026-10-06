@@ -35,6 +35,8 @@ export type ScheduleJobResult = {
   would_write?: number;
   error?: string;
   summary?: Record<string, number>;
+  /** Health checks that didn't stop the run but mean something is likely wrong (see the hours job). */
+  warnings?: string[];
   details: Array<Record<string, unknown>>;
 };
 
@@ -81,7 +83,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
   const config = await getPortoConfig();
   const missingCredentials = !config || !config.encrypted_password || !config.cpf;
   if (missingCredentials || (!options.manual && !config.automation_enabled)) {
-    const logId = await startSyncLog('schedule');
+    const logId = await startSyncLog('schedule', options.manual ? 'manual' : 'auto');
     options.onStarted?.(logId);
     const errorMessage = missingCredentials ? 'Credenciais não configuradas.' : 'Automação desligada.';
     await finishSyncLog(logId, { status: 'skipped', error_message: errorMessage });
@@ -90,7 +92,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
 
   const currentMonthKey = getCurrentMonthKey();
 
-  const logId = await startSyncLog('schedule');
+  const logId = await startSyncLog('schedule', options.manual ? 'manual' : 'auto');
   options.onStarted?.(logId);
   const settings = await getOrganizationSettings();
   const details: Array<Record<string, unknown>> = [];
@@ -140,9 +142,19 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
             continue;
           }
 
+          // No escala at all on Porto for the month (next month not published yet, or a technician
+          // without escala — on leave, the account owner): leave that technician's rows alone.
+          // Replacing them would wipe whatever schedule exists in the system and put nothing back,
+          // every night now that the import runs daily.
           const published = escalaDays.some((day) => day.startTime || day.endTime || day.unavailable);
-          if (offset > 0 && !published) {
-            details.push({ qra: socorrista.qra, technician_id: technician.id, technician_name: technician.name, action: 'next_month_not_published', month: `${year}-${month}` });
+          if (!published) {
+            details.push({
+              qra: socorrista.qra,
+              technician_id: technician.id,
+              technician_name: technician.name,
+              action: offset > 0 ? 'next_month_not_published' : 'no_escala_on_porto',
+              month: `${year}-${month}`,
+            });
             continue;
           }
           technicianIdsByMonth[index].push(technician.id);
@@ -188,6 +200,15 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
       }
       const rows = rowsByMonth.flat();
 
+      const warnings: string[] = [];
+      const checked = summarizeDetails(details);
+      if (!socorristas.length) warnings.push('A lista de socorristas do Porto veio vazia — o portal pode ter mudado de layout.');
+      if (socorristas.length && !technicianIdsByMonth[0].length && (checked.no_escala_on_porto ?? 0) > 0) {
+        warnings.push('Nenhum técnico tem escala no Porto para este mês — nada foi importado. O calendário pode ter mudado.');
+      }
+      if (checked.escala_fetch_failed) warnings.push(`${checked.escala_fetch_failed} escala(s) de técnico não puderam ser abertas — ficaram como estavam.`);
+      const warningMessage = warnings.length ? `Atenção: ${warnings.join(' | ')}` : null;
+
       const dryRun = options.forceWrite ? false : options.manual || config.dry_run_only !== false;
 
       if (dryRun) {
@@ -199,8 +220,9 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
           technicians_processed: techniciansProcessed,
           rows_written: rowsWritten,
           details,
+          error_message: warningMessage,
         });
-        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: rowsWritten, summary: summarizeDetails(details), details };
+        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: rowsWritten, summary: summarizeDetails(details), warnings, details };
       }
 
       for (const [index, { startDate, endDate }] of months.entries()) {
@@ -215,20 +237,24 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
       }
 
       const overallStatus = technicianIdsByMonth[0].length ? 'success' : 'partial';
-      await recordScheduleImportResult({ monthKey: currentMonthKey, status: overallStatus });
+      await recordScheduleImportResult({ monthKey: currentMonthKey, status: overallStatus, error: warningMessage });
       await finishSyncLog(logId, {
         status: overallStatus,
         technicians_processed: techniciansProcessed,
         rows_written: rowsWritten,
         details,
+        error_message: warningMessage,
       });
 
-      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, summary: summarizeDetails(details), details };
+      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, summary: summarizeDetails(details), warnings, details };
     } finally {
       await browser.close();
     }
   } catch (error) {
-    const message = error instanceof PortoLoginError ? error.message : 'Erro inesperado ao importar escala do Porto.';
+    const message =
+      error instanceof PortoLoginError
+        ? error.message
+        : `Erro inesperado ao importar escala do Porto: ${error instanceof Error ? error.message.split('\n')[0].slice(0, 200) : String(error)}`;
     console.error('[porto-jobs/schedule] error:', error);
     if (!options.manual) {
       await recordScheduleImportResult({ monthKey: currentMonthKey, status: 'error', error: message });

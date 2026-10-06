@@ -11,12 +11,14 @@ export async function getPortoConfig() {
   return (rows[0] as Record<string, unknown> | undefined) ?? null;
 }
 
-export async function startSyncLog(jobType: SyncJobType): Promise<string> {
+export type SyncRunTrigger = 'auto' | 'manual';
+
+export async function startSyncLog(jobType: SyncJobType, runTrigger: SyncRunTrigger): Promise<string> {
   await ensurePortoConfigSchema();
   const id = randomUUID();
   await sql`
-    INSERT INTO porto_sync_log (id, job_type, status)
-    VALUES (${id}, ${jobType}, 'running')
+    INSERT INTO porto_sync_log (id, job_type, status, run_trigger)
+    VALUES (${id}, ${jobType}, 'running', ${runTrigger})
   `;
   return id;
 }

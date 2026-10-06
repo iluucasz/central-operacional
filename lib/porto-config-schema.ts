@@ -72,6 +72,14 @@ export async function ensurePortoConfigSchema() {
         ALTER TABLE porto_sync_log
         ADD COLUMN IF NOT EXISTS range_end DATE
       `;
+
+      // 'auto' (the worker's scheduled run) or 'manual' (admin test / "Rodar agora"). The worker's
+      // restart check and the "Fim do expediente" WhatsApp gate only trust automatic runs — a manual
+      // run in the afternoon must not count as that night's import. NULL = rows from before this.
+      await sql`
+        ALTER TABLE porto_sync_log
+        ADD COLUMN IF NOT EXISTS run_trigger VARCHAR(16)
+      `;
     })().catch((error) => {
       portoConfigSchemaReady = null;
       throw error;

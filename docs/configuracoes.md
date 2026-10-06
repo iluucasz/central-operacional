@@ -43,6 +43,7 @@ no dia em que a tela entrou no ar.
 | Usar conclusão do laudo | sim | Fim do dia sem assinatura: conclusão do laudo antes do Concluído. |
 | Advertência + texto | ligada | Nota `ADVERTÊNCIA: <texto>`. O marcador `ADVERTÊNCIA:` é fixo, porque é por ele que o robô reconhece um dia advertido. `{servico}` = número do serviço. |
 | Registrar serviço cancelado | sim | Job de horas (situação "Serviço cancelado"). |
+| WhatsApp para alertas do robô | vazio | Worker: aviso quando uma execução automática falha, termina com avisos de saúde ou fica travada (>2h). Vazio = sem alertas. |
 | Aviso de vencimento | 7 dias | Controle de despesas ("A vencer"). |
 | Categorias de despesa | lista anterior | Sugestões do campo Categoria no controle de despesas. |
 

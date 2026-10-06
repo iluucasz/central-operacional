@@ -43,6 +43,7 @@ type FormState = Record<NumericKey, string> &
   Record<TimeKey, string> &
   Record<BooleanKey, boolean> & {
     portoWarningText: string;
+    portoAlertPhone: string;
     tiers: Array<{ id: number; minServices: string; amount: string }>;
     financeCategories: string[];
   };
@@ -90,6 +91,7 @@ function toForm(settings: OrganizationSettings): FormState {
     portoWarningEnabled: settings.portoWarningEnabled,
     portoRecordCancelledDays: settings.portoRecordCancelledDays,
     portoWarningText: settings.portoWarningText,
+    portoAlertPhone: settings.portoAlertPhone,
     tiers: settings.serviceAwardTiers.map((tier) => ({ id: nextTierId++, minServices: String(tier.minServices), amount: formatNumber(tier.amount) })),
     financeCategories: [...settings.financeCategories],
   };
@@ -120,6 +122,7 @@ function toPayload(form: FormState) {
     portoUseLaudoConclusion: form.portoUseLaudoConclusion,
     portoWarningEnabled: form.portoWarningEnabled,
     portoWarningText: form.portoWarningText,
+    portoAlertPhone: form.portoAlertPhone,
     portoRecordCancelledDays: form.portoRecordCancelledDays,
     financeDueSoonDays: number('financeDueSoonDays'),
     financeCategories: form.financeCategories,
@@ -370,6 +373,21 @@ export default function ConfiguracoesPage() {
             <NumberField id="porto-max-hours" label="Máximo de horas por dia" unit="horas" hint="Um dia calculado acima disso é rejeitado como inválido." value={form.portoMaxShiftHours} onChange={(value) => update('portoMaxShiftHours', value)} />
             <NumberField id="porto-lookahead" label="Escala do mês seguinte" unit="dias" hint="Nos últimos N dias do mês também importa o mês seguinte, se já estiver publicado (0 = não importa)." value={form.portoNextMonthLookaheadDays} onChange={(value) => update('portoNextMonthLookaheadDays', value)} />
             <NumberField id="porto-day-off" label="Folga integral a partir de" unit="%" hint="Quanto do turno uma indisponibilidade precisa cobrir para o dia contar como folga." value={form.portoFullDayOffPercent} onChange={(value) => update('portoFullDayOffPercent', value)} />
+            <FieldShell
+              label="WhatsApp para alertas do robô"
+              htmlFor="porto-alert-phone"
+              hint="Recebe um aviso quando a importação automática falha ou encontra algo estranho (ex.: o Porto mudou de layout). Vazio = sem alertas."
+            >
+              <input
+                id="porto-alert-phone"
+                type="tel"
+                inputMode="tel"
+                value={form.portoAlertPhone}
+                onChange={(event) => update('portoAlertPhone', event.target.value)}
+                placeholder="(11) 99999-9999"
+                className={inputClassName}
+              />
+            </FieldShell>
           </div>
 
           <div className="mt-4 grid gap-3 lg:grid-cols-2">

@@ -62,6 +62,8 @@ export function jobDetailActionLabel(action: string | undefined) {
       return 'Sem "Hora Prevista" válida — usou horário da escala como aproximação';
     case 'start_from_timeline':
       return 'Hora Prevista depois do fim — início pelo horário "Em Execução" do serviço';
+    case 'no_escala_on_porto':
+      return 'Sem escala no Porto neste mês — escala do sistema mantida';
     case 'next_month_not_published':
       return 'Escala do mês seguinte ainda não publicada no Porto (não importada)';
     case 'warning_kept':

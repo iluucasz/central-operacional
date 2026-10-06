@@ -376,3 +376,36 @@ refazer a busca do dia.
   desconta 1h dessas linhas; Não mantém como está.
 - **"Data de separação do laudo":** esclarecido com a cliente — ela pedia usar o laudo em vez do
   Concluído, que é o que já é feito.
+
+## Prevenção (2026-10-06, madrugada)
+
+- **Escala sem dados no Porto não apaga a do sistema:** se um técnico não tem nenhuma escala no Porto
+  no mês (licença, dono da conta etc.), a reimportação diária deixa as linhas dele como estão
+  (`no_escala_on_porto`). Antes, apagava toda a escala futura dele no sistema e não colocava nada.
+- **Execução automática × manual:** `porto_sync_log.run_trigger` ('auto' | 'manual'). O agendador
+  do worker (ao reiniciar) e o "Fim do expediente" só consideram execuções automáticas — um "Rodar
+  agora" à tarde não conta mais como a importação da noite (antes: a mensagem saía com horas parciais
+  e bloqueava o envio certo; e um reinício podia pular a importação do dia).
+- **Verificações de saúde** em cada execução, gravadas no histórico (coluna de erro, com "Atenção:")
+  e no resultado (`warnings`):
+  - horas: lista de socorristas vazia; nenhum socorrista casa com técnico ativo; técnico ativo fora da
+    lista; busca sem nenhum serviço no período; coluna de status não reconhecida; nome de socorrista
+    fora da lista ou ambíguo; **socorrista com serviços no Porto e sem técnico ativo no sistema**;
+    3+ serviços que não abriram; 3+ laudos ilegíveis; dias com horas fora do plausível; execução
+    interrompida por tempo;
+  - escala: lista vazia; nenhum técnico com escala no mês; escala de técnico que não abriu.
+- **Alerta por WhatsApp** (Configurações → "WhatsApp para alertas do robô", opcional): o worker
+  avisa quando uma execução automática falha, termina com avisos ou fica mais de 2h travada (ela
+  seguraria a trava e bloquearia as próximas). Usa a mesma Evolution das notificações, independente
+  do liga/desliga delas. Se o WhatsApp estiver desconectado, o alerta não sai (só no log).
+- Mensagens de erro inesperado agora trazem o erro de verdade (até 200 caracteres), para o histórico
+  e o alerta servirem de diagnóstico.
+- **VPS:** cada build deixa ~2,4 GB de imagem e cache. O disco chegou a 81% em 06/10 — ver
+  "Redeploy" na memória/nota de deploy: apagar imagens antigas, `docker builder prune` e rodar o
+  container com rotação de log (`--log-opt max-size=20m --log-opt max-file=5`).
+
+Riscos que continuam (sem como prevenir só pelo código): worker/VPS fora do ar (nenhum alerta sai,
+porque quem alerta é o próprio worker); WhatsApp desconectado (alertas e notificações não saem);
+sessão do Porto expirando no meio de uma execução muito longa (os dias que falharem ficam para a
+próxima execução); serviço com "Data Comb." diferente do dia real de execução (as horas contam no
+dia combinado).
