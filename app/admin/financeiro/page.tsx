@@ -44,7 +44,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useOrganizationSettings } from '@/hooks/use-organization-settings';
 import { formatCurrency, formatDate, normalizeText } from '@/lib/formatters';
+import { DEFAULT_ORGANIZATION_SETTINGS } from '@/lib/organization-settings';
 import type { FinancialEntry, FinancialEntryStatus, FinancialEntryType } from '@/lib/types';
 
 type EntryFormData = {
@@ -88,25 +90,14 @@ function getLocalDateKey(date = new Date()) {
 const todayKey = getLocalDateKey();
 const defaultCompetenceMonth = todayKey.slice(0, 7);
 const inputClassName = 'min-h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring';
-const financialCategories = [
-  'Geral',
-  'Cartão de crédito',
-  'Financiamento',
-  'Aluguel',
-  'Energia',
-  'Água',
-  'Internet',
-  'Telefone',
-  'Impostos',
-  'Fornecedores',
-  'Manutenção',
-  'Combustível',
-  'Folha',
-  'Marketing',
-  'Reserva',
-  'Investimentos',
-  'Outros',
-];
+/**
+ * Configurações → Financeiro (category suggestions and the "vence em breve" window). The page syncs
+ * it from useOrganizationSettings() at the top of every render, before the helpers below run.
+ */
+const financeRules = {
+  categories: DEFAULT_ORGANIZATION_SETTINGS.financeCategories,
+  dueSoonDays: DEFAULT_ORGANIZATION_SETTINGS.financeDueSoonDays,
+};
 
 function createInitialFormData(type: FinancialEntryType = 'payable'): EntryFormData {
   return {
@@ -228,7 +219,7 @@ function getEntryBadge(entry: FinancialEntry): { label: string; tone: 'neutral' 
 
   const daysUntil = getDaysUntil(entry.due_date);
   if (daysUntil < 0) return { label: 'Atrasada', tone: 'danger' };
-  if (daysUntil <= 7) return { label: 'A vencer', tone: 'warning' };
+  if (daysUntil <= financeRules.dueSoonDays) return { label: 'A vencer', tone: 'warning' };
   return { label: 'Pendente', tone: 'neutral' };
 }
 
@@ -244,7 +235,7 @@ function getDueLabel(entry: FinancialEntry) {
   const daysUntil = getDaysUntil(entry.due_date);
   if (daysUntil < 0) return `${formatDayCount(Math.abs(daysUntil))} em atraso`;
   if (daysUntil === 0) return 'Vence hoje';
-  if (daysUntil <= 7) return `Vence em ${formatDayCount(daysUntil)}`;
+  if (daysUntil <= financeRules.dueSoonDays) return `Vence em ${formatDayCount(daysUntil)}`;
   return formatDate(entry.due_date);
 }
 
@@ -422,6 +413,11 @@ function entryToSpreadsheetRow(entry: FinancialEntry): SpreadsheetRow {
 
 export default function AdminFinanceiroPage() {
   const { user, loading } = useAppSession();
+  const { settings: organizationSettings } = useOrganizationSettings();
+  financeRules.categories = organizationSettings.financeCategories;
+  financeRules.dueSoonDays = organizationSettings.financeDueSoonDays;
+  // Listed in the memos below that filter by it, so they recompute once the settings arrive.
+  const dueSoonDays = organizationSettings.financeDueSoonDays;
   const [entries, setEntries] = useState<FinancialEntry[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [dataError, setDataError] = useState('');
@@ -518,7 +514,7 @@ export default function AdminFinanceiroPage() {
     const overdueEntries = pendingEntries.filter((entry) => getDaysUntil(entry.due_date) < 0);
     const dueSoonEntries = pendingEntries.filter((entry) => {
       const daysUntil = getDaysUntil(entry.due_date);
-      return daysUntil >= 0 && daysUntil <= 7;
+      return daysUntil >= 0 && daysUntil <= financeRules.dueSoonDays;
     });
 
     return {
@@ -526,7 +522,7 @@ export default function AdminFinanceiroPage() {
       overdueEntries,
       dueSoonEntries,
     };
-  }, [entries, entriesInCompetence]);
+  }, [dueSoonDays, entries, entriesInCompetence]);
 
   const previousSummary = useMemo(() => summarizeMonthEntries(entriesInPreviousCompetence), [entriesInPreviousCompetence]);
   const reserveInvestmentEntriesInCompetence = useMemo(
@@ -583,7 +579,7 @@ export default function AdminFinanceiroPage() {
 
         if (statusFilter === 'due_soon') {
           const daysUntil = getDaysUntil(entry.due_date);
-          if (isEntryFullyPaid(entry) || daysUntil < 0 || daysUntil > 7) return false;
+          if (isEntryFullyPaid(entry) || daysUntil < 0 || daysUntil > financeRules.dueSoonDays) return false;
         }
 
         if (statusFilter === 'overdue') {
@@ -594,7 +590,7 @@ export default function AdminFinanceiroPage() {
         return !query || haystack.includes(normalizeText(query));
       })
       .sort(sortEntries);
-  }, [entriesInCompetence, query, statusFilter, typeFilter]);
+  }, [dueSoonDays, entriesInCompetence, query, statusFilter, typeFilter]);
 
   function openCreateDialog(type: FinancialEntryType = 'payable') {
     setEditingEntryId(null);
@@ -985,7 +981,7 @@ export default function AdminFinanceiroPage() {
             <div>
               <p className="font-medium">
                 {formatCount(summary.overdueEntries.length, 'conta atrasada', 'contas atrasadas')} e{' '}
-                {formatCount(summary.dueSoonEntries.length, 'conta vencendo', 'contas vencendo')} nos próximos 7 dias.
+                {formatCount(summary.dueSoonEntries.length, 'conta vencendo', 'contas vencendo')} nos próximos {formatDayCount(financeRules.dueSoonDays)}.
               </p>
               <p className="mt-1 text-amber-700">
                 Próximo item: {alertEntries[0].description} - {formatCurrency(alertEntries[0].amount)} ({getDueLabel(alertEntries[0])}).
@@ -1006,7 +1002,7 @@ export default function AdminFinanceiroPage() {
           tone={resultTone}
           accentText
         />
-        <MetricCard title="A vencer" value={summary.dueSoonEntries.length} hint="Próximos 7 dias" icon={Clock3} tone={summary.dueSoonEntries.length ? 'warning' : 'success'} />
+        <MetricCard title="A vencer" value={summary.dueSoonEntries.length} hint={`Próximos ${formatDayCount(financeRules.dueSoonDays)}`} icon={Clock3} tone={summary.dueSoonEntries.length ? 'warning' : 'success'} />
         <MetricCard title="Atrasadas" value={summary.overdueEntries.length} hint="Pendências vencidas" icon={AlertTriangle} tone={summary.overdueEntries.length ? 'danger' : 'success'} />
       </div>
 
@@ -1262,7 +1258,7 @@ export default function AdminFinanceiroPage() {
                 })}
               </div>
             ) : (
-              <EmptyState icon={CalendarDays} title="Sem vencimentos urgentes" description="Não há contas atrasadas ou vencendo nos próximos 7 dias." />
+              <EmptyState icon={CalendarDays} title="Sem vencimentos urgentes" description={`Não há contas atrasadas ou vencendo nos próximos ${formatDayCount(financeRules.dueSoonDays)}.`} />
             )}
           </DataPanel>
         </div>
@@ -1329,7 +1325,7 @@ export default function AdminFinanceiroPage() {
                 className={inputClassName}
               />
               <datalist id="financial-category-suggestions">
-                {financialCategories.map((category) => (
+                {financeRules.categories.map((category) => (
                   <option key={category} value={category} />
                 ))}
               </datalist>

@@ -12,7 +12,8 @@ import { PageHeader } from '@/components/page-header';
 import { ProgressGauge } from '@/components/progress-gauge';
 import { StatusBadge } from '@/components/status-badge';
 import { formatCurrency, formatDate, formatHours, formatNumber, formatTime, formatTimeRange, monthKeyFromDate, resolveCompetenceMonth } from '@/lib/formatters';
-import { STANDARD_HOURS_PER_MONTH } from '@/lib/hour-bank';
+import { useOrganizationSettings } from '@/hooks/use-organization-settings';
+import { fortnightForDay } from '@/lib/organization-settings';
 import type { Payroll, Schedule, Service, ServiceFortnight, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 import { useTechnicianVisibility } from '@/hooks/use-technician-visibility';
@@ -68,12 +69,13 @@ function getDateDay(value: string | Date | null | undefined) {
   return Number.isNaN(date.getTime()) ? 0 : date.getDate();
 }
 
-function getServicePeriod(service: Service): ServiceFortnight {
+/** The service's own fortnight, or by day of month with Configurações → "Último dia da Q1". */
+function getServicePeriod(service: Service, fortnightSplitDay: number): ServiceFortnight {
   if (service.fortnight_period === 'Q1' || service.fortnight_period === 'Q2') {
     return service.fortnight_period;
   }
 
-  return getDateDay(service.date_performed) <= 15 ? 'Q1' : 'Q2';
+  return fortnightForDay(getDateDay(service.date_performed), fortnightSplitDay);
 }
 
 function getDateKey(value: string | Date | null | undefined) {
@@ -102,14 +104,21 @@ function formatCompetence(value: string) {
   return `${monthNames[monthNumber - 1]}/${year}`;
 }
 
-function matchesPeriod(dateValue: string | Date | null | undefined, period: PeriodFilter) {
+function matchesPeriod(dateValue: string | Date | null | undefined, period: PeriodFilter, fortnightSplitDay: number) {
   if (period === 'monthly') return true;
-  return getDateDay(dateValue) <= 15 ? period === 'Q1' : period === 'Q2';
+  return fortnightForDay(getDateDay(dateValue), fortnightSplitDay) === period;
 }
 
 export default function TechnicianDashboard() {
   const { user, loading } = useAppSession();
   const { visibility, loading: visibilityLoading } = useTechnicianVisibility();
+  const { settings } = useOrganizationSettings();
+  const splitDay = settings.fortnightSplitDay;
+  const monthlyHoursTarget = settings.monthlyHours;
+  // Configurações → Prêmio por produção: the tiers' OS counts are the technician's goals.
+  const serviceGoals = settings.serviceAwardTiers.map((tier) => tier.minServices);
+  const firstGoal = serviceGoals[0];
+  const lastGoal = serviceGoals[serviceGoals.length - 1];
   // When the admin pins this screen to one month, that month is the only option in the filter.
   const allowedMonth = resolveAllowedMonth(visibility.dashboard.month);
   const [services, setServices] = useState<Service[]>([]);
@@ -213,8 +222,8 @@ export default function TechnicianDashboard() {
   );
 
   const periodServices = useMemo(
-    () => monthlyServices.filter((service) => periodFilter === 'monthly' || getServicePeriod(service) === periodFilter),
-    [monthlyServices, periodFilter],
+    () => monthlyServices.filter((service) => periodFilter === 'monthly' || getServicePeriod(service, splitDay) === periodFilter),
+    [monthlyServices, periodFilter, splitDay],
   );
 
   const servicesByType = useMemo(() => {
@@ -239,12 +248,12 @@ export default function TechnicianDashboard() {
   );
 
   const periodWorkHours = useMemo(
-    () => monthlyWorkHours.filter((item) => matchesPeriod(item.date, periodFilter)),
-    [monthlyWorkHours, periodFilter],
+    () => monthlyWorkHours.filter((item) => matchesPeriod(item.date, periodFilter, splitDay)),
+    [monthlyWorkHours, periodFilter, splitDay],
   );
 
-  const q1ServicesCount = monthlyServices.filter((service) => getServicePeriod(service) === 'Q1').length;
-  const q2ServicesCount = monthlyServices.filter((service) => getServicePeriod(service) === 'Q2').length;
+  const q1ServicesCount = monthlyServices.filter((service) => getServicePeriod(service, splitDay) === 'Q1').length;
+  const q2ServicesCount = monthlyServices.filter((service) => getServicePeriod(service, splitDay) === 'Q2').length;
   const currentPayroll = payroll.find((item) => resolveCompetenceMonth(item.competence_month) === competenceMonth);
   const nextSchedule = useMemo(() => {
     const todayKey = getDateKey(new Date());
@@ -279,14 +288,14 @@ export default function TechnicianDashboard() {
   const netTotal = roundCurrency(currentPayroll?.net_total);
   const periodHours = periodWorkHours.reduce((total, item) => total + moneyValue(item.hours_worked), 0);
   const monthlyHoursTotal = monthlyWorkHours.reduce((total, item) => total + moneyValue(item.hours_worked), 0);
-  const monthlyHoursDebt = Math.max(0, STANDARD_HOURS_PER_MONTH - monthlyHoursTotal);
-  const monthlyHoursExtra = Math.max(0, monthlyHoursTotal - STANDARD_HOURS_PER_MONTH);
+  const monthlyHoursDebt = Math.max(0, monthlyHoursTarget - monthlyHoursTotal);
+  const monthlyHoursExtra = Math.max(0, monthlyHoursTotal - monthlyHoursTarget);
   const monthlyHoursHint = periodFilter === 'monthly'
     ? monthlyHoursDebt > 0
-      ? `Fez ${formatHours(monthlyHoursTotal)} • Devendo ${formatHours(monthlyHoursDebt)} • Meta ${formatHours(STANDARD_HOURS_PER_MONTH)}`
+      ? `Fez ${formatHours(monthlyHoursTotal)} • Devendo ${formatHours(monthlyHoursDebt)} • Meta ${formatHours(monthlyHoursTarget)}`
       : monthlyHoursExtra > 0
-        ? `Fez ${formatHours(monthlyHoursTotal)} • ${formatHours(monthlyHoursExtra)} acima da meta de ${formatHours(STANDARD_HOURS_PER_MONTH)}`
-        : `Fez ${formatHours(monthlyHoursTotal)} • Meta mensal de ${formatHours(STANDARD_HOURS_PER_MONTH)} concluída`
+        ? `Fez ${formatHours(monthlyHoursTotal)} • ${formatHours(monthlyHoursExtra)} acima da meta de ${formatHours(monthlyHoursTarget)}`
+        : `Fez ${formatHours(monthlyHoursTotal)} • Meta mensal de ${formatHours(monthlyHoursTarget)} concluída`
     : 'Horas lançadas no recorte';
   const selectedPeriodLabel = getPeriodLabel(periodFilter);
   const nextScheduleTime = nextSchedule?.start_time ? formatTime(nextSchedule.start_time) : 'Sem escala';
@@ -377,38 +386,43 @@ export default function TechnicianDashboard() {
         </DataPanel>
       </div>
 
-      <div className={`grid gap-5 ${visibility.dashboard.servicesByType ? 'xl:grid-cols-2' : ''}`}>
-        <DataPanel title="Metas por competência" description="Meta 1: 80 OS. Meta 2: 160 OS. Clique em um card para mudar o período.">
+      <div className={`grid gap-5 ${visibility.dashboard.servicesByType && serviceGoals.length ? 'xl:grid-cols-2' : ''}`}>
+        {serviceGoals.length ? (
+        <DataPanel
+          title="Metas por competência"
+          description={`${serviceGoals.map((goal, index) => `Meta ${index + 1}: ${goal} OS.`).join(' ')} Clique em um card para mudar o período.`}
+        >
           <div className="grid gap-3 sm:grid-cols-3">
             <ProgressGauge
               title="Mensal"
               value={monthlyServices.length}
-              max={Math.max(160, monthlyServices.length)}
+              goals={serviceGoals}
               subtitle="OS no mês"
               active={periodFilter === 'monthly'}
-              celebrationLevel={monthlyServices.length >= 160 ? 'mega' : monthlyServices.length >= 80 ? 'goal' : undefined}
+              celebrationLevel={serviceGoals.length > 1 && monthlyServices.length >= lastGoal ? 'mega' : monthlyServices.length >= firstGoal ? 'goal' : undefined}
               onClick={() => setPeriodFilter('monthly')}
             />
             <ProgressGauge
               title="Q1"
               value={q1ServicesCount}
-              max={Math.max(80, q1ServicesCount)}
+              goals={serviceGoals}
               subtitle="OS no Q1"
               active={periodFilter === 'Q1'}
-              celebrationLevel={q1ServicesCount >= 80 ? 'goal' : undefined}
+              celebrationLevel={q1ServicesCount >= firstGoal ? 'goal' : undefined}
               onClick={() => setPeriodFilter('Q1')}
             />
             <ProgressGauge
               title="Q2"
               value={q2ServicesCount}
-              max={Math.max(80, q2ServicesCount)}
+              goals={serviceGoals}
               subtitle="OS no Q2"
               active={periodFilter === 'Q2'}
-              celebrationLevel={q2ServicesCount >= 80 ? 'goal' : undefined}
+              celebrationLevel={q2ServicesCount >= firstGoal ? 'goal' : undefined}
               onClick={() => setPeriodFilter('Q2')}
             />
           </div>
         </DataPanel>
+        ) : null}
 
         {visibility.dashboard.servicesByType ? (
         <DataPanel title="Serviços por tipo" description="Clique em uma barra para refinar o recorte.">
@@ -463,7 +477,7 @@ export default function TechnicianDashboard() {
                         <td className="px-4 py-3 font-medium">{service.order_code}</td>
                         <td className="px-4 py-3 text-muted-foreground">{service.service_type}</td>
                         <td className="px-4 py-3">
-                          <StatusBadge tone="info">{getServicePeriod(service)}</StatusBadge>
+                          <StatusBadge tone="info">{getServicePeriod(service, splitDay)}</StatusBadge>
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">{formatDate(service.date_performed)}</td>
                         <td className="px-4 py-3 text-muted-foreground">{service.time_performed ? formatTime(service.time_performed) : '-'}</td>

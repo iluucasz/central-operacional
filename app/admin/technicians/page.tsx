@@ -38,28 +38,29 @@ import {
 import { formatCurrency, formatPercent, normalizeText } from '@/lib/formatters';
 import type { Technician, TechnicianStatus } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useOrganizationSettings } from '@/hooks/use-organization-settings';
+import { DEFAULT_ORGANIZATION_SETTINGS, type OrganizationSettings } from '@/lib/organization-settings';
 import { PhoneInput } from '@/components/phone-input';
 import { formatPhoneInput, validatePhone } from '@/lib/whatsapp/phone';
 
-const initialFormData = {
-  qra: '',
-  porto_name_hint: '',
-  name: '',
-  email: '',
-  phone: '',
-  password: '',
-  commission_percentage: 25,
-  base_salary: 2664.53,
-  va_allowance: 249,
-  vr_allowance: 783,
-  status: 'active' as TechnicianStatus,
-};
-
-type TechnicianFormData = typeof initialFormData;
-
-function createInitialFormData(): TechnicianFormData {
-  return { ...initialFormData };
+/** A new technician starts from the Configurações defaults. */
+function createInitialFormData(settings: OrganizationSettings = DEFAULT_ORGANIZATION_SETTINGS) {
+  return {
+    qra: '',
+    porto_name_hint: '',
+    name: '',
+    email: '',
+    phone: '',
+    password: '',
+    commission_percentage: settings.commissionPercentage,
+    base_salary: settings.baseSalary,
+    va_allowance: settings.vaAllowance,
+    vr_allowance: settings.vrAllowance,
+    status: 'active' as TechnicianStatus,
+  };
 }
+
+type TechnicianFormData = ReturnType<typeof createInitialFormData>;
 
 function createFormDataFromTechnician(technician: Technician): TechnicianFormData {
   return {
@@ -79,13 +80,14 @@ function createFormDataFromTechnician(technician: Technician): TechnicianFormDat
 
 export default function TechniciansPage() {
   const { user, loading } = useAppSession();
+  const { settings } = useOrganizationSettings();
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [techniciansLoading, setTechniciansLoading] = useState(true);
   const [query, setQuery] = useState('');
   const [isFormDialogOpen, setIsFormDialogOpen] = useState(false);
   const [editingTechnician, setEditingTechnician] = useState<Technician | null>(null);
   const [deletingTechnician, setDeletingTechnician] = useState<Technician | null>(null);
-  const [formData, setFormData] = useState<TechnicianFormData>(createInitialFormData);
+  const [formData, setFormData] = useState<TechnicianFormData>(() => createInitialFormData());
   const [formError, setFormError] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -121,7 +123,7 @@ export default function TechniciansPage() {
 
   function resetForm() {
     setEditingTechnician(null);
-    setFormData(createInitialFormData());
+    setFormData(createInitialFormData(settings));
     setFormError('');
   }
 

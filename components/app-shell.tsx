@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { PREVIEW_FLAG_COOKIE } from '@/lib/preview-mode';
 import { TECHNICIAN_PAGE_PATHS, type HideableTechnicianPage } from '@/lib/technician-visibility';
 import { resetTechnicianVisibilityCache, useTechnicianVisibility } from '@/hooks/use-technician-visibility';
+import { resetOrganizationSettingsCache } from '@/hooks/use-organization-settings';
 import { TechnicianVisibilityDialog } from '@/components/technician-visibility-dialog';
 import {
   BookOpen,
@@ -22,6 +23,7 @@ import {
   PanelLeftOpen,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   TrendingUp,
   Users,
   WalletCards,
@@ -63,6 +65,7 @@ const adminLinks: NavItem[] = [
   { href: '/admin/library', label: 'Biblioteca', icon: BookOpen },
   { href: '/admin/whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { href: '/admin/config-porto', label: 'Config. Porto', icon: ShieldCheck },
+  { href: '/admin/configuracoes', label: 'Configurações', icon: SlidersHorizontal },
 ];
 
 const technicianLinks: NavItem[] = [
@@ -262,6 +265,7 @@ export function AppShell({ children, role, userName }: AppShellProps) {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
       resetTechnicianVisibilityCache();
+      resetOrganizationSettingsCache();
       router.push('/login');
     } finally {
       setIsLoggingOut(false);

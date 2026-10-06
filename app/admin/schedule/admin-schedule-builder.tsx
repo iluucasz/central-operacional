@@ -44,7 +44,9 @@ import {
   type WeekendRotationCadence,
 } from '@/lib/schedule-planner';
 import type { Schedule, Technician, WorkHours } from '@/lib/types';
+import { DEFAULT_ORGANIZATION_SETTINGS, type OrganizationSettings } from '@/lib/organization-settings';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useOrganizationSettings } from '@/hooks/use-organization-settings';
 
 interface DayOffDraft {
   id: string;
@@ -242,9 +244,34 @@ interface RotationPreviewRow {
 
 const monthNames = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
 const weekdayLabels = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
-const DEFAULT_START_TIME = '08:00';
-const DEFAULT_END_TIME = '17:00';
-const DAILY_BREAK_HOURS = 1;
+/**
+ * Configurações rules used by the module-level helpers in this file. The page syncs it from
+ * useOrganizationSettings() at the top of every render (applyScheduleRules), before any helper runs
+ * — these helpers are only called from this page's render and handlers.
+ */
+const scheduleRules = {
+  defaultStartTime: DEFAULT_ORGANIZATION_SETTINGS.defaultShiftStart,
+  defaultEndTime: DEFAULT_ORGANIZATION_SETTINGS.defaultShiftEnd,
+  dailyBreakHours: DEFAULT_ORGANIZATION_SETTINGS.dailyBreakMinutes / 60,
+  dailyBreakMinutes: DEFAULT_ORGANIZATION_SETTINGS.dailyBreakMinutes,
+  chargeCancelledServicePlanned: DEFAULT_ORGANIZATION_SETTINGS.chargeCancelledServicePlanned,
+};
+
+function applyScheduleRules(settings: OrganizationSettings) {
+  scheduleRules.defaultStartTime = settings.defaultShiftStart;
+  scheduleRules.defaultEndTime = settings.defaultShiftEnd;
+  scheduleRules.dailyBreakHours = settings.dailyBreakMinutes / 60;
+  scheduleRules.dailyBreakMinutes = settings.dailyBreakMinutes;
+  scheduleRules.chargeCancelledServicePlanned = settings.chargeCancelledServicePlanned;
+}
+
+/** "1h", "30 min", "1h30" — the configured daily break, for on-screen text. */
+function formatBreakLabel(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (!hours) return `${rest} min`;
+  return rest ? `${hours}h${String(rest).padStart(2, '0')}` : `${hours}h`;
+}
 const hourBankPeriodOptions: Array<{ value: HourBankPeriodMode; label: string }> = [
   { value: 'day', label: 'Dia' },
   { value: 'week', label: 'Semana' },
@@ -383,13 +410,13 @@ function getHoursBetween(startTime: string | null | undefined, endTime: string |
   }
 
   const grossHours = (end - start) / 60;
-  const netHours = grossHours > DAILY_BREAK_HOURS ? grossHours - DAILY_BREAK_HOURS : grossHours;
+  const netHours = grossHours > scheduleRules.dailyBreakHours ? grossHours - scheduleRules.dailyBreakHours : grossHours;
 
   return Number(netHours.toFixed(2));
 }
 
 function addHoursToTime(startTime: string, hours: number) {
-  const start = parseTimeToMinutes(startTime) ?? parseTimeToMinutes(DEFAULT_START_TIME) ?? 0;
+  const start = parseTimeToMinutes(startTime) ?? parseTimeToMinutes(scheduleRules.defaultStartTime) ?? 0;
   const totalMinutes = Math.max(0, Math.round(start + hours * 60));
   const dayMinutes = totalMinutes % (24 * 60);
 
@@ -421,8 +448,9 @@ function getAttendanceBalance(draft: AttendanceDraft) {
   if (!isAttendanceSelected(draft)) return 0;
   if (draft.attendance_status === 'day_off' || draft.attendance_status === 'justified') return 0;
   if (draft.attendance_status === 'missed') return -draft.planned_hours;
-  // The cancellation isn't the technician's doing: the hours count, the planned ones aren't charged.
-  if (draft.attendance_status === 'cancelled_service') return getAttendanceWorkedHours(draft);
+  // By default the cancellation isn't the technician's doing: the hours count, the planned ones
+  // aren't charged (Configurações → "Dia de serviço cancelado cobra as horas previstas").
+  if (draft.attendance_status === 'cancelled_service' && !scheduleRules.chargeCancelledServicePlanned) return getAttendanceWorkedHours(draft);
 
   return getAttendanceWorkedHours(draft) - draft.planned_hours;
 }
@@ -463,10 +491,10 @@ function createInitialBuilderForm(): ScheduleBuilderForm {
     date: createDateInputValue(now),
     technician_scope: 'all',
     technician_ids: [],
-    weekday_start_time: DEFAULT_START_TIME,
-    weekday_end_time: DEFAULT_END_TIME,
-    weekend_start_time: DEFAULT_START_TIME,
-    weekend_end_time: DEFAULT_END_TIME,
+    weekday_start_time: scheduleRules.defaultStartTime,
+    weekday_end_time: scheduleRules.defaultEndTime,
+    weekend_start_time: scheduleRules.defaultStartTime,
+    weekend_end_time: scheduleRules.defaultEndTime,
     day_rules: {
       monday: createCoverageRule('all'),
       tuesday: createCoverageRule('all'),
@@ -573,7 +601,7 @@ function getScheduleDisplayTone(entry: Schedule | undefined) {
   return getStatusTone(entry.status);
 }
 
-function getSchedulePlannedTimes(entry: Schedule | undefined, fallbackStartTime = DEFAULT_START_TIME, fallbackEndTime = DEFAULT_END_TIME) {
+function getSchedulePlannedTimes(entry: Schedule | undefined, fallbackStartTime = scheduleRules.defaultStartTime, fallbackEndTime = scheduleRules.defaultEndTime) {
   const manual = parseManualAttendanceNote(entry?.notes);
 
   return {
@@ -598,7 +626,8 @@ function getSchedulePlannedHoursForBank(entry: Schedule | undefined) {
   const manualStatus = parseManualAttendanceNote(entry.notes).attendance_status;
   const { startTime, endTime } = getSchedulePlannedTimes(entry);
 
-  if (manualStatus === 'day_off' || manualStatus === 'justified' || manualStatus === 'cancelled_service') return 0;
+  if (manualStatus === 'day_off' || manualStatus === 'justified') return 0;
+  if (manualStatus === 'cancelled_service') return scheduleRules.chargeCancelledServicePlanned ? getHoursBetween(startTime, endTime) : 0;
   if (manualStatus === 'missed' || manualStatus === 'worked') return getHoursBetween(startTime, endTime);
   if (entry.status === 'completed') return getHoursBetween(startTime, endTime);
 
@@ -998,7 +1027,7 @@ function getGrossHoursBetween(startTime: string, endTime: string) {
  */
 function importRowMissingLunchBreak(row: { start_time: string; end_time: string; hours_worked: number }) {
   const gross = getGrossHoursBetween(row.start_time, row.end_time);
-  return gross > DAILY_BREAK_HOURS && Math.abs(row.hours_worked - gross) < 0.02;
+  return gross > scheduleRules.dailyBreakHours && Math.abs(row.hours_worked - gross) < 0.02;
 }
 
 function parseImportedHours(value: unknown, startTime: string, endTime: string) {
@@ -1239,8 +1268,19 @@ function DayRuleEditor({ label, dayLabel, rule, technicians, selectionLabel, fal
     </tr>
   );
 }
+/**
+ * Mounts the page only once the Configurações rules are in, so every memoized hour-bank / attendance
+ * calculation below starts from the real rules instead of caching values computed from the defaults.
+ */
 export function AdminScheduleBuilderPage() {
+  const { settings, loading } = useOrganizationSettings();
+  if (loading) return <LoadingShell role="admin" />;
+  return <AdminScheduleBuilderContent organizationSettings={settings} />;
+}
+
+function AdminScheduleBuilderContent({ organizationSettings }: { organizationSettings: OrganizationSettings }) {
   const { user, loading } = useAppSession();
+  applyScheduleRules(organizationSettings);
   const [schedule, setSchedule] = useState<Schedule[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [workHours, setWorkHours] = useState<WorkHours[]>([]);
@@ -1848,10 +1888,10 @@ export function AdminScheduleBuilderPage() {
   function applyImportLunchBreak() {
     const count = attendanceImportRows.filter(importRowMissingLunchBreak).length;
     setAttendanceImportRows((rows) => rows.map((row) => (
-      importRowMissingLunchBreak(row) ? { ...row, hours_worked: Number((row.hours_worked - DAILY_BREAK_HOURS).toFixed(2)) } : row
+      importRowMissingLunchBreak(row) ? { ...row, hours_worked: Number((row.hours_worked - scheduleRules.dailyBreakHours).toFixed(2)) } : row
     )));
     setAttendanceLunchPromptCount(0);
-    setAttendanceMessage(`Desconto de 1h de almoço aplicado em ${formatCount(count, 'apontamento', 'apontamentos')} da planilha.`);
+    setAttendanceMessage(`Desconto de ${formatBreakLabel(scheduleRules.dailyBreakMinutes)} de almoço aplicado em ${formatCount(count, 'apontamento', 'apontamentos')} da planilha.`);
   }
 
   function parseAttendanceWorkbook(workbook: XLSX.WorkBook, fileName: string) {
@@ -2082,8 +2122,8 @@ export function AdminScheduleBuilderPage() {
           : draft.schedule_status
             ? 'worked'
             : 'not_marked',
-        actual_start_time: draft.planned_start_time || DEFAULT_START_TIME,
-        actual_end_time: draft.planned_end_time || DEFAULT_END_TIME,
+        actual_start_time: draft.planned_start_time || scheduleRules.defaultStartTime,
+        actual_end_time: draft.planned_end_time || scheduleRules.defaultEndTime,
       })));
       setAttendanceError('');
       setAttendanceMessage(monthlyAttendanceDrafts.length
@@ -2099,8 +2139,8 @@ export function AdminScheduleBuilderPage() {
         : draft.schedule_status
           ? 'worked'
           : 'not_marked',
-      actual_start_time: draft.planned_start_time || DEFAULT_START_TIME,
-      actual_end_time: draft.planned_end_time || DEFAULT_END_TIME,
+      actual_start_time: draft.planned_start_time || scheduleRules.defaultStartTime,
+      actual_end_time: draft.planned_end_time || scheduleRules.defaultEndTime,
     })));
   }
 
@@ -2187,8 +2227,8 @@ export function AdminScheduleBuilderPage() {
 
     const entries = selectedDrafts.map((draft) => {
       const hoursWorked = getAttendanceWorkedHours(draft);
-      const startTime = normalizeTimeInput(attendanceHasHours(draft.attendance_status) ? draft.actual_start_time : draft.planned_start_time, DEFAULT_START_TIME);
-      const endTime = normalizeTimeInput(attendanceHasHours(draft.attendance_status) ? draft.actual_end_time : draft.planned_end_time, DEFAULT_END_TIME);
+      const startTime = normalizeTimeInput(attendanceHasHours(draft.attendance_status) ? draft.actual_start_time : draft.planned_start_time, scheduleRules.defaultStartTime);
+      const endTime = normalizeTimeInput(attendanceHasHours(draft.attendance_status) ? draft.actual_end_time : draft.planned_end_time, scheduleRules.defaultEndTime);
       const dateParts = draft.date.split('-').map(Number);
 
       return {
@@ -2196,8 +2236,8 @@ export function AdminScheduleBuilderPage() {
         date: draft.date,
         start_time: startTime,
         end_time: endTime,
-        planned_start_time: normalizeTimeInput(draft.planned_start_time, DEFAULT_START_TIME),
-        planned_end_time: normalizeTimeInput(draft.planned_end_time, DEFAULT_END_TIME),
+        planned_start_time: normalizeTimeInput(draft.planned_start_time, scheduleRules.defaultStartTime),
+        planned_end_time: normalizeTimeInput(draft.planned_end_time, scheduleRules.defaultEndTime),
         hours_worked: hoursWorked,
         week_number: getIsoWeekNumber(draft.date),
         month: dateParts[1],
@@ -4652,8 +4692,8 @@ export function AdminScheduleBuilderPage() {
                                 const status = event.target.value as AttendanceStatus;
                                 updateAttendanceDraft(draft.key, {
                                   attendance_status: status,
-                                  actual_start_time: draft.actual_start_time || draft.planned_start_time || DEFAULT_START_TIME,
-                                  actual_end_time: draft.actual_end_time || draft.planned_end_time || DEFAULT_END_TIME,
+                                  actual_start_time: draft.actual_start_time || draft.planned_start_time || scheduleRules.defaultStartTime,
+                                  actual_end_time: draft.actual_end_time || draft.planned_end_time || scheduleRules.defaultEndTime,
                                 });
                               }}
                               className="min-h-10 w-44 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
@@ -4750,8 +4790,8 @@ export function AdminScheduleBuilderPage() {
                                   const status = event.target.value as AttendanceStatus;
                                   updateMonthlyAttendanceDraft(draft.key, {
                                     attendance_status: status,
-                                    actual_start_time: draft.actual_start_time || draft.planned_start_time || DEFAULT_START_TIME,
-                                    actual_end_time: draft.actual_end_time || draft.planned_end_time || DEFAULT_END_TIME,
+                                    actual_start_time: draft.actual_start_time || draft.planned_start_time || scheduleRules.defaultStartTime,
+                                    actual_end_time: draft.actual_end_time || draft.planned_end_time || scheduleRules.defaultEndTime,
                                   });
                                 }}
                                 className="min-h-10 w-44 rounded-lg border border-input bg-background px-3 text-sm outline-none transition focus:ring-2 focus:ring-ring"
@@ -4946,16 +4986,16 @@ export function AdminScheduleBuilderPage() {
           <DialogHeader>
             <DialogTitle>Desconto de almoço</DialogTitle>
             <DialogDescription>
-              {formatCount(attendanceLunchPromptCount, 'apontamento da planilha está', 'apontamentos da planilha estão')} com as horas sem o desconto de 1h de almoço (saída menos entrada).
+              {formatCount(attendanceLunchPromptCount, 'apontamento da planilha está', 'apontamentos da planilha estão')} com as horas sem o desconto de {formatBreakLabel(scheduleRules.dailyBreakMinutes)} de almoço (saída menos entrada).
             </DialogDescription>
           </DialogHeader>
-          <p className="text-sm font-medium text-foreground">Deseja adicionar o desconto de 1h de almoço para todos os técnicos?</p>
+          <p className="text-sm font-medium text-foreground">Deseja adicionar o desconto de {formatBreakLabel(scheduleRules.dailyBreakMinutes)} de almoço para todos os técnicos?</p>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setAttendanceLunchPromptCount(0)}>
               Não, manter como está
             </Button>
             <Button type="button" onClick={applyImportLunchBreak}>
-              Sim, descontar 1h
+              Sim, descontar {formatBreakLabel(scheduleRules.dailyBreakMinutes)}
             </Button>
           </DialogFooter>
         </DialogContent>

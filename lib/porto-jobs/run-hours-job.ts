@@ -7,6 +7,8 @@ import { getServicoEndTime, searchServicosByDateRange, type PortoServiceEndTime,
 import { resolveTechnicianByQra } from '../porto-integration/technician-match';
 import { finishSyncLog, getPortoConfig, recordHoursImportResult, startSyncLog } from '../porto-sync-log';
 import { sql } from '../db';
+import { buildPortoWarningNote, netOfDailyBreak } from '../organization-settings';
+import { getOrganizationSettings } from '../organization-settings-store';
 import {
   applyWorkHourEntries,
   getExistingPortoImportedDates,
@@ -18,12 +20,8 @@ import {
 } from '../work-hours-service';
 import type { Technician } from '../types';
 
-const MAX_PLAUSIBLE_SHIFT_HOURS = 16;
-// Mirrors admin-schedule-builder.tsx's DAILY_BREAK_HOURS/getHoursBetween — "previsto" (planned
-// hours) always nets out an assumed 1h lunch break, so "realizado" needs the same deduction or the
-// two aren't comparable (confirmed live: every Porto-imported hours_worked exactly matched the raw
-// entrada-saída diff, zero exceptions, silently inflating saldo by ~1h on every full workday).
-const DAILY_BREAK_HOURS = 1;
+// The daily break, the maximum plausible day, the reprocess window, the warning and the cancelled-day
+// rules all come from Configurações (lib/organization-settings.ts), read once per run.
 const SEARCH_CHUNK_DAYS = 15; // matches the site's own client-side range cap (see servicos.ts)
 // How many of the day's last concluded services (by Hora Prev.) are opened to find the end of work.
 const END_CANDIDATE_SERVICES = 3;
@@ -135,16 +133,17 @@ function buildDateChunks(startKey: string, endKey: string): { startDateKey: stri
  * Uses the end's actual date rather than guessing: a shift crossing midnight (end on the next day)
  * adds 24h, while an end earlier than the start on the same day stays negative — and so invalid.
  * Before, any end past the start wrapped silently, so a service closed the next morning (e.g. start
- * 08:00, "Concluído" 08:30 the next day) was recorded as 0.5h instead of being rejected. Nets out
- * DAILY_BREAK_HOURS once the raw span exceeds it (see the constant's comment above).
+ * 08:00, "Concluído" 08:30 the next day) was recorded as 0.5h instead of being rejected.
+ *
+ * Nets out the configured daily break, like the admin hour bank does for "previsto" — otherwise
+ * "realizado" isn't comparable (confirmed live: Porto-imported hours used to be the raw span,
+ * inflating saldo by the whole break on every full workday).
  */
-function diffHours(startTime: string, endTime: string, endsNextDay: boolean) {
+function diffHours(startTime: string, endTime: string, endsNextDay: boolean, dailyBreakMinutes: number) {
   const [sh, sm] = startTime.split(':').map(Number);
   const [eh, em] = endTime.split(':').map(Number);
   const minutes = eh * 60 + em - (sh * 60 + sm) + (endsNextDay ? 24 * 60 : 0);
-  const grossHours = minutes / 60;
-  const netHours = grossHours > DAILY_BREAK_HOURS ? grossHours - DAILY_BREAK_HOURS : grossHours;
-  return Number(netHours.toFixed(2));
+  return Number(netOfDailyBreak(minutes / 60, dailyBreakMinutes).toFixed(2));
 }
 
 /**
@@ -189,6 +188,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
 
   const logId = await startSyncLog('hours');
   options.onStarted?.(logId);
+  const settings = await getOrganizationSettings();
   const details: Array<Record<string, unknown>> = [];
   let techniciansProcessed = 0;
   let importedCount = 0;
@@ -252,7 +252,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       // discrepancy. Force a reprocess of the last two calendar days regardless of the "already
       // imported" dedup so each day's previsto self-corrects the next time it's swept, once
       // Porto's escala has caught up, instead of being stuck forever with the same-day fallback.
-      const reprocessWindowStart = addDaysToKey(todayKey, -1);
+      const reprocessWindowStart = addDaysToKey(todayKey, -settings.portoReprocessDays);
       for (const key of Array.from(existingDates)) {
         if (key.slice(-10) >= reprocessWindowStart) {
           existingDates.delete(key);
@@ -336,15 +336,16 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       }
 
       const sortedDateKeys = Array.from(byDate.keys()).sort().reverse();
+      const endTimeOptions = { useLaudoConclusion: settings.portoUseLaudoConclusion };
 
       // The day's "previsto": the escala's shift for current-month days; for a day from another
       // month (yesterday on the 1st, or a manual run over past dates) only the current month's
       // escala is readable, so it keeps the previsto already recorded.
       const resolvePlanned = async (qra: string, technician: Technician, dateKey: string, fallbackEnd: string) => {
-        const planned = { start: '08:00', end: fallbackEnd };
+        const planned = { start: settings.defaultShiftStart, end: fallbackEnd };
         if (!dateKey.startsWith(monthStartKey.slice(0, 7))) {
           // Nothing recorded yet for that day: the standard shift, not the day's own times.
-          return storedPlanned.get(`${technician.id}::${dateKey}`) ?? { start: '08:00', end: '18:00' };
+          return storedPlanned.get(`${technician.id}::${dateKey}`) ?? { start: settings.defaultShiftStart, end: settings.defaultShiftEnd };
         }
         try {
           if (!escalaCache.has(qra)) {
@@ -353,7 +354,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             escalaCache.set(qra, await getEscalaForMonth(page, qra, { resolveUnavailability: false }));
           }
           const escalaDay = (escalaCache.get(qra) ?? []).find((day) => day.day === Number(dateKey.slice(8, 10)));
-          planned.start = escalaDay?.startTime ?? '08:00';
+          planned.start = escalaDay?.startTime ?? settings.defaultShiftStart;
           // The scheduled end of shift, not the actual completion time — otherwise "previsto" in the
           // schedule UI always shows the same value as the real time next to it. Falls back to the
           // real end only when the escala genuinely has no end time recorded.
@@ -426,7 +427,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             // live), so the hours run from the earliest Hora Prev. to the latest laudo signature
             // (or laudo conclusion) when a laudo exists; without one Porto has no end time at all
             // and the day is recorded with 0h and a note to adjust it by hand.
-            const cancelledServices = servicesForDay.filter((service) => /cancel/i.test(service.status));
+            const cancelledServices = settings.portoRecordCancelledDays ? servicesForDay.filter((service) => /cancel/i.test(service.status)) : [];
             if (!cancelledServices.length) {
               details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'no_concluded_service', date: dateKey, statuses: servicesForDay.map((service) => service.status) });
               continue;
@@ -436,7 +437,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             let cancelledFailed = false;
             for (const service of cancelledServices) {
               try {
-                const end = await getServicoEndTime(page, dateKey, { anoServico: service.anoServico, numeroServico: service.numeroServico });
+                const end = await getServicoEndTime(page, dateKey, { anoServico: service.anoServico, numeroServico: service.numeroServico }, endTimeOptions);
                 if (end.endTime && (!latestEnd || endSortKey(end) > endSortKey(latestEnd))) latestEnd = end;
               } catch (detailError) {
                 details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'service_detail_failed', date: dateKey, service: `${service.numeroServico}/${service.anoServico}`, error: detailError instanceof Error ? detailError.message.slice(0, 300) : String(detailError) });
@@ -452,14 +453,14 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
               .filter((value) => /^\d{1,2}:\d{2}$/.test(value))
               .sort((a, b) => timeToMinutes(a) - timeToMinutes(b))[0];
             // The previsto is the shift the technician was scheduled for, never the cancellation's times.
-            const planned = await resolvePlanned(qra, technician, dateKey, '18:00');
+            const planned = await resolvePlanned(qra, technician, dateKey, settings.defaultShiftEnd);
             const startTime = firstPrev ?? planned.start;
             let endTime = startTime;
             let hours = 0;
             if (latestEnd?.endTime) {
               const nextDay = latestEnd.endDate !== null && latestEnd.endDate !== dateKey.split('-').reverse().join('/');
-              const span = diffHours(startTime, latestEnd.endTime, nextDay);
-              if (span > 0 && span <= MAX_PLAUSIBLE_SHIFT_HOURS) {
+              const span = diffHours(startTime, latestEnd.endTime, nextDay, settings.dailyBreakMinutes);
+              if (span > 0 && span <= settings.portoMaxShiftHours) {
                 hours = span;
                 endTime = latestEnd.endTime;
               }
@@ -509,7 +510,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             const candidateCode = `${candidate.numeroServico}/${candidate.anoServico}`;
             let candidateEnd: PortoServiceEndTime;
             try {
-              candidateEnd = await getServicoEndTime(page, dateKey, { anoServico: candidate.anoServico, numeroServico: candidate.numeroServico });
+              candidateEnd = await getServicoEndTime(page, dateKey, { anoServico: candidate.anoServico, numeroServico: candidate.numeroServico }, endTimeOptions);
             } catch (detailError) {
               details.push({
                 qra,
@@ -542,8 +543,9 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           const serviceCode = `${endService.numeroServico}/${endService.anoServico}`;
 
           // Only a magnifier found and disabled is the technician's fault. `not_found`/`failed` mean
-          // we couldn't read the laudo — logged above, never turned into a warning.
-          const laudoMissing = endInfo.laudo === 'unavailable';
+          // we couldn't read the laudo — logged above, never turned into a warning. The warning
+          // itself can be switched off in Configurações (the end still comes from "Concluído").
+          const laudoMissing = endInfo.laudo === 'unavailable' && settings.portoWarningEnabled;
 
           // Real start of the day's work: the earliest "Hora Prevista" (cap_horaAtendimento)
           // among the day's concluded services — re-validated live (05/10/2026) against the
@@ -575,14 +577,15 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           }
 
           const endsNextDay = endInfo.endDate !== null && endInfo.endDate !== dateKey.split('-').reverse().join('/');
-          const hoursWorked = diffHours(actualStart, workEnd, endsNextDay);
-          if (hoursWorked <= 0 || hoursWorked > MAX_PLAUSIBLE_SHIFT_HOURS) {
+          const hoursWorked = diffHours(actualStart, workEnd, endsNextDay, settings.dailyBreakMinutes);
+          if (hoursWorked <= 0 || hoursWorked > settings.portoMaxShiftHours) {
             details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'invalid_hours', date: dateKey, actualStart, workEnd, endSource: endInfo.endSource, service: serviceCode, hoursWorked });
             continue;
           }
 
+          // The fixed "ADVERTÊNCIA:" marker is what getPortoWarningDates keys on — never recompute.
           const notes = laudoMissing
-            ? `Importado automaticamente do Porto Seguro. ADVERTÊNCIA: laudo digital não preenchido no serviço ${serviceCode} — fim de jornada pelo horário de Concluído.`
+            ? `Importado automaticamente do Porto Seguro. ${buildPortoWarningNote(settings.portoWarningText, serviceCode)}`
             : 'Importado automaticamente do Porto Seguro.';
 
           await recordDay(

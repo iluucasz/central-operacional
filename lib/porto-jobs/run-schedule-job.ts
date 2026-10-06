@@ -1,6 +1,7 @@
 import { decryptPortoPassword } from '../porto-crypto';
 import { launchAuthenticatedPortoSession } from '../porto-integration/browser';
 import { getEscalaForMonth } from '../porto-integration/escala';
+import { getOrganizationSettings } from '../organization-settings-store';
 import { PortoLoginError } from '../porto-integration/login';
 import { listSocorristas } from '../porto-integration/socorristas';
 import { resolveTechnicianByQra } from '../porto-integration/technician-match';
@@ -56,9 +57,6 @@ function getTodayKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
-/** How many days before the end of the month the next month's escala starts being imported. */
-const NEXT_MONTH_LOOKAHEAD_DAYS = 7;
-
 function getMonthDateRange(monthOffset: number) {
   const now = new Date();
   const target = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
@@ -94,6 +92,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
 
   const logId = await startSyncLog('schedule');
   options.onStarted?.(logId);
+  const settings = await getOrganizationSettings();
   const details: Array<Record<string, unknown>> = [];
   let techniciansProcessed = 0;
   let rowsWritten = 0;
@@ -114,7 +113,8 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
       // (sent the evening before) has an escala to read. Imported only for technicians whose next
       // month is already published on Porto (validated live 06/10/2026: November was).
       const months = [{ offset: 0, ...current, startDate: todayKey }];
-      if (Number(current.endDate.slice(8, 10)) - Number(todayKey.slice(8, 10)) < NEXT_MONTH_LOOKAHEAD_DAYS) {
+      // Configurações → "Escala do mês seguinte": how many days before the month ends (0 = never).
+      if (Number(current.endDate.slice(8, 10)) - Number(todayKey.slice(8, 10)) < settings.portoNextMonthLookaheadDays) {
         const next = getMonthDateRange(1);
         months.push({ offset: 1, ...next, startDate: `${next.year}-${String(next.month).padStart(2, '0')}-01` });
       }
@@ -132,7 +132,7 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         for (const [index, { offset, year, month, startDate }] of months.entries()) {
           let escalaDays;
           try {
-            escalaDays = await getEscalaForMonth(page, socorrista.qra, { monthOffset: offset });
+            escalaDays = await getEscalaForMonth(page, socorrista.qra, { monthOffset: offset, fullDayOffPercent: settings.portoFullDayOffPercent });
           } catch (escalaError) {
             // A navigation hiccup for one technician shouldn't abort the whole import — log it and
             // move on; that technician's rows for the month are left untouched.

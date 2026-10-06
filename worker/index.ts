@@ -2,6 +2,10 @@ import cron from 'node-cron';
 import { runHoursJob } from '../lib/porto-jobs/run-hours-job';
 import { runScheduleJob } from '../lib/porto-jobs/run-schedule-job';
 import { runDueNotifications } from '../lib/whatsapp/notifications';
+import { sql } from '../lib/db';
+import { getOrganizationSettings } from '../lib/organization-settings-store';
+import { brasiliaNow } from '../lib/whatsapp/dates';
+import { isJobDue } from './job-schedule';
 import { waitForPortoLock } from './porto-lock';
 import { startWorkerServer } from './server';
 
@@ -19,7 +23,7 @@ async function runHours() {
   // (waiting on the lock, or a long catch-up) finishes after midnight.
   const runDay = new Date();
   try {
-    const result = await waitForPortoLock('apontamento de horas (23:00)', () => runHoursJob({ manual: false }));
+    const result = await waitForPortoLock('apontamento de horas (automático)', () => runHoursJob({ manual: false }));
     log('Resultado (horas):', JSON.stringify(result));
     if (result.status !== 'success' && result.status !== 'partial') return;
   } catch (error) {
@@ -44,10 +48,55 @@ async function runWhatsApp(options: Parameters<typeof runDueNotifications>[0] = 
 async function runSchedule() {
   log('Iniciando job de escala...');
   try {
-    const result = await waitForPortoLock('escala (03:00)', () => runScheduleJob({ manual: false }));
+    const result = await waitForPortoLock('escala (automática)', () => runScheduleJob({ manual: false }));
     log('Resultado (escala):', JSON.stringify(result));
   } catch (error) {
     log('Job de escala falhou:', error);
+  }
+}
+
+type ScheduledJob = 'hours' | 'schedule';
+const lastRunDay: Record<ScheduledJob, string | null> = { hours: null, schedule: null };
+let lastRunDayLoaded = false;
+
+/**
+ * On (re)start, treat a job as done today when the sync log already has a run of it started today
+ * at/after its configured time — so a restart right after 23:00 doesn't run the import twice.
+ */
+async function loadLastRunDays() {
+  const settings = await getOrganizationSettings();
+  const today = brasiliaNow().dateKey;
+  const rows = await sql`
+    SELECT job_type, MAX(to_char(started_at AT TIME ZONE 'America/Sao_Paulo', 'HH24:MI')) AS last_time
+    FROM porto_sync_log
+    WHERE (started_at AT TIME ZONE 'America/Sao_Paulo')::date = ${today}::date
+    GROUP BY job_type
+  `;
+  for (const row of rows) {
+    const job = row.job_type as ScheduledJob;
+    const configured = job === 'hours' ? settings.portoHoursImportTime : settings.portoScheduleImportTime;
+    if ((job === 'hours' || job === 'schedule') && String(row.last_time) >= configured) lastRunDay[job] = today;
+  }
+  lastRunDayLoaded = true;
+}
+
+async function runDueJobs() {
+  try {
+    if (!lastRunDayLoaded) await loadLastRunDays();
+    const settings = await getOrganizationSettings();
+    const now = brasiliaNow();
+    const jobs: Array<[ScheduledJob, string, () => Promise<void>]> = [
+      ['hours', settings.portoHoursImportTime, runHours],
+      ['schedule', settings.portoScheduleImportTime, runSchedule],
+    ];
+    for (const [job, time, run] of jobs) {
+      if (!isJobDue({ scheduledTime: time, nowMinutes: now.minutes, today: now.dateKey, lastRunDay: lastRunDay[job] })) continue;
+      // Claimed before starting, so the next tick never starts it again while it runs.
+      lastRunDay[job] = now.dateKey;
+      void run();
+    }
+  } catch (error) {
+    log('Agendador: falha ao verificar os horários:', error);
   }
 }
 
@@ -65,25 +114,25 @@ if (runArg) {
   }
   job().then(() => process.exit(0));
 } else {
-  // Expressed directly in Brasília time (America/Sao_Paulo) rather than a fixed UTC offset — a
-  // real IANA timezone handles any future DST policy change correctly, a hardcoded UTC hour
-  // wouldn't. Hours moved to fire at 23:00 BRT exactly (was 23:00 UTC = 20:00 BRT); schedule stays
-  // at the same real-world moment as before (03:00 BRT = 06:00 UTC), just expressed natively
-  // instead of converted. No maxDuration here — each run goes to full completion instead of
-  // needing the Vercel route's time-budget cutoff.
-  cron.schedule('0 23 * * *', runHours, { timezone: 'America/Sao_Paulo' });
-  cron.schedule('0 3 * * *', runSchedule, { timezone: 'America/Sao_Paulo' });
+  // The run times are edited in Configurações (portoHoursImportTime / portoScheduleImportTime, in
+  // Brasília time), so instead of fixed cron expressions — which would need a restart on every
+  // change — a once-a-minute tick checks them. No maxDuration here: each run goes to completion.
+  cron.schedule('* * * * *', () => void runDueJobs(), { timezone: 'America/Sao_Paulo' });
   // WhatsApp notification times are edited in the admin UI, so rather than one cron entry per
   // notification (which would need a worker restart on every change) this just checks every few
   // minutes what is due. Each notification claims its day/month before running, so it's once only.
   if (whatsappConfigured) {
     cron.schedule('*/5 * * * *', () => runWhatsApp(), { timezone: 'America/Sao_Paulo' });
   }
-  log(
-    `Porto worker iniciado. Horas: 23:00 (Brasília) diariamente. Escala: 03:00 (Brasília) diariamente. WhatsApp: ${
-      whatsappConfigured ? 'verificação a cada 5 min.' : 'desligado (EVOLUTION_API_URL/KEY/INSTANCE não configurados no container).'
-    }`,
-  );
+  void getOrganizationSettings()
+    .then((settings) =>
+      log(
+        `Porto worker iniciado. Horas: ${settings.portoHoursImportTime} e escala: ${settings.portoScheduleImportTime} (Brasília, de Configurações). WhatsApp: ${
+          whatsappConfigured ? 'verificação a cada 5 min.' : 'desligado (EVOLUTION_API_URL/KEY/INSTANCE não configurados no container).'
+        }`,
+      ),
+    )
+    .catch((error) => log('Não foi possível ler as Configurações na partida:', error));
 
   // Everything the admin UI triggers on demand (test-login, técnico match, manual job runs) is
   // now served from here too — the Vercel routes are thin proxies (see server.ts).

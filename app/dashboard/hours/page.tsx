@@ -10,15 +10,13 @@ import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { formatDate, formatHours, formatTime, formatTimeRange, monthKeyFromDate, normalizeText, resolveCompetenceMonth } from '@/lib/formatters';
-import { STANDARD_HOURS_PER_MONTH } from '@/lib/hour-bank';
 import type { Payroll, Schedule, WorkHours } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useOrganizationSettings } from '@/hooks/use-organization-settings';
 import { useTechnicianVisibility } from '@/hooks/use-technician-visibility';
 import { resolveAllowedMonth } from '@/lib/technician-visibility';
 
 const defaultCompetenceMonth = new Date().toISOString().slice(0, 7);
-const MONTHLY_HOURS_TARGET = STANDARD_HOURS_PER_MONTH;
-const MONTHLY_HOURS_WARNING_FLOOR = 200;
 const monthNames = [
   'Janeiro',
   'Fevereiro',
@@ -53,6 +51,10 @@ function moneyValue(value: number | string | null | undefined) {
 export default function TechnicianHoursPage() {
   const { user, loading } = useAppSession();
   const { visibility, loading: visibilityLoading, blocked } = useTechnicianVisibility({ page: 'hours' });
+  // Configurações → Jornada mensal and the hours alert floor.
+  const { settings } = useOrganizationSettings();
+  const MONTHLY_HOURS_TARGET = settings.monthlyHours;
+  const MONTHLY_HOURS_WARNING_FLOOR = settings.monthlyHoursWarningFloor;
   const allowedMonth = resolveAllowedMonth(visibility.hours.month);
   const [workHours, setWorkHours] = useState<WorkHours[]>([]);
   const [payroll, setPayroll] = useState<Payroll[]>([]);
@@ -229,7 +231,7 @@ export default function TechnicianHoursPage() {
 
       <div className="grid gap-3 md:grid-cols-4">
         <MetricCard title="Horas realizadas" value={formatHours(totalHours)} hint={`${monthlyWorkHours.length} dia(s) na competência`} icon={Clock3} tone={hoursTone} accentText />
-        <MetricCard title="Horas totais" value={formatHours(MONTHLY_HOURS_TARGET)} hint="Meta fixa do mês" icon={Clock3} />
+        <MetricCard title="Horas totais" value={formatHours(MONTHLY_HOURS_TARGET)} hint="Meta do mês" icon={Clock3} />
         <MetricCard title="Saldo do mês" value={formatHours(balance)} hint={balanceHint} icon={Clock3} tone={hoursTone} accentText />
         <MetricCard title="Banco de horas" value={formatHours(payrollBalance)} hint={payrollBalanceHint} icon={Clock3} tone={payrollBalance < 0 ? 'danger' : 'warning'} />
       </div>

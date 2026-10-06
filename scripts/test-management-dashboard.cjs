@@ -6,11 +6,25 @@ const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
 const filename = path.resolve(__dirname, '../lib/management-dashboard.ts');
-const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
-});
+const transpile = (file) =>
+  ts.transpileModule(fs.readFileSync(file, 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+  }).outputText;
+// The module imports other dependency-free lib/*.ts files (e.g. organization-settings) — resolve
+// those extensionless relative imports to the .ts file and load them through the same transpiler.
+require.extensions['.ts'] = (tsModule, tsFile) => tsModule._compile(transpile(tsFile), tsFile);
+const resolveFilename = Module._resolveFilename;
+Module._resolveFilename = function (request, parent, ...rest) {
+  if (request.startsWith('.') && parent?.filename?.endsWith('.ts')) {
+    const candidate = path.resolve(path.dirname(parent.filename), `${request}.ts`);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return resolveFilename.call(this, request, parent, ...rest);
+};
 const calculationModule = new Module(filename, module);
-calculationModule._compile(compiled.outputText, filename);
+calculationModule.filename = filename;
+calculationModule.paths = Module._nodeModulePaths(path.dirname(filename));
+calculationModule._compile(transpile(filename), filename);
 const {
   buildManagementDashboard: build,
   defaultManagementFilters,

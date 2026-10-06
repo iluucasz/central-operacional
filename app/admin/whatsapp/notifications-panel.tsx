@@ -265,7 +265,7 @@ function NotificationCard({ type, setting, onChange, unsaved, testPhone, enabled
 
           {type === 'daily_hours' ? (
             <p className="text-xs text-muted-foreground">
-              Sai logo após a importação das horas da Porto (23h). O horário acima é a segunda chance, caso a importação atrase ou falhe.
+              Sai logo após a importação das horas da Porto (horário em Configurações). O horário acima é a segunda chance: só dispara depois que a importação do dia terminou.
             </p>
           ) : null}
 

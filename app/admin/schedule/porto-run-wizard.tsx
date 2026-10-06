@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronRight, Loader2, PlayCircle, Users, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useOrganizationSettings } from '@/hooks/use-organization-settings';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   actionSummaryLabel,
@@ -144,6 +145,7 @@ function JobResultView({ result }: { result: PortoJobResult }) {
 }
 
 export function PortoRunWizard() {
+  const { settings: organizationSettings } = useOrganizationSettings();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<WizardStep>('intro');
   const [config, setConfig] = useState<PortoConfigSummary | null>(null);
@@ -357,9 +359,9 @@ export function PortoRunWizard() {
                         : 'Atenção: a automação está desligada em Config. Porto.'}
                     </p>
                     <p className="mt-1">
-                      Apontamento de horas: todo dia às 23:00 (horário de Brasília), varre o mês inteiro até hoje e pula dias já
-                      importados. Escala: checagem diária às 03:00 (horário de Brasília), importa automaticamente só quando sai uma escala
-                      nova.
+                      Apontamento de horas: todo dia às {organizationSettings.portoHoursImportTime} (horário de Brasília), varre o mês
+                      inteiro até hoje e pula dias já importados. Escala: todo dia às {organizationSettings.portoScheduleImportTime}{' '}
+                      (horário de Brasília), reimporta de hoje até o fim do mês. Os horários ficam em Configurações.
                     </p>
                     <p className="mt-1">
                       Use este assistente só quando quiser forçar uma execução agora — por exemplo, pra ver um resultado sem esperar o

@@ -1,4 +1,6 @@
 // Pure calculations shared by the dashboard and its regression tests.
+import { DEFAULT_ORGANIZATION_SETTINGS, netOfDailyBreak, type OrganizationSettings } from './organization-settings';
+
 export const MONTH_NAMES = [
   'Janeiro',
   'Fevereiro',
@@ -110,7 +112,10 @@ export type AttendanceSchedule = {
 };
 export type AttendanceHours = { technicianId: string; date: string; hours: number };
 
-function plannedHours(start?: string | null, end?: string | null) {
+/** The Configurações rules the attendance aggregation follows (same as the admin hour bank). */
+export type AttendanceRules = Pick<OrganizationSettings, 'dailyBreakMinutes' | 'chargeCancelledServicePlanned'>;
+
+function plannedHours(start: string | null | undefined, end: string | null | undefined, dailyBreakMinutes: number) {
   const minutes = (value: string | null | undefined) => {
     const match = value?.match(/^(\d{1,2}):(\d{2})/);
     return match ? Number(match[1]) * 60 + Number(match[2]) : null;
@@ -118,15 +123,15 @@ function plannedHours(start?: string | null, end?: string | null) {
   const from = minutes(start),
     to = minutes(end);
   if (from === null || to === null || to <= from) return 0;
-  const hours = (to - from) / 60;
-  // Same one-hour break used in the existing administrative hour bank.
-  return hours > 1 ? hours - 1 : hours;
+  // Same daily break netted out by the administrative hour bank.
+  return netOfDailyBreak((to - from) / 60, dailyBreakMinutes);
 }
 
 export function aggregateOperations(
   schedules: AttendanceSchedule[],
   hours: AttendanceHours[],
   today: string,
+  rules: AttendanceRules = DEFAULT_ORGANIZATION_SETTINGS,
 ): OperationRow[] {
   const daily = new Map<
     string,
@@ -172,15 +177,16 @@ export function aggregateOperations(
       ?.toLowerCase();
     const missed = status?.includes('falta') ?? false;
     const justified = status?.includes('justificado') ?? false;
-    // Hours count, but the day's planned hours aren't charged — the cancellation isn't the technician's doing.
-    const cancelledService = /servi[cç]o cancelado/.test(status ?? '');
+    // By default the hours count but the day's planned hours aren't charged — the cancellation isn't
+    // the technician's doing (Configurações → chargeCancelledServicePlanned).
+    const cancelledService = /servi[cç]o cancelado/.test(status ?? '') && !rules.chargeCancelledServicePlanned;
     const off = status?.includes('folga') || (schedule?.status === 'cancelled' && !status);
     const worked = day.worked > 0 || status?.includes('trabalhou') || schedule?.status === 'completed';
     const pending = !missed && !justified && !off && !worked && schedule?.status === 'scheduled' && day.date < today;
     const plannedMatch = schedule?.notes?.match(/(?:^|;\s*)previsto=(\d{1,2}:\d{2})-(\d{1,2}:\d{2})/i);
     const planned =
       schedule && !off && !justified && !cancelledService && (missed || worked)
-        ? plannedHours(plannedMatch?.[1] ?? schedule.start, plannedMatch?.[2] ?? schedule.end)
+        ? plannedHours(plannedMatch?.[1] ?? schedule.start, plannedMatch?.[2] ?? schedule.end, rules.dailyBreakMinutes)
         : 0;
     // A missing time record or an unknown shift is not proof of an hours debit/credit.
     const balance = planned > 0 && (day.worked > 0 || missed) ? day.worked - planned : 0;

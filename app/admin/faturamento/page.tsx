@@ -37,7 +37,9 @@ import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useOrganizationSettings } from '@/hooks/use-organization-settings';
 import { formatCurrency, formatNumber, normalizeText, resolveCompetenceMonth } from '@/lib/formatters';
+import { valueOrDefault } from '@/lib/organization-settings';
 import type { Payroll, Service, Technician } from '@/lib/types';
 import { CHART_COLORS as chartColors } from '@/lib/chart-theme';
 
@@ -162,15 +164,11 @@ function getMetricTone(value: number): 'success' | 'danger' {
   return value >= 0 ? 'success' : 'danger';
 }
 
-const DEFAULT_COMMISSION_PERCENTAGE = 25;
-
-function getCommissionPercentage(technician?: Technician | null) {
-  const value = Number(technician?.commission_percentage ?? 0);
-  return value > 0 ? value : DEFAULT_COMMISSION_PERCENTAGE;
-}
-
 export default function AdminFaturamentoPage() {
   const { user, loading } = useAppSession();
+  // The technician's own commission, or the Configurações default when it's unset.
+  const { settings } = useOrganizationSettings();
+  const defaultCommissionPercentage = settings.commissionPercentage;
   const [services, setServices] = useState<Service[]>([]);
   const [payroll, setPayroll] = useState<Payroll[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
@@ -257,8 +255,8 @@ export default function AdminFaturamentoPage() {
   );
 
   const commissionPercentageMap = useMemo(
-    () => new Map(technicians.map((technician) => [technician.id, getCommissionPercentage(technician)])),
-    [technicians],
+    () => new Map(technicians.map((technician) => [technician.id, valueOrDefault(technician.commission_percentage, defaultCommissionPercentage)])),
+    [defaultCommissionPercentage, technicians],
   );
 
   useEffect(() => {
@@ -281,7 +279,7 @@ export default function AdminFaturamentoPage() {
   function calculateBaseFromServices(list: Service[]) {
     return roundCurrency(
       list.reduce(
-        (total, service) => total + moneyValue(service.value) * ((commissionPercentageMap.get(service.technician_id) ?? DEFAULT_COMMISSION_PERCENTAGE) / 100),
+        (total, service) => total + moneyValue(service.value) * ((commissionPercentageMap.get(service.technician_id) ?? defaultCommissionPercentage) / 100),
         0,
       ),
     );
@@ -435,7 +433,7 @@ export default function AdminFaturamentoPage() {
     periodServices.forEach((service) => {
       const id = service.technician_id || normalizeText(service.technician_name || 'sem-funcionario');
       const row = getRow(id, service.technician_name || service.technician_id);
-      const percentage = commissionPercentageMap.get(service.technician_id) ?? DEFAULT_COMMISSION_PERCENTAGE;
+      const percentage = commissionPercentageMap.get(service.technician_id) ?? defaultCommissionPercentage;
       row.serviceCount += 1;
       row.revenue = roundCurrency(row.revenue + moneyValue(service.value));
       row.calculationBase = roundCurrency(row.calculationBase + moneyValue(service.value) * (percentage / 100));

@@ -7,19 +7,34 @@ import { Flame, ShieldAlert, Sparkles, Target, Trophy } from 'lucide-react';
 interface ProgressGaugeProps {
   title: string;
   value: number;
-  max?: number;
   subtitle?: string;
   active?: boolean;
   onClick?: () => void;
   celebrationLevel?: 'goal' | 'mega';
   celebrationLabel?: string;
+  /**
+   * OS goals, ascending — Configurações → Prêmio por produção. The first is the gauge's target;
+   * the last (when there are several) is the "turbo" one. Red/yellow bands sit at 50%/75% of the
+   * target (40/60 for the original 80).
+   */
+  goals?: number[];
 }
 
-const DANGER_THRESHOLD = 40;
-const WARNING_THRESHOLD = 60;
-const TARGET_THRESHOLD = 80;
-const TURBO_THRESHOLD = 160;
+const DEFAULT_GOALS = [80, 160];
 const COUNT_UP_DURATION = 6000;
+
+type GaugeThresholds = { danger: number; warning: number; target: number; turbo: number };
+
+function resolveThresholds(goals: number[]): GaugeThresholds {
+  const sorted = [...goals].filter((goal) => goal > 0).sort((a, b) => a - b);
+  const target = sorted[0] ?? DEFAULT_GOALS[0];
+  return {
+    danger: Math.round(target * 0.5),
+    warning: Math.round(target * 0.75),
+    target,
+    turbo: sorted.length > 1 ? sorted[sorted.length - 1] : Number.POSITIVE_INFINITY,
+  };
+}
 
 type GaugeTone = {
   label: string;
@@ -50,8 +65,8 @@ function easeOutCubic(progress: number) {
   return 1 - Math.pow(1 - progress, 3);
 }
 
-function getGaugeTone(value: number): GaugeTone {
-  if (value < DANGER_THRESHOLD) {
+function getGaugeTone(value: number, thresholds: GaugeThresholds): GaugeTone {
+  if (value < thresholds.danger) {
     return {
       label: 'Risco',
       icon: ShieldAlert,
@@ -61,7 +76,7 @@ function getGaugeTone(value: number): GaugeTone {
     };
   }
 
-  if (value < WARNING_THRESHOLD) {
+  if (value < thresholds.warning) {
     return {
       label: 'Aquecendo',
       icon: Flame,
@@ -71,7 +86,7 @@ function getGaugeTone(value: number): GaugeTone {
     };
   }
 
-  if (value < TARGET_THRESHOLD) {
+  if (value < thresholds.target) {
     return {
       label: 'Reta final',
       icon: Target,
@@ -81,9 +96,9 @@ function getGaugeTone(value: number): GaugeTone {
     };
   }
 
-  if (value < TURBO_THRESHOLD) {
+  if (value < thresholds.turbo) {
     return {
-      label: 'Meta 80',
+      label: `Meta ${thresholds.target}`,
       icon: Trophy,
       accent: '#10b981',
       badgeClass: 'border-emerald-200 bg-emerald-100/90 text-emerald-800',
@@ -114,13 +129,18 @@ const confettiPieces = [
 export function ProgressGauge({
   title,
   value,
-  max = TURBO_THRESHOLD,
   subtitle,
   active,
   onClick,
   celebrationLevel,
   celebrationLabel,
+  goals = DEFAULT_GOALS,
 }: ProgressGaugeProps) {
+  const thresholds = resolveThresholds(goals);
+  const goalBadges = [...goals].filter((goal) => goal > 0).sort((a, b) => a - b);
+  const TARGET_THRESHOLD = thresholds.target;
+  const DANGER_THRESHOLD = thresholds.danger;
+  const WARNING_THRESHOLD = thresholds.warning;
   const normalizedValue = Math.max(value, 0);
   const [animatedValue, setAnimatedValue] = useState(0);
   const [showCelebration, setShowCelebration] = useState(false);
@@ -134,7 +154,7 @@ export function ProgressGauge({
   const redAngle = (DANGER_THRESHOLD / TARGET_THRESHOLD) * 180;
   const greenStartAngle = (WARNING_THRESHOLD / TARGET_THRESHOLD) * 180;
   const pointerTip = pointOnArc(currentAngle, 48);
-  const tone = getGaugeTone(normalizedValue);
+  const tone = getGaugeTone(normalizedValue, thresholds);
   const Icon = isGoalCelebration ? Sparkles : tone.icon;
   const gaugeId = useId().replace(/:/g, '');
   const progressPercent = Math.min((animatedNormalizedValue / TARGET_THRESHOLD) * 100, 100);
@@ -277,7 +297,7 @@ export function ProgressGauge({
 
       <div className="relative z-10 mt-4">
         <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-[0.18em] text-muted-foreground">
-          <span>Meta 80</span>
+          <span>Meta {TARGET_THRESHOLD}</span>
           <span>{displayProgress}%</span>
         </div>
         <div className="relative mt-2 h-3 overflow-hidden rounded-full bg-slate-200/70">
@@ -288,27 +308,27 @@ export function ProgressGauge({
           </div>
         </div>
         <div className="mt-2 flex items-center justify-between text-[10px] font-black uppercase tracking-[0.18em]">
-          <span className="text-rose-600">0-39</span>
-          <span className="text-amber-600">40-59</span>
-          <span className="text-emerald-700">60-80</span>
+          <span className="text-rose-600">0-{DANGER_THRESHOLD - 1}</span>
+          <span className="text-amber-600">{DANGER_THRESHOLD}-{WARNING_THRESHOLD - 1}</span>
+          <span className="text-emerald-700">{WARNING_THRESHOLD}-{TARGET_THRESHOLD}</span>
         </div>
       </div>
 
       <div className="relative z-10 mt-4 flex flex-wrap gap-2">
-        <span
-          className={`rounded-full border px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.16em] ${
-            value >= TARGET_THRESHOLD ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-border bg-background/80 text-muted-foreground'
-          }`}
-        >
-          Meta 80
-        </span>
-        <span
-          className={`rounded-full border px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.16em] ${
-            value >= TURBO_THRESHOLD ? 'border-teal-200 bg-teal-50 text-teal-800' : 'border-border bg-background/80 text-muted-foreground'
-          }`}
-        >
-          Meta 160
-        </span>
+        {goalBadges.map((goal, index) => (
+          <span
+            key={goal}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.16em] ${
+              value >= goal
+                ? index === goalBadges.length - 1 && goalBadges.length > 1
+                  ? 'border-teal-200 bg-teal-50 text-teal-800'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-border bg-background/80 text-muted-foreground'
+            }`}
+          >
+            Meta {goal}
+          </span>
+        ))}
       </div>
 
       {isMegaCelebration ? (

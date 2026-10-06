@@ -21,11 +21,11 @@ type IndisponibilidadeEntry = { start: string; end: string; reason: string };
 
 const SOCORRISTAS_MENU_ID = 'PDP-00192';
 const SOCORRISTAS_URL = 'https://wwws.portoseguro.com.br/integracoesportaldeprestadores/click/ConSocor.xhtml?portal=2';
-// How much of the shift an indisponibilidade needs to cover before the day counts as fully off,
-// rather than a partial break within an otherwise normal working day — allows a little slack for
-// entries that don't land exactly on the shift boundary (e.g. FOLGA covering 08:00-20:00 over a
-// nominal 08:00-18:00 shift, confirmed live).
-const FULL_DAY_COVERAGE_THRESHOLD = 0.9;
+// Default share of the shift an indisponibilidade needs to cover before the day counts as fully
+// off, rather than a partial break within a normal working day — slack for entries that don't land
+// exactly on the shift boundary (e.g. FOLGA 08:00-20:00 over a 08:00-18:00 shift, confirmed live).
+// Configurações → "Folga integral a partir de" overrides it (option fullDayOffPercent).
+const DEFAULT_FULL_DAY_OFF_PERCENT = 90;
 
 function timeToMinutes(value: string): number | null {
   const match = value.match(/^(\d{1,2}):(\d{2})$/);
@@ -158,6 +158,8 @@ export async function getEscalaForMonth(
     resolveUnavailability?: boolean;
     /** 0 = current month (default), 1 = next month — the calendar is advanced with its own nextMonth(). */
     monthOffset?: number;
+    /** % of the shift an indisponibilidade must cover for a full day off (default 90). */
+    fullDayOffPercent?: number;
   } = {},
 ): Promise<PortoEscalaDay[]> {
   const monthOffset = options.monthOffset ?? 0;
@@ -260,7 +262,7 @@ export async function getEscalaForMonth(
         return total + overlapMinutes(start, end, shiftStart, shiftEnd);
       }, 0);
 
-      const isFullDayOff = coveredMinutes >= shiftMinutes * FULL_DAY_COVERAGE_THRESHOLD;
+      const isFullDayOff = coveredMinutes >= (shiftMinutes * (options.fullDayOffPercent ?? DEFAULT_FULL_DAY_OFF_PERCENT)) / 100;
       result.push({
         ...day,
         unavailable: isFullDayOff,

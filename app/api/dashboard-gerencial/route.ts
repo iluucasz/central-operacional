@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { sql } from '@/lib/db';
 import { aggregateOperations, number, type ManagementData } from '@/lib/management-dashboard';
+import { getOrganizationSettings } from '@/lib/organization-settings-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -135,6 +136,7 @@ export async function GET(request: NextRequest) {
         })),
         hours.map((r) => ({ technicianId: String(r.technician_id), date: r.date, hours: number(r.hours) })),
         today,
+        await getOrganizationSettings(),
       ),
     };
     return NextResponse.json(data, { headers: { 'Cache-Control': 'private, no-store' } });

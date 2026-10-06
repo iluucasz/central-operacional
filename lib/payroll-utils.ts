@@ -1,11 +1,8 @@
 import { neon } from '@neondatabase/serverless';
-import { STANDARD_HOURS_PER_MONTH } from './hour-bank';
+import { calculateServiceAward, valueOrDefault, type OrganizationSettings, type ServiceAwardTier } from './organization-settings';
+import { getOrganizationSettings } from './organization-settings-store';
 
 const sql = neon(process.env.DATABASE_URL!);
-const DEFAULT_BASE_SALARY = 2664.53;
-const DEFAULT_VA_ALLOWANCE = 249;
-const DEFAULT_VR_ALLOWANCE = 783;
-const DEFAULT_COMMISSION_PERCENTAGE = 25;
 let payrollSchemaReady: Promise<void> | null = null;
 
 function roundCurrency(value: number | string | null | undefined): number {
@@ -124,17 +121,17 @@ export async function calculateServiceCount(
   return Number(result[0]?.total || 0);
 }
 
-export function calculateExtraordinaryAward(serviceCount: number): number {
-  if (serviceCount >= 160) return 600;
-  if (serviceCount >= 80) return 250;
-  return 0;
+/** Award of the highest production tier reached (Configurações → Prêmio por produção). */
+export function calculateExtraordinaryAward(serviceCount: number, tiers: ServiceAwardTier[]): number {
+  return calculateServiceAward(serviceCount, tiers);
 }
 
 function calculateCommissionFromTotals(
   totalServices: number,
   commissionPercentage: number,
+  defaultCommissionPercentage: number,
 ): number {
-  const safeCommissionPercentage = commissionPercentage > 0 ? commissionPercentage : DEFAULT_COMMISSION_PERCENTAGE;
+  const safeCommissionPercentage = valueOrDefault(commissionPercentage, defaultCommissionPercentage);
 
   return roundCurrency(Math.max(0, totalServices) * (safeCommissionPercentage / 100));
 }
@@ -236,17 +233,14 @@ export async function calculateCommission(
     return 0;
   }
 
-  const commissionPercentage = Number(technician[0]?.commission_percentage || 0);
-  const baseSalary = Number(technician[0]?.base_salary || 0);
-  const vaAllowance = Number(technician[0]?.va_allowance || 0);
-  const vrAllowance = Number(technician[0]?.vr_allowance || 0);
-  const calculationBase = calculateCommissionFromTotals(totalServices, commissionPercentage);
+  const settings = await getOrganizationSettings();
+  const calculationBase = calculateCommissionFromTotals(totalServices, Number(technician[0]?.commission_percentage || 0), settings.commissionPercentage);
 
   return calculateCommissionRemainder(
     calculationBase,
-    baseSalary > 0 ? baseSalary : DEFAULT_BASE_SALARY,
-    vaAllowance > 0 ? vaAllowance : DEFAULT_VA_ALLOWANCE,
-    vrAllowance > 0 ? vrAllowance : DEFAULT_VR_ALLOWANCE,
+    valueOrDefault(technician[0]?.base_salary, settings.baseSalary),
+    valueOrDefault(technician[0]?.va_allowance, settings.vaAllowance),
+    valueOrDefault(technician[0]?.vr_allowance, settings.vrAllowance),
   );
 }
 
@@ -274,9 +268,10 @@ export async function calculateTotalHours(
 export async function calculateHourBank(
   technicianId: string,
   competenceMonth: string,
-  totalHours: number
+  totalHours: number,
+  monthlyHours: number,
 ): Promise<{ extra_hours: number; bank_balance: number }> {
-  const extraHours = Math.max(0, totalHours - STANDARD_HOURS_PER_MONTH);
+  const extraHours = Math.max(0, totalHours - monthlyHours);
 
   // Get current bank balance
   const previousMonth = new Date(competenceMonth + '-01');
@@ -324,8 +319,10 @@ export async function calculateDiscounts(
 /**
  * Get technician allowances
  */
+/** The technician's own values, each falling back to the Configurações default when unset (0). */
 export async function getTechnicianAllowances(
-  technicianId: string
+  technicianId: string,
+  settings: OrganizationSettings,
 ): Promise<{ va_allowance: number; vr_allowance: number; base_salary: number; commission_percentage: number }> {
   const result = await sql`
     SELECT base_salary, va_allowance, vr_allowance, commission_percentage
@@ -335,34 +332,26 @@ export async function getTechnicianAllowances(
   `;
 
   if (!result || result.length === 0) {
-    return { va_allowance: 0, vr_allowance: 0, base_salary: 0, commission_percentage: DEFAULT_COMMISSION_PERCENTAGE };
+    return { va_allowance: 0, vr_allowance: 0, base_salary: 0, commission_percentage: settings.commissionPercentage };
   }
 
-  const baseSalary = Number(result[0]?.base_salary || 0);
-  const vaAllowance = Number(result[0]?.va_allowance || 0);
-  const vrAllowance = Number(result[0]?.vr_allowance || 0);
-  const commissionPercentage = Number(result[0]?.commission_percentage || 0);
-
   return {
-    base_salary: roundCurrency(baseSalary > 0 ? baseSalary : DEFAULT_BASE_SALARY),
-    va_allowance: roundCurrency(vaAllowance > 0 ? vaAllowance : DEFAULT_VA_ALLOWANCE),
-    vr_allowance: roundCurrency(vrAllowance > 0 ? vrAllowance : DEFAULT_VR_ALLOWANCE),
-    commission_percentage: roundCurrency(commissionPercentage > 0 ? commissionPercentage : DEFAULT_COMMISSION_PERCENTAGE),
+    base_salary: roundCurrency(valueOrDefault(result[0]?.base_salary, settings.baseSalary)),
+    va_allowance: roundCurrency(valueOrDefault(result[0]?.va_allowance, settings.vaAllowance)),
+    vr_allowance: roundCurrency(valueOrDefault(result[0]?.vr_allowance, settings.vrAllowance)),
+    commission_percentage: roundCurrency(valueOrDefault(result[0]?.commission_percentage, settings.commissionPercentage)),
   };
 }
 
-/**
- * Calculate extra hours value
- * Assuming 1.5x overtime multiplier on hourly rate
- */
+/** Extra hours × (base salary ÷ monthly hours) × overtime multiplier — both from Configurações. */
 export async function calculateExtraHoursValue(
   extraHours: number,
-  baseSalary: number
+  baseSalary: number,
+  settings: Pick<OrganizationSettings, 'monthlyHours' | 'overtimeMultiplier'>,
 ): Promise<number> {
-  const hourlyRate = baseSalary / STANDARD_HOURS_PER_MONTH;
-  const OVERTIME_MULTIPLIER = 1.5;
+  const hourlyRate = baseSalary / settings.monthlyHours;
 
-  return roundCurrency(extraHours * hourlyRate * OVERTIME_MULTIPLIER);
+  return roundCurrency(extraHours * hourlyRate * settings.overtimeMultiplier);
 }
 
 /**
@@ -378,7 +367,8 @@ export async function calculatePayroll(
   }
 
   // Get base info
-  const allowances = await getTechnicianAllowances(technicianId);
+  const settings = await getOrganizationSettings();
+  const allowances = await getTechnicianAllowances(technicianId, settings);
   const payrollReference = await getPayrollReference(technicianId, competenceMonth);
 
   // Calculate services and commission
@@ -388,19 +378,19 @@ export async function calculatePayroll(
   const totalServices = usePayrollReference
     ? roundCurrency(payrollReference?.total_services_value)
     : roundCurrency(calculatedTotalServices);
-  const calculationBase = calculateCommissionFromTotals(totalServices, allowances.commission_percentage);
+  const calculationBase = calculateCommissionFromTotals(totalServices, allowances.commission_percentage, settings.commissionPercentage);
   const commission = calculateCommissionRemainder(
     calculationBase,
     allowances.base_salary,
     allowances.va_allowance,
     allowances.vr_allowance,
   );
-  const extraordinaryAward = calculateExtraordinaryAward(serviceCount);
+  const extraordinaryAward = calculateExtraordinaryAward(serviceCount, settings.serviceAwardTiers);
 
   // Calculate hours
   const totalHours = await calculateTotalHours(technicianId, competenceMonth);
-  const { extra_hours, bank_balance } = await calculateHourBank(technicianId, competenceMonth, totalHours);
-  const extraHoursValue = await calculateExtraHoursValue(extra_hours, allowances.base_salary);
+  const { extra_hours, bank_balance } = await calculateHourBank(technicianId, competenceMonth, totalHours, settings.monthlyHours);
+  const extraHoursValue = await calculateExtraHoursValue(extra_hours, allowances.base_salary, settings);
 
   // Calculate discounts
   const calculatedDiscounts = await calculateDiscounts(technicianId, competenceMonth);

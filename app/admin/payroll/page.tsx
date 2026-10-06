@@ -21,11 +21,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { formatCurrency, normalizeText, resolveCompetenceMonth } from '@/lib/formatters';
 import type { Discount, Payroll, Service, ServiceFortnight, Technician } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
+import { useOrganizationSettings } from '@/hooks/use-organization-settings';
+import { calculateServiceAward, valueOrDefault, type OrganizationSettings } from '@/lib/organization-settings';
 
-const DEFAULT_BASE_SALARY = 2664.53;
-const DEFAULT_VA_ALLOWANCE = 249;
-const DEFAULT_VR_ALLOWANCE = 783;
-const DEFAULT_COMMISSION_PERCENTAGE = 25;
 const monthNames = [
   'Janeiro',
   'Fevereiro',
@@ -209,24 +207,21 @@ function serviceBelongsToTechnician(service: Service, technician: Technician) {
   return Boolean(serviceTechnicianName && serviceTechnicianName === normalizeText(technician.name));
 }
 
-function getBaseSalary(technician: Technician) {
-  const savedValue = moneyValue(technician.base_salary);
-  return savedValue > 0 ? savedValue : DEFAULT_BASE_SALARY;
+// The technician's own value, or the Configurações default when it's unset (0).
+function getBaseSalary(technician: Technician, settings: OrganizationSettings) {
+  return valueOrDefault(moneyValue(technician.base_salary), settings.baseSalary);
 }
 
-function getVaAllowance(technician: Technician) {
-  const savedValue = moneyValue(technician.va_allowance);
-  return savedValue > 0 ? savedValue : DEFAULT_VA_ALLOWANCE;
+function getVaAllowance(technician: Technician, settings: OrganizationSettings) {
+  return valueOrDefault(moneyValue(technician.va_allowance), settings.vaAllowance);
 }
 
-function getVrAllowance(technician: Technician) {
-  const savedValue = moneyValue(technician.vr_allowance);
-  return savedValue > 0 ? savedValue : DEFAULT_VR_ALLOWANCE;
+function getVrAllowance(technician: Technician, settings: OrganizationSettings) {
+  return valueOrDefault(moneyValue(technician.vr_allowance), settings.vrAllowance);
 }
 
-function getCommissionPercentage(technician?: Technician | null) {
-  const savedValue = Number(technician?.commission_percentage ?? 0);
-  return savedValue > 0 ? savedValue : DEFAULT_COMMISSION_PERCENTAGE;
+function getCommissionPercentage(technician: Technician | null | undefined, settings: OrganizationSettings) {
+  return valueOrDefault(technician?.commission_percentage, settings.commissionPercentage);
 }
 
 function calculateCalculationBase(totalServicesValue: number, commissionPercentage: number) {
@@ -256,12 +251,6 @@ function convertCalculationBaseToTotalServices(calculationBase: number, commissi
   }
 
   return roundMoney((Math.max(0, calculationBase) * 100) / commissionPercentage);
-}
-
-function calculateEstimatedAward(serviceCount: number) {
-  if (serviceCount >= 160) return 600;
-  if (serviceCount >= 80) return 250;
-  return 0;
 }
 
 function calculateFormulaCommission(draft: PayrollDraft, commissionPercentage: number) {
@@ -407,6 +396,7 @@ function HelpTip({ text }: { text: string }) {
 
 export default function PayrollPage() {
   const { user, loading } = useAppSession();
+  const { settings } = useOrganizationSettings();
   const [payroll, setPayroll] = useState<Payroll[]>([]);
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [services, setServices] = useState<Service[]>([]);
@@ -519,10 +509,10 @@ export default function PayrollPage() {
       const servicesTotal = roundMoney(technicianServices.reduce((total, service) => total + moneyValue(service.value), 0));
       const serviceCount = technicianServices.length;
       const totalServicesValue = roundMoney(servicesTotal || payrollItem?.total_services_value);
-      const commissionPercentage = getCommissionPercentage(technician);
-      const baseSalary = roundMoney(payrollItem ? payrollItem.base_salary : getBaseSalary(technician));
-      const vaAllowance = roundMoney(payrollItem ? payrollItem.va_deduction : getVaAllowance(technician));
-      const vrAllowance = roundMoney(payrollItem ? payrollItem.vr_deduction : getVrAllowance(technician));
+      const commissionPercentage = getCommissionPercentage(technician, settings);
+      const baseSalary = roundMoney(payrollItem ? payrollItem.base_salary : getBaseSalary(technician, settings));
+      const vaAllowance = roundMoney(payrollItem ? payrollItem.va_deduction : getVaAllowance(technician, settings));
+      const vrAllowance = roundMoney(payrollItem ? payrollItem.vr_deduction : getVrAllowance(technician, settings));
       const benefitsTotal = roundMoney(vaAllowance + vrAllowance);
       const calculationBase = calculateCalculationBase(totalServicesValue, commissionPercentage);
       const commission = payrollItem
@@ -542,7 +532,7 @@ export default function PayrollPage() {
       const extraHoursValue = roundMoney(payrollItem?.extra_hours_value);
       const extraordinaryAward = payrollItem
         ? roundMoney(payrollItem.extraordinary_award_value)
-        : calculateEstimatedAward(serviceCount);
+        : calculateServiceAward(serviceCount, settings.serviceAwardTiers);
       const projectedCashNetTotal = payrollItem
         ? roundMoney(payrollItem.net_total)
         : roundMoney(baseSalary + commission + extraHoursValue + extraordinaryAward - totalDeductions);
@@ -580,7 +570,7 @@ export default function PayrollPage() {
         payrollNetTotal: roundMoney(cashNetTotal + displayBenefitsTotal),
       };
     });
-  }, [competenceMonth, discounts, payroll, services, technicians]);
+  }, [competenceMonth, discounts, payroll, services, settings, technicians]);
 
   const filteredRows = rows.filter((row) => {
     const haystack = normalizeText(`${row.technician.name} ${row.technician.qra}`);
@@ -762,7 +752,7 @@ export default function PayrollPage() {
   }
 
   function updateCalculationBase(value: number) {
-    const commissionPercentage = selectedRow?.commissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE;
+    const commissionPercentage = selectedRow?.commissionPercentage ?? settings.commissionPercentage;
     updateDraftNumber('total_services_value', convertCalculationBaseToTotalServices(value, commissionPercentage));
   }
 
@@ -771,7 +761,7 @@ export default function PayrollPage() {
     setPayrollDraft((current) => {
       if (!current) return current;
 
-      const commissionPercentage = selectedRow?.commissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE;
+      const commissionPercentage = selectedRow?.commissionPercentage ?? settings.commissionPercentage;
 
       const next = {
         ...current,
@@ -794,7 +784,7 @@ export default function PayrollPage() {
     setIsDirty(true);
     setPayrollDraft((current) => {
       if (!current) return current;
-      const commissionPercentage = selectedRow?.commissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE;
+      const commissionPercentage = selectedRow?.commissionPercentage ?? settings.commissionPercentage;
       const next = {
         ...current,
         commission_value: calculateFormulaCommission(current, commissionPercentage),
@@ -886,7 +876,7 @@ export default function PayrollPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payrollDraft, isDirty, isPayrollDialogOpen, isClosing]);
 
-  const currentCommissionPercentage = selectedRow?.commissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE;
+  const currentCommissionPercentage = selectedRow?.commissionPercentage ?? settings.commissionPercentage;
   const formulaCommission = payrollDraft ? calculateFormulaCommission(payrollDraft, currentCommissionPercentage) : 0;
   const formulaCashNet = payrollDraft ? calculateCashNet(payrollDraft) : 0;
   const previewPayrollNet = payrollDraft ? calculatePayrollNet(payrollDraft) : 0;
@@ -1249,9 +1239,9 @@ export default function PayrollPage() {
                     <div className="grid gap-3">
                       <MoneyInput
                         label="Base do cálculo"
-                        value={calculateCalculationBase(payrollDraft.total_services_value, selectedRow?.commissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE)}
+                        value={calculateCalculationBase(payrollDraft.total_services_value, selectedRow?.commissionPercentage ?? settings.commissionPercentage)}
                         onChange={updateCalculationBase}
-                        hint={`${selectedRow?.commissionPercentage ?? DEFAULT_COMMISSION_PERCENTAGE}% do total bruto (${formatCurrency(payrollDraft.total_services_value)})`}
+                        hint={`${selectedRow?.commissionPercentage ?? settings.commissionPercentage}% do total bruto (${formatCurrency(payrollDraft.total_services_value)})`}
                       />
                       <MoneyInput
                         label="Comissão"

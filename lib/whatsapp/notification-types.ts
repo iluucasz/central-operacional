@@ -133,7 +133,7 @@ export const NOTIFICATION_DEFINITIONS: Record<NotificationType, NotificationDefi
   },
   daily_hours: {
     label: 'Fim do expediente',
-    description: 'Enviada após a importação das horas da Porto (23h), com as horas registradas no dia.',
+    description: 'Enviada após a importação noturna das horas da Porto (horário em Configurações), com as horas registradas no dia.',
     trigger: 'daily',
     defaultTime: '23:30',
     defaultTemplate:
@@ -149,7 +149,7 @@ export const NOTIFICATION_DEFINITIONS: Record<NotificationType, NotificationDefi
     ],
     help: {
       purpose: 'Fecha o dia com o técnico: mostra as horas registradas e como está o total do mês.',
-      when: 'Logo depois que o sistema importa as horas da Porto, às 23h. O horário acima é a segunda chance, caso a importação atrase ou falhe.',
+      when: 'Logo depois que o sistema importa as horas da Porto (horário definido em Configurações). O horário acima é a segunda chance: só dispara depois que a importação do dia terminou.',
       recipients: ['Quem teve horas lançadas hoje.', 'Quem não trabalhou ou ainda não teve o apontamento importado não recebe.'],
       notes: [
         'Os valores vêm do que está gravado em banco de horas, inclusive apontamentos lançados à mão.',

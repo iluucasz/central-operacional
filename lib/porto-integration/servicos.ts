@@ -285,6 +285,7 @@ async function readLaudoEndTime(
   page: Page,
   laudoUrl: string,
   acceptedBrDates: string[],
+  useLaudoConclusion: boolean,
 ): Promise<{ date: string; time: string; source: 'laudo_assinatura' | 'laudo_conclusao' } | null> {
   const target = await page.context().newPage();
   try {
@@ -296,10 +297,12 @@ async function readLaudoEndTime(
       .catch(() => null);
 
     const text = await target.evaluate(() => document.body?.innerText ?? '');
-    for (const [pattern, source] of [
+    const sources = [
       [LAUDO_ASSINATURA_PATTERN, 'laudo_assinatura'],
       [LAUDO_CONCLUSAO_PATTERN, 'laudo_conclusao'],
-    ] as const) {
+    ] as const;
+    // Configurações can rule out the laudo's conclusion date, leaving only the signature.
+    for (const [pattern, source] of useLaudoConclusion ? sources : sources.slice(0, 1)) {
       const match = text.match(pattern);
       if (match && acceptedBrDates.includes(match[1])) {
         return { date: match[1], time: match[2], source };
@@ -331,6 +334,7 @@ export async function getServicoEndTime(
   page: Page,
   serviceDateKey: string,
   params: { anoServico: string; numeroServico: string },
+  options: { useLaudoConclusion?: boolean } = {},
 ): Promise<PortoServiceEndTime> {
   const frame = await runServiceSearch(page, { startDateKey: serviceDateKey, endDateKey: serviceDateKey });
   await dismissBlockingModal(frame);
@@ -370,7 +374,7 @@ export async function getServicoEndTime(
   }
 
   try {
-    const laudo = await readLaudoEndTime(page, laudoLink.url, acceptedBrDates);
+    const laudo = await readLaudoEndTime(page, laudoLink.url, acceptedBrDates, options.useLaudoConclusion ?? true);
     if (!laudo) {
       return fromConcluido('failed', 'Laudo aberto, mas sem "Data da assinatura" do dia do serviço.');
     }

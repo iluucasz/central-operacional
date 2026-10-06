@@ -369,7 +369,8 @@ export default function ConfigPortoPage() {
                 <p className="text-sm font-medium text-foreground">Automação ligada</p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   Apontamento de horas: todo fim de dia, varre o mês inteiro até hoje (pula dias já
-                  importados). Escala: checagem diária, importa só quando sai uma nova escala mensal.
+                  importados). Escala: todo dia, reimporta de hoje até o fim do mês. Horários e regras
+                  (almoço, advertência, dias reprocessados etc.) ficam em Configurações.
                 </p>
               </div>
               <Switch checked={automationEnabled} onCheckedChange={setAutomationEnabled} />

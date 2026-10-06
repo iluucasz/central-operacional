@@ -1,7 +1,7 @@
 // Relative imports only: this module is also compiled into the VPS worker (worker/tsconfig.json),
 // which has no `@/` path alias.
 import { sql } from '../db';
-import { STANDARD_HOURS_PER_MONTH } from '../hour-bank';
+import { getOrganizationSettings } from '../organization-settings-store';
 import {
   addDaysToKey,
   brasiliaNow,
@@ -371,6 +371,8 @@ async function runDailyHours({ config, trigger, createdBy, now }: RunContext) {
   const summary = emptySummary('daily_hours');
   const { dateKey: today, monthKey } = brasiliaNow(now);
   const template = config.notifications.daily_hours.template;
+  // {meta_mes} is Configurações → Jornada mensal.
+  const monthlyHoursTarget = (await getOrganizationSettings()).monthlyHours;
 
   const [technicians, dayRows, monthRows] = await Promise.all([
     loadActiveTechnicians(),
@@ -407,7 +409,7 @@ async function runDailyHours({ config, trigger, createdBy, now }: RunContext) {
       entrada: String(row.first_start ?? '-'),
       saida: String(row.last_end ?? '-'),
       horas_mes: formatHoursValue(monthHours.get(technicianId) ?? hours),
-      meta_mes: formatHoursValue(STANDARD_HOURS_PER_MONTH),
+      meta_mes: formatHoursValue(monthlyHoursTarget),
     });
     const result = await deliver(config, {
       recipient: technician,

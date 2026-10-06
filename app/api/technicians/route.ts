@@ -1,6 +1,8 @@
 import { neon } from '@neondatabase/serverless';
 import { NextRequest, NextResponse } from 'next/server';
 import { hashPassword, verifyAuth } from '@/lib/auth';
+import { valueOrDefault } from '@/lib/organization-settings';
+import { getOrganizationSettings } from '@/lib/organization-settings-store';
 import { ensurePortoConfigSchema } from '@/lib/porto-config-schema';
 import { validatePhone } from '@/lib/whatsapp/phone';
 import { ensureWhatsAppSchema } from '@/lib/whatsapp/store';
@@ -32,11 +34,6 @@ function parsePhone(value: unknown): { phone: string | null; error: string | nul
   return { phone: validation.formatted, error: null };
 }
 
-function positiveNumberOrDefault(value: unknown, fallback: number) {
-  const numericValue = Number(value);
-  return numericValue > 0 ? numericValue : fallback;
-}
-
 async function insertTechnicianRecord({
   userId,
   qra,
@@ -60,6 +57,8 @@ async function insertTechnicianRecord({
   portoNameHint: string | null;
   phone: string | null;
 }) {
+  // Empty values start from the Configurações defaults.
+  const settings = await getOrganizationSettings();
   const result = await sql`
     INSERT INTO technicians (
       user_id, qra, name, email, commission_percentage,
@@ -67,10 +66,10 @@ async function insertTechnicianRecord({
     )
     VALUES (
       ${userId}, ${qra || null}, ${name}, ${email},
-      ${positiveNumberOrDefault(commissionPercentage, 25)},
-      ${positiveNumberOrDefault(baseSalary, 2664.53)},
-      ${positiveNumberOrDefault(vaAllowance, 249)},
-      ${positiveNumberOrDefault(vrAllowance, 783)},
+      ${valueOrDefault(commissionPercentage, settings.commissionPercentage)},
+      ${valueOrDefault(baseSalary, settings.baseSalary)},
+      ${valueOrDefault(vaAllowance, settings.vaAllowance)},
+      ${valueOrDefault(vrAllowance, settings.vrAllowance)},
       ${portoNameHint || null},
       ${phone}
     )
@@ -361,6 +360,7 @@ export async function PATCH(request: NextRequest) {
       }
     }
 
+    const settings = await getOrganizationSettings();
     const result = await sql`
       UPDATE technicians
       SET
@@ -370,10 +370,10 @@ export async function PATCH(request: NextRequest) {
         phone = CASE WHEN ${rawPhone !== undefined} THEN ${phone} ELSE phone END,
         name = ${name},
         email = ${email},
-        commission_percentage = ${Number(commission_percentage) > 0 ? commission_percentage : 25},
-        base_salary = ${Number(base_salary) > 0 ? base_salary : 2664.53},
-        va_allowance = ${Number(va_allowance) > 0 ? va_allowance : 249},
-        vr_allowance = ${Number(vr_allowance) > 0 ? vr_allowance : 783},
+        commission_percentage = ${valueOrDefault(commission_percentage, settings.commissionPercentage)},
+        base_salary = ${valueOrDefault(base_salary, settings.baseSalary)},
+        va_allowance = ${valueOrDefault(va_allowance, settings.vaAllowance)},
+        vr_allowance = ${valueOrDefault(vr_allowance, settings.vrAllowance)},
         status = ${status === 'inactive' ? 'inactive' : 'active'},
         updated_at = NOW()
       WHERE id = ${technicianId}

@@ -1,7 +1,9 @@
 import { monthKeyFromDate, normalizeCompetenceMonth, resolveCompetenceMonth } from './formatters';
+import { DEFAULT_ORGANIZATION_SETTINGS } from './organization-settings';
 import type { Payroll, WorkHours } from './types';
 
-export const STANDARD_HOURS_PER_MONTH = 220;
+/** Default monthly target only — the live value is Configurações → Jornada mensal (`monthlyHours`). */
+export const STANDARD_HOURS_PER_MONTH = DEFAULT_ORGANIZATION_SETTINGS.monthlyHours;
 
 function hourValue(value: number | string | null | undefined) {
   const numericValue = Number(value ?? 0);
@@ -16,6 +18,7 @@ export function resolveClosedHourBankBalance(
   technicianId: string | null | undefined,
   competenceMonth: string | null | undefined,
   fallbackBalance: number | string | null | undefined = 0,
+  monthlyHoursTarget: number = STANDARD_HOURS_PER_MONTH,
 ) {
   const targetCompetence = normalizeCompetenceMonth(competenceMonth);
 
@@ -53,7 +56,7 @@ export function resolveClosedHourBankBalance(
 
   for (const month of months) {
     const workedHours = hourValue(monthlyHours.get(month));
-    const calculatedBalance = hourValue(runningBalance + Math.max(0, workedHours - STANDARD_HOURS_PER_MONTH));
+    const calculatedBalance = hourValue(runningBalance + Math.max(0, workedHours - monthlyHoursTarget));
     const payrollItem = payrollByMonth.get(month);
 
     if (payrollItem) {
