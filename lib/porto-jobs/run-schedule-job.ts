@@ -86,8 +86,11 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
     const logId = await startSyncLog('schedule', options.manual ? 'manual' : 'auto');
     options.onStarted?.(logId);
     const errorMessage = missingCredentials ? 'Credenciais não configuradas.' : 'Automação desligada.';
-    await finishSyncLog(logId, { status: 'skipped', error_message: errorMessage });
-    return { status: 'skipped', technicians_processed: 0, error: errorMessage, details: [] };
+    // With the automation on, missing credentials is a failure (the worker alerts on 'error'),
+    // not a deliberate pause.
+    const status = missingCredentials && config?.automation_enabled ? 'error' : 'skipped';
+    await finishSyncLog(logId, { status, error_message: errorMessage });
+    return { status, technicians_processed: 0, error: errorMessage, details: [] };
   }
 
   const currentMonthKey = getCurrentMonthKey();

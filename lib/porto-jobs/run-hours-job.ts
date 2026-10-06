@@ -188,8 +188,11 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
     const logId = await startSyncLog('hours', options.manual ? 'manual' : 'auto');
     options.onStarted?.(logId);
     const errorMessage = missingCredentials ? 'Credenciais não configuradas.' : 'Automação desligada.';
-    await finishSyncLog(logId, { status: 'skipped', error_message: errorMessage });
-    return { status: 'skipped', technicians_processed: 0, error: errorMessage, details: [] };
+    // With the automation on, missing credentials is a failure (the worker alerts on 'error'),
+    // not a deliberate pause.
+    const status = missingCredentials && config?.automation_enabled ? 'error' : 'skipped';
+    await finishSyncLog(logId, { status, error_message: errorMessage });
+    return { status, technicians_processed: 0, error: errorMessage, details: [] };
   }
 
   const logId = await startSyncLog('hours', options.manual ? 'manual' : 'auto');
@@ -242,6 +245,17 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           details.push({ qra: technician.qra, technician_id: technician.id, technician_name: technician.name, action: 'technician_not_in_porto_list' });
           warnings.push(`${technician.name} (QRA ${technician.qra}) está ativo no sistema mas não aparece na lista de socorristas do Porto.`);
         }
+      }
+      // resolveTechnicianByQra takes one of them at random — the cadastro now refuses duplicates,
+      // but rows saved before that could still have them.
+      const qraCounts = new Map<string, string[]>();
+      for (const technician of activeWithQra) {
+        const list = qraCounts.get(String(technician.qra)) ?? [];
+        list.push(String(technician.name));
+        qraCounts.set(String(technician.qra), list);
+      }
+      for (const [qra, names] of qraCounts) {
+        if (names.length > 1) warnings.push(`O QRA ${qra} está em mais de um técnico ativo (${names.join(', ')}) — as horas podem ir para o técnico errado.`);
       }
       if (socorristas.length && !resolved.length) {
         warnings.push('Nenhum socorrista do Porto corresponde a um técnico ativo do sistema — confira os QRAs no cadastro.');

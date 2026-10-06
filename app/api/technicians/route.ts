@@ -34,6 +34,28 @@ function parsePhone(value: unknown): { phone: string | null; error: string | nul
   return { phone: validation.formatted, error: null };
 }
 
+/**
+ * The Porto import links a socorrista to a technician by QRA (one active technician per QRA,
+ * resolveTechnicianByQra). Two active technicians sharing one would send the hours to either of them.
+ */
+async function findActiveTechnicianWithQra(qra: unknown, exceptId: string | null): Promise<string | null> {
+  const value = String(qra ?? '').trim();
+  if (!value) return null;
+  const rows = await sql`
+    SELECT name FROM technicians
+    WHERE qra = ${value} AND status = 'active' AND (${exceptId}::uuid IS NULL OR id <> ${exceptId}::uuid)
+    LIMIT 1
+  `;
+  return (rows[0]?.name as string | undefined) ?? null;
+}
+
+function duplicateQraResponse(holder: string) {
+  return NextResponse.json(
+    { error: `Este QRA já é do técnico ${holder}. Cada técnico ativo precisa de um QRA próprio — é por ele que as horas do Porto são vinculadas.` },
+    { status: 409 },
+  );
+}
+
 async function insertTechnicianRecord({
   userId,
   qra,
@@ -148,6 +170,9 @@ export async function POST(request: NextRequest) {
 
     await ensurePortoConfigSchema();
     await ensureWhatsAppSchema();
+
+    const qraHolder = await findActiveTechnicianWithQra(qra, null);
+    if (qraHolder) return duplicateQraResponse(qraHolder);
 
     const existingUsers = await sql`
       SELECT u.id, u.role, t.id AS technician_id
@@ -285,6 +310,12 @@ export async function PATCH(request: NextRequest) {
 
     await ensurePortoConfigSchema();
     await ensureWhatsAppSchema();
+
+    // Only an active technician claims its QRA (an inactive one may keep an old, reused QRA).
+    if (status !== 'inactive') {
+      const qraHolder = await findActiveTechnicianWithQra(qra, technicianId);
+      if (qraHolder) return duplicateQraResponse(qraHolder);
+    }
 
     const existingTechnicians = await sql`
       SELECT id, user_id
