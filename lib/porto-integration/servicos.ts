@@ -13,17 +13,39 @@ export type PortoServiceRow = {
    * that service, unlike the neighboring "Hora Comb." column (`cap_horaProgramadaAtendimento`,
    * a generic/static programmed slot — always the same value like 08:00 regardless of what
    * actually happened, which is what falsely made every technician's recorded start time show as
-   * 08:00 before this was found). Empty string if the column wasn't present/parseable.
+   * 08:00 before this was found). Re-validated 05/10/2026: matches the portal's "HORA PREV."
+   * column, and equals the detail timeline's "Em Execução" time (6054881/26: 16:23). Empty string
+   * if the column wasn't present/parseable.
    */
   horaAtendimento: string;
+  /**
+   * The results table's STATUS column, e.g. "Concluído com Sucesso", "Concluído sem Sucesso",
+   * "Cancelado", "Aceite" (accepted, never executed). Empty string if it couldn't be read.
+   */
+  status: string;
 };
 
-export type PortoServiceDetail = {
+/**
+ * State of the laudo-digital magnifier ("lupa") under "SENHA DE ATENDIMENTO" on a service's
+ * detail page. Porto only enables it when the technician filled in the digital report correctly.
+ * - `available`: enabled and the laudo page was read.
+ * - `unavailable`: found but disabled — the technician didn't fill in the laudo (warning case).
+ * - `not_found`: no magnifier could be identified at all — a selector problem on our side, never
+ *   treated as the technician's fault.
+ * - `failed`: enabled, but opening/reading the laudo page failed.
+ */
+export type PortoLaudoState = 'available' | 'unavailable' | 'not_found' | 'failed';
+
+export type PortoServiceEndTime = {
   situacaoAtual: string;
-  /** All "dd/mm/aaaa HH:mm" timestamps found on the detail page, in document order. */
-  timestamps: string[];
-  /** The latest timestamp found — used as "completion time" for the hours-import job. */
-  latestTimestamp: string | null;
+  /** "HH:mm" end of the technician's work on this service, or null when nothing usable was found. */
+  endTime: string | null;
+  /** "dd/mm/aaaa" of `endTime` — the service day, or the next day for a service that crossed midnight. */
+  endDate: string | null;
+  /** Which timestamp `endTime` came from. */
+  endSource: 'laudo_assinatura' | 'laudo_conclusao' | 'concluido' | null;
+  laudo: PortoLaudoState;
+  laudoError?: string;
 };
 
 export type PortoDateRange = { startDateKey: string; endDateKey: string };
@@ -37,6 +59,12 @@ function toBrDate(dateKey: string) {
   return `${day}/${month}/${year}`;
 }
 
+function nextDayKey(dateKey: string) {
+  const date = new Date(`${dateKey}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 /**
  * Opens the service search page and runs a search for the given date range. Validated live: the
  * date fields start out hidden inside a `display:none` div until "TIPO DE BUSCA" is set to
@@ -44,25 +72,49 @@ function toBrDate(dateKey: string) {
  * inputs are unreachable (an earlier attempt at posting the form directly, bypassing this UI
  * step, failed with a 500 from the server).
  *
- * The site's own JS clamps the range to 15 days (adjusts dataFinal on blur if it's further out) —
- * mirrored here defensively so callers get a predictable range rather than a silently-adjusted one.
+ * The site's own JS keeps the period at a fixed 15-day window rather than the dates typed in
+ * (validated live 05/10/2026: asking 01/10–05/10 searched 01/10–16/10, asking 01/09–15/09
+ * searched 31/08–15/09), so results routinely include days outside the requested range — callers
+ * must filter by date. Occasionally the typed dates don't take at all and the site falls back to
+ * its default "last 15 days" (seen live: a 01/10–05/10 request returned 20/09–05/10). The period
+ * actually used is read back after searching; if it doesn't cover the request, the search is
+ * retried once and then fails loudly instead of returning the wrong days.
  */
 async function runServiceSearch(page: Page, range: PortoDateRange): Promise<Frame> {
-  const frame = await openPortalFrame(page, SEARCH_MENU_ID, SEARCH_URL);
-  await dismissBlockingModal(frame);
   const brStart = toBrDate(range.startDateKey);
   const brEnd = toBrDate(clampRangeEnd(range));
+  let used = { start: '', end: '' };
 
-  await frame.selectOption('#tipoData', '1');
-  await frame.fill('input[name="dataInicialInputDate"]', brStart);
-  await frame.fill('input[name="dataFinalInputDate"]', brEnd);
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const frame = await openPortalFrame(page, SEARCH_MENU_ID, SEARCH_URL);
+    await dismissBlockingModal(frame);
 
-  await Promise.all([
-    frame.waitForNavigation({ waitUntil: 'networkidle', timeout: 20000 }).catch(() => null),
-    frame.locator('input[name="pesquisar"]').click(),
-  ]);
+    await frame.selectOption('#tipoData', '1');
+    await frame.fill('input[name="dataInicialInputDate"]', brStart);
+    await frame.fill('input[name="dataFinalInputDate"]', brEnd);
 
-  return frame;
+    await Promise.all([
+      frame.waitForNavigation({ waitUntil: 'networkidle', timeout: 20000 }).catch(() => null),
+      frame.locator('input[name="pesquisar"]').click(),
+    ]);
+
+    used = await frame.evaluate(() => ({
+      start: (document.querySelector('input[name="dataInicialInputDate"]') as HTMLInputElement | null)?.value ?? '',
+      end: (document.querySelector('input[name="dataFinalInputDate"]') as HTMLInputElement | null)?.value ?? '',
+    }));
+    const usedStart = brDateToKey(used.start);
+    const usedEnd = brDateToKey(used.end);
+    if (usedStart && usedEnd && usedStart <= range.startDateKey && usedEnd >= clampRangeEnd(range)) {
+      return frame;
+    }
+  }
+
+  throw new Error(`A busca de serviços do Porto não respeitou o período ${brStart}–${brEnd} (usou ${used.start || '?'}–${used.end || '?'}).`);
+}
+
+function brDateToKey(brDate: string): string | null {
+  const match = brDate.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : null;
 }
 
 /**
@@ -112,6 +164,9 @@ const DATE_SPAN_PATTERN = /cap_dataProgramadaAtendimento"[^>]*>([\s\S]*?)<\/span
 // PortoServiceRow.horaAtendimento doc comment); not to be confused with the neighboring
 // cap_horaProgramadaAtendimento ("Hora Comb.") column, a static scheduled slot.
 const HORA_ATENDIMENTO_PATTERN = /cap_horaAtendimento"[^>]*>([\s\S]*?)<\/span>/i;
+// STATUS has no comment anchor — validated live, it's the plain cell right after "Hora Prevista":
+// `<!--Hora Prevista --><td><span id="...cap_horaAtendimento">08:00</span></td><td width="4%">Concluído com Sucesso</td>`.
+const STATUS_AFTER_HORA_PATTERN = /cap_horaAtendimento"[^>]*>[\s\S]*?<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>/i;
 
 /**
  * Validated live against a real 15-day range result (402 rows): the row's other all-caps cells
@@ -143,63 +198,170 @@ function parseServiceRowsFromHtml(html: string): PortoServiceRow[] {
     const horaMatch = rawRow.match(HORA_ATENDIMENTO_PATTERN);
     const horaAtendimento = horaMatch ? horaMatch[1].replace(/&nbsp;/g, ' ').trim() : '';
 
+    const statusMatch = rawRow.match(STATUS_AFTER_HORA_PATTERN);
+    const status = statusMatch ? statusMatch[1].replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim() : '';
+
     if (!technicianNameFragment) continue;
 
-    rows.push({ numeroServico, anoServico, technicianNameFragment, dataProgramada, horaAtendimento });
+    rows.push({ numeroServico, anoServico, technicianNameFragment, dataProgramada, horaAtendimento, status });
   }
 
   return rows;
 }
 
+// "Data da assinatura:\n05/10/2026 - 16:08:38" on the laudo page (porto-socorro-app-portal.web.app).
+const LAUDO_ASSINATURA_PATTERN = /Data da assinatura:?\s*(\d{2}\/\d{2}\/\d{4})\s*-?\s*(\d{2}:\d{2})/i;
+const LAUDO_CONCLUSAO_PATTERN = /Data de conclus[ãa]o do laudo:?\s*(\d{2}\/\d{2}\/\d{4})\s*-?\s*(\d{2}:\d{2})/i;
+const LAUDO_LOAD_TIMEOUT_MS = 20000;
+
+type LaudoLink = { state: 'enabled'; url: string } | { state: 'disabled' | 'not_found' };
+
 /**
- * Fetches a service's detail and extracts its completion timestamp. Validated live end-to-end:
- * re-runs the same range search (detail pages reject direct URL navigation with "Acesso
- * proibido", same as escala.ts — they only work when reached via a real click from the search
- * results), then clicks the specific result whose `onclick="changeUrlAW(this, anoServico,
- * numeroServico, ...)"` matches. Confirmed against production: extracted timestamps for service
- * 5167437/26 matched exactly (17/08/2026 06:13, 09:17, 10:25, 10:58 — "Concluído" at 10:58).
- *
- * Known trade-off: re-running the full search per call means N services cost N searches, not 1 —
- * clicking a result navigates the frame away, so getting "back" to a fresh results list is only
- * reliable by re-searching rather than trusting iframe back-navigation. The caller
- * (app/api/cron/porto-hours/route.ts) keeps this bounded by only fetching detail for
- * (technician, date) combinations not already imported, so a month-long range stays cheap on
- * every run after the first catch-up.
+ * Reads the laudo-digital icon ("lupa") under "SENHA DE ATENDIMENTO". Validated live (05/10/2026):
+ * - enabled (5999501/26): `<a onclick="abreLink('https://porto-socorro-app-portal.web.app/laudo/<id>?token=...')">
+ *   <img id="imgLaudo" src=".../laudo.png">` — the laudo URL (with a short-lived token) is right
+ *   there, so it's opened directly instead of clicking and waiting for a popup.
+ * - disabled (6054881/26): `<a href="javascript:void(0);"><img id="imgLaudo" src=".../laudo_disable.png">`.
+ * Anything else (icon missing, or no URL without the `_disable` image) is `not_found` — never
+ * treated as the technician's fault.
  */
-export async function getServicoDetail(page: Page, range: PortoDateRange, params: { anoServico: string; numeroServico: string }): Promise<PortoServiceDetail> {
-  const frame = await runServiceSearch(page, range);
+async function readLaudoLink(frame: Frame): Promise<LaudoLink> {
+  const link = await frame.evaluate(() => {
+    const img = document.getElementById('imgLaudo');
+    if (!img) return { state: 'not_found', url: null };
+    const url = img.closest('a')?.getAttribute('onclick')?.match(/abreLink\('(https?:\/\/[^']+)'\)/)?.[1] ?? null;
+    if (url) return { state: 'enabled', url };
+    return { state: /_disable\./i.test(img.getAttribute('src') ?? '') ? 'disabled' : 'not_found', url: null };
+  });
+  return link.state === 'enabled' && link.url ? { state: 'enabled', url: link.url } : { state: link.state === 'disabled' ? 'disabled' : 'not_found' };
+}
+
+// The status timeline is a table: labels (Aceito | Em Deslocamento | Em Execução | Concluído) in
+// one row, their timestamps in the next, each cell anchored by an HTML comment — validated live:
+// `<!-- BT Concluir --><td ...><span ...><span class="pv-campo-padrao">05/10/2026 18:21</span>`.
+const CONCLUIR_CELL_PATTERN = /<!--\s*BT Concluir\s*-->\s*<td[^>]*>([\s\S]*?)<\/td>/i;
+const TIMESTAMP_PATTERN = /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/;
+
+/**
+ * Reads the "Concluído" step time from the detail page's status timeline. Falls back to the
+ * latest timestamp of the service day (or the day after) on the whole page — the original
+ * behavior, which also lands on the Concluído time.
+ */
+function readConcluidoTimestamp(html: string, acceptedBrDates: string[]): { date: string; time: string } | null {
+  const cell = html.match(CONCLUIR_CELL_PATTERN)?.[1] ?? '';
+  const fromTimeline = cell.match(TIMESTAMP_PATTERN);
+  if (fromTimeline && acceptedBrDates.includes(fromTimeline[1])) {
+    return { date: fromTimeline[1], time: fromTimeline[2] };
+  }
+
+  let latest: { date: string; time: string } | null = null;
+  for (const match of html.matchAll(/(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/g)) {
+    const [, date, time] = match;
+    const rank = acceptedBrDates.indexOf(date);
+    if (rank === -1) continue;
+    const latestRank = latest ? acceptedBrDates.indexOf(latest.date) : -1;
+    if (!latest || rank > latestRank || (rank === latestRank && time > latest.time)) {
+      latest = { date, time };
+    }
+  }
+  return latest;
+}
+
+/**
+ * Opens the laudo (a separate single-page app, porto-socorro-app-portal.web.app) in its own tab and
+ * reads "Data da assinatura", falling back to "Data de conclusão do laudo". Validated live with
+ * 5999501/26: "Data da assinatura: 05/10/2026 - 16:08:38". The tab is always closed afterwards.
+ */
+async function readLaudoEndTime(
+  page: Page,
+  laudoUrl: string,
+  acceptedBrDates: string[],
+): Promise<{ date: string; time: string; source: 'laudo_assinatura' | 'laudo_conclusao' } | null> {
+  const target = await page.context().newPage();
+  try {
+    await target.goto(laudoUrl, { waitUntil: 'domcontentloaded', timeout: LAUDO_LOAD_TIMEOUT_MS });
+    await target
+      .waitForFunction(() => /Data da assinatura|Data de conclus[ãa]o do laudo/i.test(document.body?.innerText ?? ''), undefined, {
+        timeout: LAUDO_LOAD_TIMEOUT_MS,
+      })
+      .catch(() => null);
+
+    const text = await target.evaluate(() => document.body?.innerText ?? '');
+    for (const [pattern, source] of [
+      [LAUDO_ASSINATURA_PATTERN, 'laudo_assinatura'],
+      [LAUDO_CONCLUSAO_PATTERN, 'laudo_conclusao'],
+    ] as const) {
+      const match = text.match(pattern);
+      if (match && acceptedBrDates.includes(match[1])) {
+        return { date: match[1], time: match[2], source };
+      }
+    }
+    return null;
+  } finally {
+    await target.close().catch(() => {});
+  }
+}
+
+/**
+ * Determines when the technician finished working on one service (in practice: the day's last
+ * service, by "Hora Prevista" — see run-hours-job.ts). Rule confirmed by the product owner
+ * (2026-10-05):
+ * - Magnifier enabled → the laudo's "Data da assinatura" is the real end of work.
+ * - Magnifier disabled (laudo not filled in on Porto) → the timeline's "Concluído" time, and the
+ *   caller flags the day for a warning (`laudo: 'unavailable'`).
+ * - Laudo failed to open or its magnifier couldn't be identified → "Concluído" time, but no
+ *   warning, since that's not something the technician did wrong.
+ *
+ * Navigation: re-runs the day's search and clicks the result whose `onclick="changeUrlAW(this,
+ * anoServico, numeroServico, ...)"` matches — detail pages reject direct URL navigation with
+ * "Acesso proibido" (validated live with 5167437/26: timeline 06:13, 09:17, 10:25, 10:58).
+ * Timestamps on the day after the service day are accepted, so a service that crosses midnight
+ * still gets its real end time.
+ */
+export async function getServicoEndTime(
+  page: Page,
+  serviceDateKey: string,
+  params: { anoServico: string; numeroServico: string },
+): Promise<PortoServiceEndTime> {
+  const frame = await runServiceSearch(page, { startDateKey: serviceDateKey, endDateKey: serviceDateKey });
   await dismissBlockingModal(frame);
   const link = frame.locator(`a[onclick*="changeUrlAW(this, ${params.anoServico}, ${params.numeroServico}"]`).first();
 
   if (!(await link.count())) {
-    return { situacaoAtual: '', timestamps: [], latestTimestamp: null };
+    return { situacaoAtual: '', endTime: null, endDate: null, endSource: null, laudo: 'not_found', laudoError: 'Serviço não encontrado na busca do dia.' };
   }
 
   await Promise.all([
     frame.waitForNavigation({ waitUntil: 'networkidle', timeout: 20000 }).catch(() => null),
     link.click(),
   ]);
+  await dismissBlockingModal(frame);
 
+  const acceptedBrDates = [toBrDate(serviceDateKey), toBrDate(nextDayKey(serviceDateKey))];
   const html = await frame.content();
+  const situacaoAtual = html.match(/Situa[çc][ãa]o Atual[\s\S]{0,200}?pv-campo-padrao">([^<]*)</i)?.[1]?.trim() ?? '';
+  const concluido = readConcluidoTimestamp(html, acceptedBrDates);
+  const fromConcluido = (laudo: PortoLaudoState, laudoError?: string): PortoServiceEndTime => ({
+    situacaoAtual,
+    endTime: concluido?.time ?? null,
+    endDate: concluido?.date ?? null,
+    endSource: concluido ? 'concluido' : null,
+    laudo,
+    laudoError,
+  });
 
-  const situacaoMatch = html.match(/Situa[çc][ãa]o Atual[\s\S]{0,200}?pv-campo-padrao">([^<]*)</i);
-  const timestamps = Array.from(html.matchAll(/\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}/g)).map((match) => match[0]);
+  const laudoLink = await readLaudoLink(frame);
+  if (laudoLink.state !== 'enabled') {
+    return fromConcluido(laudoLink.state === 'disabled' ? 'unavailable' : 'not_found');
+  }
 
-  const latestTimestamp =
-    timestamps.length > 0
-      ? timestamps.reduce((latest, current) => (parseBrDateTime(current) > parseBrDateTime(latest) ? current : latest))
-      : null;
-
-  return {
-    situacaoAtual: situacaoMatch?.[1]?.trim() ?? '',
-    timestamps,
-    latestTimestamp,
-  };
-}
-
-function parseBrDateTime(value: string): number {
-  const match = value.match(/(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/);
-  if (!match) return 0;
-  const [, day, month, year, hour, minute] = match;
-  return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)).getTime();
+  try {
+    const laudo = await readLaudoEndTime(page, laudoLink.url, acceptedBrDates);
+    if (!laudo) {
+      return fromConcluido('failed', 'Laudo aberto, mas sem "Data da assinatura" do dia do serviço.');
+    }
+    return { situacaoAtual, endTime: laudo.time, endDate: laudo.date, endSource: laudo.source, laudo: 'available' };
+  } catch (error) {
+    return fromConcluido('failed', error instanceof Error ? error.message.slice(0, 300) : String(error));
+  }
 }

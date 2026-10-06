@@ -262,3 +262,60 @@ serviço só aparece "Concluído" no dia seguinte).
 - A escala de cada técnico (pro horário previsto de início) é buscada uma vez
   por técnico por execução, não uma vez por dia — reaproveitada pra todos os
   dias novos daquele técnico na mesma rodada.
+
+## Início e fim de jornada (2026-10-05)
+
+Regra validada ao vivo com o dono do produto, usando o dia 05/10/2026 (`lib/porto-jobs/run-hours-job.ts`
++ `getServicoEndTime` em `lib/porto-integration/servicos.ts`):
+
+- Só contam serviços **concluídos** (coluna STATUS começando com "Concluído", com ou sem sucesso).
+  "Cancelado" e "Aceite" (aceito e nunca executado) ficam fora — validado ao vivo: um serviço
+  "Aceite" com Hora Prev. 17:19 jogava o fim do dia para 07:39 e geraria advertência indevida.
+- **Início** = menor **Hora Prev.** (`cap_horaAtendimento`) dos serviços concluídos do dia. A Hora
+  Comb. (`cap_horaProgramadaAtendimento`) é o horário definido pela Porto e não é usada. A Hora Prev.
+  é uma previsão — costuma bater com o "Em Execução", mas nem sempre segue a ordem real.
+- **Fim** = o mais tarde entre os **últimos serviços concluídos** (até 3, do maior para o menor Hora
+  Prev.; para de abrir quando a Hora Prev. do próximo já é anterior ao melhor fim encontrado — um
+  técnico faz um serviço por vez). Validado ao vivo: um serviço com Hora Prev. 17:00 foi assinado às
+  14:00, enquanto o anterior terminou às 15:32. Para cada serviço aberto:
+  - Laudo liberado (`<img id="imgLaudo" src=".../laudo.png">` dentro de
+    `<a onclick="abreLink('https://porto-socorro-app-portal.web.app/laudo/<id>?token=...')">`) → abre
+    o laudo direto por essa URL e usa a **"Data da assinatura"** (ou "Data de conclusão do laudo" se
+    não houver assinatura).
+  - Laudo desabilitado (`laudo_disable.png`, sem `onclick`) → usa o horário de **Concluído** (célula
+    `<!-- BT Concluir -->` da linha do tempo) e grava no apontamento a observação
+    `ADVERTÊNCIA: laudo digital não preenchido no serviço NNNNNNN/AA`.
+  - Ícone não encontrado ou laudo que não abre → usa o Concluído **sem** advertência e registra
+    `laudo_unreadable_used_concluido` no histórico.
+- Falha ao abrir um dos serviços → o dia não é gravado e é tentado de novo na próxima execução.
+- Dias apontados/corrigidos à mão (`work_hours.source='manual'`, ou folga/falta/justificado manual)
+  nunca são sobrescritos pelo job.
+
+### Período da busca (2026-10-05)
+
+O site **não respeita as datas digitadas**: mantém sempre uma janela de 15 dias própria (pedir
+01/10–05/10 buscou 01/10–16/10; pedir 01/09–15/09 buscou 31/08–15/09) e às vezes ignora o
+preenchimento e usa o padrão "últimos 15 dias". Por isso:
+
+- `runServiceSearch` lê de volta o período usado e, se não cobrir o pedido, tenta de novo uma vez e
+  depois falha com erro.
+- O job de horas descarta qualquer serviço com data fora do período da execução. Antes disso, as
+  rodadas de outubro reescreveram dias de setembro (com o "previsto" da escala de outubro) e as de
+  setembro gravaram 31/08.
+
+O worker roda com `TZ=America/Sao_Paulo` (`worker/Dockerfile`). Em UTC, a execução das 23:00 já
+calculava "hoje" como o dia seguinte e o último dia de cada mês ficava sem importar.
+
+Tempos medidos ao vivo (05/10/2026, 12 socorristas, 47 serviços de 7 técnicos):
+
+| Etapa | Tempo |
+|---|---|
+| Login | ~9s |
+| Busca de serviços do dia | ~4s |
+| Escala de um técnico, abrindo cada dia de indisponibilidade (job de escala) | ~68s |
+| Escala de um técnico, só a grade do mês (job de horas — só precisa do horário do turno) | ~5s |
+| Fim de jornada de um técnico no dia (busca + detalhe + laudo) | ~9s |
+| Job de horas completo para o dia | ~2 min |
+
+Voltar da página de detalhe com `page.goBack()` não funciona (timeout) — cada serviço continua exigindo
+refazer a busca do dia.

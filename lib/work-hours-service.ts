@@ -86,6 +86,42 @@ export async function getExistingPortoImportedDates(technicianIds: string[], sta
   return new Set(rows.map((row) => `${String(row.technician_id)}::${toDateKey(row.date)}`));
 }
 
+/**
+ * Returns the "technicianId::date" keys an admin entered by hand within the range — the Porto
+ * import must never overwrite these (its write deletes and re-inserts the day). A manual "worked"
+ * entry is a `source='manual'` work_hours row; a manual folga/falta/justificado leaves no
+ * work_hours row at all, only a schedule row with the manual note. The Porto import also writes
+ * that note prefix, but always alongside its own `source='porto'` work_hours row, hence the
+ * NOT EXISTS.
+ */
+export async function getManualWorkHourDates(technicianIds: string[], startDate: string, endDate: string): Promise<Set<string>> {
+  if (!technicianIds.length) return new Set();
+
+  const rows = await sql.query(
+    `
+      SELECT technician_id, date
+      FROM work_hours
+      WHERE source = 'manual'
+        AND technician_id = ANY($1)
+        AND date >= $2
+        AND date <= $3
+      UNION
+      SELECT s.technician_id, s.date
+      FROM schedule s
+      WHERE s.notes LIKE 'Apontamento manual:%'
+        AND s.technician_id = ANY($1)
+        AND s.date >= $2
+        AND s.date <= $3
+        AND NOT EXISTS (
+          SELECT 1 FROM work_hours w WHERE w.technician_id = s.technician_id AND w.date = s.date
+        )
+    `,
+    [technicianIds, startDate, endDate],
+  );
+
+  return new Set(rows.map((row) => `${String(row.technician_id)}::${toDateKey(row.date)}`));
+}
+
 export async function getActiveTechnicianIds(technicianIds: string[]) {
   if (!technicianIds.length) {
     return new Set<string>();

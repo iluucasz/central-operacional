@@ -135,7 +135,18 @@ async function getIndisponibilidadeEntriesForDay(page: Page, qra: string, cellIn
  * socorristas list through its portal wrapper and clicks the technician's own link, exactly like
  * a real user would, rather than constructing the ConDetSocor.xhtml URL directly.
  */
-export async function getEscalaForCurrentMonth(page: Page, qra: string): Promise<PortoEscalaDay[]> {
+export async function getEscalaForCurrentMonth(
+  page: Page,
+  qra: string,
+  options: {
+    /**
+     * Opens each indisponibilidade-marked day to tell a full day off from a partial break (3 page
+     * loads per such day). Callers that only need the shift times (the hours job's "previsto")
+     * pass false and get the month grid alone — `unavailable` then just mirrors the icon.
+     */
+    resolveUnavailability?: boolean;
+  } = {},
+): Promise<PortoEscalaDay[]> {
   const detailFrame = await openTechnicianEscalaFrame(page, qra);
   if (!detailFrame) {
     return [];
@@ -197,7 +208,7 @@ export async function getEscalaForCurrentMonth(page: Page, qra: string): Promise
   const result: PortoEscalaDay[] = [];
   for (const entry of parsed) {
     const { cellIndex, ...day } = entry;
-    if (!day.unavailable) {
+    if (!day.unavailable || options.resolveUnavailability === false) {
       result.push(day);
       continue;
     }

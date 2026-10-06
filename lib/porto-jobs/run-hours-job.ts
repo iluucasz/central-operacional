@@ -3,10 +3,10 @@ import { getEscalaForCurrentMonth, type PortoEscalaDay } from '../porto-integrat
 import { launchAuthenticatedPortoSession } from '../porto-integration/browser';
 import { PortoLoginError } from '../porto-integration/login';
 import { listSocorristas } from '../porto-integration/socorristas';
-import { getServicoDetail, searchServicosByDateRange, type PortoServiceRow } from '../porto-integration/servicos';
+import { getServicoEndTime, searchServicosByDateRange, type PortoServiceEndTime, type PortoServiceRow } from '../porto-integration/servicos';
 import { resolveTechnicianByQra } from '../porto-integration/technician-match';
 import { finishSyncLog, getPortoConfig, recordHoursImportResult, startSyncLog } from '../porto-sync-log';
-import { applyWorkHourEntries, getExistingPortoImportedDates, getIsoWeekNumber, type WorkHourEntry } from '../work-hours-service';
+import { applyWorkHourEntries, getExistingPortoImportedDates, getIsoWeekNumber, getManualWorkHourDates, type WorkHourEntry } from '../work-hours-service';
 import type { Technician } from '../types';
 
 const MAX_PLAUSIBLE_SHIFT_HOURS = 16;
@@ -16,6 +16,18 @@ const MAX_PLAUSIBLE_SHIFT_HOURS = 16;
 // entrada-saída diff, zero exceptions, silently inflating saldo by ~1h on every full workday).
 const DAILY_BREAK_HOURS = 1;
 const SEARCH_CHUNK_DAYS = 15; // matches the site's own client-side range cap (see servicos.ts)
+// How many of the day's last concluded services (by Hora Prev.) are opened to find the end of work.
+const END_CANDIDATE_SERVICES = 3;
+
+function horaPrevMinutes(service: PortoServiceRow): number {
+  return /^\d{1,2}:\d{2}$/.test(service.horaAtendimento) ? timeToMinutes(service.horaAtendimento) : -1;
+}
+
+/** "yyyy-mm-dd HH:mm" from a service end, so a next-day end (crossed midnight) sorts later. */
+function endSortKey(end: PortoServiceEndTime): string {
+  const [day, month, year] = (end.endDate ?? '').split('/');
+  return `${year}-${month}-${day} ${end.endTime}`;
+}
 
 export type HoursJobOptions = {
   /** Manual test runs (admin UI button) never write real data and always do a full preview. */
@@ -80,11 +92,6 @@ function getMonthStartKey() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
-function toBrDate(dateKey: string) {
-  const [year, month, day] = dateKey.split('-');
-  return `${day}/${month}/${year}`;
-}
-
 function timeToMinutes(value: string): number {
   const [h, m] = value.split(':').map(Number);
   return h * 60 + m;
@@ -138,18 +145,18 @@ function diffHours(startTime: string, endTime: string) {
  * Accepted trade-off: fine for this team's size, but can misattribute services if two
  * technicians share a name prefix.
  *
- * There is also no validated way to read a technician's actual clock-in time from Porto — only
- * the completion ("Concluído") timestamp of each service was confirmed live. This job uses the
- * technician's planned escala start time for the day (lib/porto-integration/escala.ts, validated
- * live) as a stand-in for the real start time, and the latest same-day service completion
- * timestamp as the end time. Accepted: an approximate start time is fine for this use case.
+ * Workday times (validated live against 05/10/2026 with the product owner):
+ * - start: the earliest "Hora Prev." of the day's services, read off the search results.
+ * - end: from the day's last service (latest "Hora Prev.") only — its laudo's "Data da assinatura",
+ *   or its "Concluído" time plus a warning note when the laudo wasn't filled in. See
+ *   getServicoEndTime in lib/porto-integration/servicos.ts.
+ * - previsto: the escala's shift times for the day (escala.ts).
  *
  * Coverage: this job sweeps every day from the 1st of the current month through today in one run
  * — not just "today" — since Porto's search form natively supports a date range (capped at 15
  * days by the site itself, so a month past day 15 needs 2+ search chunks). To keep every run
- * cheap after the first catch-up, it skips re-fetching service detail pages for (technician,
- * date) pairs that already have a `source='porto'` row in `work_hours` — only genuinely new days
- * do the expensive per-service detail lookup.
+ * cheap after the first catch-up, it skips (technician, date) pairs that already have a
+ * `source='porto'` row in `work_hours` — only genuinely new days do the detail lookup.
  *
  * Extracted from app/api/cron/porto-hours/route.ts so both the Vercel route (bounded by
  * maxDuration, hence `timeBudgetMs`) and the VPS worker (no execution-time limit, runs each day
@@ -202,6 +209,9 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
 
       const technicianIds = resolved.map((r) => r.technician.id);
       const existingDates = await getExistingPortoImportedDates(technicianIds, monthStartKey, todayKey);
+      // Days an admin entered or corrected by hand always win over Porto — not even the reprocess
+      // window below touches them.
+      const manualDates = await getManualWorkHourDates(technicianIds, monthStartKey, todayKey);
 
       // Porto's own escala calendar doesn't finalize a day's shift time until the day is over — a
       // same-day scrape sees a blank/missing time range for "today" (confirmed live: fetching
@@ -259,7 +269,10 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         const byDateForTechnician = new Map<string, PortoServiceRow[]>();
         for (const service of services) {
           const dateKey = brDateToKey(service.dataProgramada);
-          if (!dateKey) continue;
+          // Porto's search returns a 15-day window of its own choosing, not the dates asked for
+          // (see runServiceSearch) — never import a day outside this run's range (another month,
+          // whose escala isn't the one loaded here, or a future day that hasn't happened yet).
+          if (!dateKey || dateKey < monthStartKey || dateKey > todayKey) continue;
           const list = byDateForTechnician.get(dateKey) ?? [];
           list.push(service);
           byDateForTechnician.set(dateKey, list);
@@ -287,27 +300,50 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           }
 
           const dedupKey = `${technician.id}::${dateKey}`;
+          if (manualDates.has(dedupKey)) {
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'manual_entry_kept', date: dateKey });
+            continue;
+          }
           if (existingDates.has(dedupKey)) {
             details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'already_imported', date: dateKey });
             continue;
           }
 
-          const brDate = toBrDate(dateKey);
-          const dayRange = { startDateKey: dateKey, endDateKey: dateKey };
+          // Only services the technician actually carried out count — "Cancelado" and "Aceite"
+          // (accepted, never executed) carry stray timestamps (confirmed live: an "Aceite" service
+          // with Hora Prev. 17:19 put the day's end at 07:39 and would have triggered a bogus
+          // warning). If the status column couldn't be read at all, fall back to every service.
+          const statusKnown = servicesForDay.some((service) => service.status);
+          const workedServices = statusKnown ? servicesForDay.filter((service) => /^conclu/i.test(service.status)) : servicesForDay;
+          if (!workedServices.length) {
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'no_concluded_service', date: dateKey, statuses: servicesForDay.map((service) => service.status) });
+            continue;
+          }
 
-          let latestCompletion: string | null = null;
-          for (const service of servicesForDay) {
-            if (timeBudgetExceeded()) {
-              budgetExceeded = true;
-              break dateLoop;
-            }
-            // A single flaky service page (stuck modal, navigation hiccup on Porto's legacy JSF
-            // app — confirmed live: a leftover RichFaces error modal blocked every subsequent
-            // click for the rest of the run) shouldn't abort the whole month's import. Log it and
-            // keep going instead of letting one bad service take down everything already computed.
-            let detail;
+          // End of the workday: the latest end among the day's last END_CANDIDATE_SERVICES
+          // concluded services by "Hora Prev." — each one's laudo "Data da assinatura", or its
+          // "Concluído" time when the laudo wasn't filled in (see getServicoEndTime). More than one
+          // because Hora Prev. is a forecast, not always the real order (confirmed live: a service
+          // with Hora Prev. 17:00 was signed at 14:00 while an earlier-forecast one ended 15:32).
+          const endCandidates = [...workedServices]
+            .sort((a, b) => horaPrevMinutes(b) - horaPrevMinutes(a))
+            .slice(0, END_CANDIDATE_SERVICES);
+
+          // A flaky service page (stuck modal, navigation hiccup on Porto's legacy JSF app —
+          // confirmed live: a leftover RichFaces error modal blocked every subsequent click for the
+          // rest of the run) shouldn't abort the whole month's import. The day is left unimported
+          // instead of guessed from fewer services, so the next run retries it.
+          let endInfo: PortoServiceEndTime | null = null;
+          let endService: PortoServiceRow | null = null;
+          let detailFailed = false;
+          for (const candidate of endCandidates) {
+            // A technician runs one service at a time, so a service forecast to start before the
+            // best end found so far can't have ended after it — stop opening pages.
+            if (endInfo && `${dateKey} ${candidate.horaAtendimento.padStart(5, '0')}` <= endSortKey(endInfo)) break;
+            const candidateCode = `${candidate.numeroServico}/${candidate.anoServico}`;
+            let candidateEnd: PortoServiceEndTime;
             try {
-              detail = await getServicoDetail(page, dayRange, { anoServico: service.anoServico, numeroServico: service.numeroServico });
+              candidateEnd = await getServicoEndTime(page, dateKey, { anoServico: candidate.anoServico, numeroServico: candidate.numeroServico });
             } catch (detailError) {
               details.push({
                 qra,
@@ -315,43 +351,49 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
                 technician_name: technician.name,
                 action: 'service_detail_failed',
                 date: dateKey,
-                numeroServico: service.numeroServico,
+                service: candidateCode,
                 error: detailError instanceof Error ? detailError.message.slice(0, 300) : String(detailError),
               });
-              continue;
+              detailFailed = true;
+              break;
             }
-            for (const timestamp of detail.timestamps) {
-              if (!timestamp.startsWith(brDate)) continue;
-              const timeOnly = timestamp.split(' ')[1];
-              if (timeOnly && (!latestCompletion || timeOnly > latestCompletion)) {
-                latestCompletion = timeOnly;
-              }
+            if (candidateEnd.laudo === 'not_found' || candidateEnd.laudo === 'failed') {
+              details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'laudo_unreadable_used_concluido', date: dateKey, service: candidateCode, laudo: candidateEnd.laudo, laudoError: candidateEnd.laudoError });
+            }
+            if (candidateEnd.endTime && (!endInfo || endSortKey(candidateEnd) > endSortKey(endInfo))) {
+              endInfo = candidateEnd;
+              endService = candidate;
             }
           }
+          if (detailFailed) continue;
 
-          if (!latestCompletion) {
-            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'no_completion_time', date: dateKey });
+          if (!endInfo?.endTime || !endService) {
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'no_completion_time', date: dateKey, services: endCandidates.map((service) => `${service.numeroServico}/${service.anoServico}`) });
             continue;
           }
+          const workEnd = endInfo.endTime;
+          const serviceCode = `${endService.numeroServico}/${endService.anoServico}`;
+
+          // Only a magnifier found and disabled is the technician's fault. `not_found`/`failed` mean
+          // we couldn't read the laudo — logged above, never turned into a warning.
+          const laudoMissing = endInfo.laudo === 'unavailable';
 
           // Real start of the day's work: the earliest "Hora Prevista" (cap_horaAtendimento)
-          // among today's services for this technician — confirmed live with the product owner
-          // (2026-08-29) as the actual per-service start time. Read directly off the search
-          // results row (no extra page load needed). NOT the neighboring "Hora Comb."
-          // (cap_horaProgramadaAtendimento) column, a static scheduled slot that's the same value
-          // (typically 08:00) for nearly every service regardless of when work actually started —
-          // using that by mistake (via the escala's generic shift start, previously) is exactly
-          // why every technician's recorded start time was showing as 08:00.
-          const earliestStart = servicesForDay
+          // among the day's concluded services — re-validated live (05/10/2026) against the
+          // portal's "HORA PREV." column. NOT the neighboring "Hora Comb."
+          // (cap_horaProgramadaAtendimento), the static slot Porto sets (typically 08:00).
+          const earliestStart = workedServices
             .map((service) => service.horaAtendimento)
             .filter((value) => /^\d{1,2}:\d{2}$/.test(value))
             .reduce((earliest: string | null, current) => (!earliest || timeToMinutes(current) < timeToMinutes(earliest) ? current : earliest), null);
 
           let plannedStart = '08:00';
-          let plannedEnd = latestCompletion;
+          let plannedEnd = workEnd;
           try {
             if (!escalaCache.has(qra)) {
-              escalaCache.set(qra, await getEscalaForCurrentMonth(page, qra));
+              // Only the shift times are needed here, so skip opening each indisponibilidade day
+              // (measured live: 68s vs 5s per technician with 11 marked days).
+              escalaCache.set(qra, await getEscalaForCurrentMonth(page, qra, { resolveUnavailability: false }));
             }
             const escalaDays = escalaCache.get(qra) ?? [];
             const dayOfMonth = Number(dateKey.slice(8, 10));
@@ -361,7 +403,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             // in the schedule UI (admin-schedule-builder.tsx's getScheduleTimeLabel) always shows
             // the exact same value as the real time next to it, which is meaningless. Falls back
             // to the completion time only when the escala genuinely has no end time recorded.
-            plannedEnd = escalaDay?.endTime ?? latestCompletion;
+            plannedEnd = escalaDay?.endTime ?? workEnd;
           } catch (escalaError) {
             details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'escala_fetch_failed_fallback_0800', date: dateKey, error: escalaError instanceof Error ? escalaError.message : String(escalaError) });
           }
@@ -371,17 +413,21 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           }
           const actualStart = earliestStart ?? plannedStart;
 
-          const hoursWorked = diffHours(actualStart, latestCompletion);
+          const hoursWorked = diffHours(actualStart, workEnd);
           if (hoursWorked <= 0 || hoursWorked > MAX_PLAUSIBLE_SHIFT_HOURS) {
-            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'invalid_hours', date: dateKey, actualStart, latestCompletion, hoursWorked });
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'invalid_hours', date: dateKey, actualStart, workEnd, endSource: endInfo.endSource, service: serviceCode, hoursWorked });
             continue;
           }
+
+          const notes = laudoMissing
+            ? `Importado automaticamente do Porto Seguro. ADVERTÊNCIA: laudo digital não preenchido no serviço ${serviceCode} — fim de jornada pelo horário de Concluído.`
+            : 'Importado automaticamente do Porto Seguro.';
 
           const entry: WorkHourEntry = {
             technician_id: technician.id,
             date: dateKey,
             start_time: actualStart,
-            end_time: latestCompletion,
+            end_time: workEnd,
             planned_start_time: plannedStart,
             planned_end_time: plannedEnd,
             hours_worked: hoursWorked,
@@ -389,13 +435,14 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
             month: Number(dateKey.slice(5, 7)),
             year: Number(dateKey.slice(0, 4)),
             attendance_status: 'worked',
-            notes: 'Importado automaticamente do Porto Seguro.',
+            notes,
           };
 
           importedCount++;
+          const endSummary = { start: actualStart, end: workEnd, endSource: endInfo.endSource, service: serviceCode, laudo: endInfo.laudo, warning: laudoMissing || undefined };
 
           if (dryRun) {
-            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'would_import', date: dateKey, hoursWorked });
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'would_import', date: dateKey, hoursWorked, ...endSummary });
             continue;
           }
 
@@ -403,7 +450,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           // preserves everything computed so far instead of discarding the whole run.
           const result = await applyWorkHourEntries([entry], { source: 'porto' });
           rowsWritten += result.count;
-          details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'imported', date: dateKey, hoursWorked });
+          details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'imported', date: dateKey, hoursWorked, ...endSummary });
         }
       }
 

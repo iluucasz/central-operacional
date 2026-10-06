@@ -2,6 +2,12 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 
+# The jobs compute "today" / "start of month" with local Date getters, so the process must run on
+# Brasília time — on UTC the 23:00 BRT hours run already sees tomorrow (confirmed live: on
+# 2026-10-05 it swept through "2026-10-06", and the last day of each month was never imported).
+# Node's bundled ICU resolves this without the tzdata package.
+ENV TZ=America/Sao_Paulo
+
 # node_modules lives at /app so both /app/lib (shared with the Next.js app) and /app/worker can
 # resolve dependencies via Node's normal upward node_modules lookup.
 COPY worker/package.json ./package.json
