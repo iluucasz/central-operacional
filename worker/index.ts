@@ -6,6 +6,7 @@ import { sql } from '../lib/db';
 import { getOrganizationSettings } from '../lib/organization-settings-store';
 import { sendPortoAlert } from '../lib/porto-alerts';
 import { ensurePortoConfigSchema } from '../lib/porto-config-schema';
+import { PORTO_LAYOUT_ALERT_TITLE } from '../lib/porto-layout';
 import { brasiliaNow } from '../lib/whatsapp/dates';
 import { isJobDue } from './job-schedule';
 import { portoLockInfo, waitForPortoLock } from './porto-lock';
@@ -62,9 +63,13 @@ async function runSchedule() {
 }
 
 /** WhatsApp to the admin (Configurações) when an automatic run failed or finished with warnings. */
-async function alertOnProblems(jobLabel: string, result: { status: string; error?: string; warnings?: string[] }) {
+async function alertOnProblems(jobLabel: string, result: { status: string; error?: string; warnings?: string[]; layout_suspect?: boolean }) {
   let alert: { sent: boolean; reason?: string } | null = null;
-  if (result.status === 'error') {
+  if (result.layout_suspect) {
+    // Its own headline: this one needs the robot's selectors fixed on the VPS, not a retry.
+    const problems = result.status === 'error' ? [result.error ?? 'Erro sem detalhe.'] : result.warnings ?? [];
+    alert = await sendPortoAlert(PORTO_LAYOUT_ALERT_TITLE, [`Na ${jobLabel}:`, ...problems]);
+  } else if (result.status === 'error') {
     alert = await sendPortoAlert(`a ${jobLabel} falhou`, [result.error ?? 'Erro sem detalhe.']);
   } else if (result.warnings?.length) {
     alert = await sendPortoAlert(`a ${jobLabel} terminou com avisos`, result.warnings);

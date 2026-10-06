@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
       sql`SELECT * FROM porto_config WHERE id = 1`,
       sql`
         SELECT id, job_type, started_at, finished_at, status, technicians_processed, rows_written,
-               error_message, details, range_start, range_end
+               error_message, details, range_start, range_end, layout_suspect
         FROM porto_sync_log
         ORDER BY started_at DESC
         LIMIT ${SYNC_LOG_LIMIT}

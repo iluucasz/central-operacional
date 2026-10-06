@@ -32,6 +32,8 @@ export async function finishSyncLog(
     details?: unknown;
     error_message?: string | null;
     range?: { start: string; end: string };
+    /** The run points at a Porto screen change (see lib/porto-layout.ts). */
+    layout_suspect?: boolean;
   },
 ) {
   await sql`
@@ -43,7 +45,8 @@ export async function finishSyncLog(
         details = ${result.details ? JSON.stringify(result.details) : null},
         error_message = ${result.error_message ?? null},
         range_start = ${result.range?.start ?? null},
-        range_end = ${result.range?.end ?? null}
+        range_end = ${result.range?.end ?? null},
+        layout_suspect = ${result.layout_suspect ?? false}
     WHERE id = ${id}
   `;
 }

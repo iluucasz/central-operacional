@@ -1,4 +1,5 @@
 import type { Frame, Page } from 'playwright-core';
+import { PortoLayoutError } from '../porto-layout';
 
 /**
  * Opens a Porto portal page through its proper menu/iframe wrapper on prestador.portoseguro.com.br
@@ -16,7 +17,7 @@ export async function openPortalFrame(page: Page, menuId: string, targetUrl: str
 
   const frame = page.frames().find((f) => f !== page.mainFrame() && f.url().startsWith('https://wwws.portoseguro.com.br'));
   if (!frame) {
-    throw new Error(`Não foi possível localizar o iframe real do Porto para ${targetUrl}`);
+    throw new PortoLayoutError(`Não foi possível localizar o iframe real do Porto para ${targetUrl}`);
   }
 
   return frame;

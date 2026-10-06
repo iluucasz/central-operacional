@@ -7,6 +7,9 @@
  * request to the worker over HTTPS (via the VPS's existing Caddy reverse proxy) and relay
  * whatever it returns — no Playwright dependency on Vercel at all anymore.
  */
+export const WORKER_MAINTENANCE_MESSAGE =
+  'Módulo Porto em manutenção: o servidor da automação (VPS) está fora do ar. Tente de novo quando ele voltar.';
+
 export async function callPortoWorker(path: string, init: RequestInit = {}): Promise<{ status: number; body: unknown }> {
   const baseUrl = process.env.PORTO_WORKER_URL;
   const secret = process.env.PORTO_WORKER_SECRET;
@@ -14,14 +17,23 @@ export async function callPortoWorker(path: string, init: RequestInit = {}): Pro
     throw new Error('PORTO_WORKER_URL / PORTO_WORKER_SECRET não configurados na Vercel.');
   }
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      ...(init.headers ?? {}),
-      Authorization: `Bearer ${secret}`,
-    },
-    cache: 'no-store',
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${secret}`,
+      },
+      cache: 'no-store',
+    });
+  } catch {
+    return { status: 503, body: { status: 'error', error: WORKER_MAINTENANCE_MESSAGE } };
+  }
+  // Caddy answers 502/503 itself when the worker container is down (the worker only ever sends 500).
+  if (response.status === 502 || response.status === 503) {
+    return { status: 503, body: { status: 'error', error: WORKER_MAINTENANCE_MESSAGE } };
+  }
 
   const text = await response.text();
   let body: unknown;

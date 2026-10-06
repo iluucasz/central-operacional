@@ -80,7 +80,7 @@ export interface EvolutionConnectionState {
   error: string | null;
 }
 
-/** Manual diagnostics only (the "Testar conexão" button) — never polled. */
+/** Manual diagnostics only (the "Testar conexão" button) — never polled (lib/system-status.ts only probes reachability). */
 export async function getEvolutionConnectionState(connection: EvolutionConnection): Promise<EvolutionConnectionState> {
   try {
     const response = await request(connection, `/instance/connectionState/${encodeURIComponent(connection.instance)}`, { method: 'GET' });

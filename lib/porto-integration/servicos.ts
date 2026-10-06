@@ -1,5 +1,6 @@
 import type { Frame, Page } from 'playwright-core';
 import { openPortalFrame } from './navigation';
+import { PortoLayoutError } from '../porto-layout';
 
 export type PortoServiceRow = {
   numeroServico: string;
@@ -116,7 +117,7 @@ async function runServiceSearch(page: Page, range: PortoDateRange): Promise<Fram
     }
   }
 
-  throw new Error(`A busca de serviços do Porto não respeitou o período ${brStart}–${brEnd} (usou ${used.start || '?'}–${used.end || '?'}).`);
+  throw new PortoLayoutError(`A busca de serviços do Porto não respeitou o período ${brStart}–${brEnd} (usou ${used.start || '?'}–${used.end || '?'}).`);
 }
 
 function brDateToKey(brDate: string): string | null {

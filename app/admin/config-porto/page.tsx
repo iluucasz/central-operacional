@@ -324,6 +324,11 @@ export default function ConfigPortoPage() {
     return <LoadingShell role="admin" />;
   }
 
+  // Only the latest finished run of each job counts: once a fixed robot runs clean, the notice goes away.
+  const layoutSuspectRuns = (['hours', 'schedule'] as const)
+    .map((jobType) => logs.find((log) => log.job_type === jobType && log.status !== 'running' && log.status !== 'skipped'))
+    .filter((log): log is PortoSyncLog => Boolean(log?.layout_suspect));
+
   return (
     <AppShell role="admin" userName={user.name || user.email}>
       <PageHeader
@@ -333,6 +338,18 @@ export default function ConfigPortoPage() {
       />
 
       {dataError ? <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{dataError}</div> : null}
+
+      {layoutSuspectRuns.length ? (
+        <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+          <p className="font-semibold">O Portal do Porto parece ter mudado de tela — o robô precisa de ajuste na VPS.</p>
+          {layoutSuspectRuns.map((log) => (
+            <p key={log.id} className="mt-1">
+              {log.job_type === 'hours' ? 'Importação de horas' : 'Importação da escala'} em {formatDateTime(log.started_at)}: {log.error_message || 'sem detalhe'}
+            </p>
+          ))}
+          <p className="mt-1 text-xs">Até o ajuste, confira os dados importados à mão. O aviso some quando a próxima execução passar sem esse problema.</p>
+        </div>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <DataPanel title="Credenciais e automação" description="Login e senha usados para acessar o Portal do Prestador.">

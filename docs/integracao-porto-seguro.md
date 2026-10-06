@@ -404,8 +404,19 @@ refazer a busca do dia.
   "Redeploy" na memória/nota de deploy: apagar imagens antigas, `docker builder prune` e rodar o
   container com rotação de log (`--log-opt max-size=20m --log-opt max-file=5`).
 
-Riscos que continuam (sem como prevenir só pelo código): worker/VPS fora do ar (nenhum alerta sai,
-porque quem alerta é o próprio worker); WhatsApp desconectado (alertas e notificações não saem);
+- **Mudança de tela no Porto** (`lib/porto-layout.ts`): iframe que não aparece, busca que ignora o
+  período, calendário no mês errado (`PortoLayoutError`) e timeout do Playwright depois do login
+  marcam a execução com `porto_sync_log.layout_suspect`, assim como os avisos de lista vazia, busca
+  sem serviços, status não reconhecido, ≥3 serviços/laudos que não abriram e escala que não abriu
+  para ninguém. O alerta do WhatsApp sai com o título "o Portal do Porto parece ter mudado de tela —
+  o robô precisa de ajuste na VPS" e a Config. Porto mostra um aviso até a próxima execução limpa.
+- **VPS fora do ar** (`lib/system-status.ts`, `/api/system-status`): a Vercel testa a cada 2 min
+  (cache de 60s) se o worker (`/health`) e a Evolution respondem; se não (502/503 do Caddy ou sem
+  resposta), o admin vê "Módulos Porto e WhatsApp em manutenção" no topo de toda tela. As ações do
+  Porto na tela (testar login, socorristas, rodar agora) respondem com a mesma mensagem.
+
+Riscos que continuam (sem como prevenir só pelo código): worker/VPS fora do ar (nenhum alerta por
+WhatsApp sai, porque a Evolution está na mesma VPS — só o aviso na tela); WhatsApp desconectado (alertas e notificações não saem);
 sessão do Porto expirando no meio de uma execução muito longa (os dias que falharem ficam para a
 próxima execução); serviço com "Data Comb." diferente do dia real de execução (as horas contam no
 dia combinado).

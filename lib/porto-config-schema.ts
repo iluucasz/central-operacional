@@ -80,6 +80,10 @@ export async function ensurePortoConfigSchema() {
         ALTER TABLE porto_sync_log
         ADD COLUMN IF NOT EXISTS run_trigger VARCHAR(16)
       `;
+      await sql`
+        ALTER TABLE porto_sync_log
+        ADD COLUMN IF NOT EXISTS layout_suspect BOOLEAN NOT NULL DEFAULT false
+      `;
     })().catch((error) => {
       portoConfigSchemaReady = null;
       throw error;

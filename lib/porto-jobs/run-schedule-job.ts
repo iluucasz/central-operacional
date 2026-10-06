@@ -5,6 +5,7 @@ import { getOrganizationSettings } from '../organization-settings-store';
 import { PortoLoginError } from '../porto-integration/login';
 import { listSocorristas } from '../porto-integration/socorristas';
 import { resolveTechnicianByQra } from '../porto-integration/technician-match';
+import { isPortoLayoutError } from '../porto-layout';
 import { finishSyncLog, getPortoConfig, recordScheduleImportResult, startSyncLog } from '../porto-sync-log';
 import { replacePortoScheduleRows, PORTO_SCHEDULE_NOTE_PREFIX } from '../schedule-write-service';
 import type { ScheduleSeedRow } from '../schedule-planner';
@@ -37,6 +38,8 @@ export type ScheduleJobResult = {
   summary?: Record<string, number>;
   /** Health checks that didn't stop the run but mean something is likely wrong (see the hours job). */
   warnings?: string[];
+  /** The failure or warnings point at a Porto screen change — the robot needs a fix on the VPS. */
+  layout_suspect?: boolean;
   details: Array<Record<string, unknown>>;
 };
 
@@ -210,6 +213,10 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         warnings.push('Nenhum técnico tem escala no Porto para este mês — nada foi importado. O calendário pode ter mudado.');
       }
       if (checked.escala_fetch_failed) warnings.push(`${checked.escala_fetch_failed} escala(s) de técnico não puderam ser abertas — ficaram como estavam.`);
+      // One technician's escala failing is a hiccup; none of them opening is the calendar changing.
+      const layoutSuspect =
+        !socorristas.length ||
+        (!technicianIdsByMonth[0].length && ((checked.no_escala_on_porto ?? 0) > 0 || (checked.escala_fetch_failed ?? 0) > 0));
       const warningMessage = warnings.length ? `Atenção: ${warnings.join(' | ')}` : null;
 
       const dryRun = options.forceWrite ? false : options.manual || config.dry_run_only !== false;
@@ -224,8 +231,9 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
           rows_written: rowsWritten,
           details,
           error_message: warningMessage,
+          layout_suspect: layoutSuspect,
         });
-        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: rowsWritten, summary: summarizeDetails(details), warnings, details };
+        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: rowsWritten, summary: summarizeDetails(details), warnings, layout_suspect: layoutSuspect, details };
       }
 
       for (const [index, { startDate, endDate }] of months.entries()) {
@@ -247,9 +255,10 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         rows_written: rowsWritten,
         details,
         error_message: warningMessage,
+        layout_suspect: layoutSuspect,
       });
 
-      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, summary: summarizeDetails(details), warnings, details };
+      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, summary: summarizeDetails(details), warnings, layout_suspect: layoutSuspect, details };
     } finally {
       await browser.close();
     }
@@ -259,10 +268,11 @@ export async function runScheduleJob(options: ScheduleJobOptions): Promise<Sched
         ? error.message
         : `Erro inesperado ao importar escala do Porto: ${error instanceof Error ? error.message.split('\n')[0].slice(0, 200) : String(error)}`;
     console.error('[porto-jobs/schedule] error:', error);
+    const layoutError = isPortoLayoutError(error);
     if (!options.manual) {
       await recordScheduleImportResult({ monthKey: currentMonthKey, status: 'error', error: message });
     }
-    await finishSyncLog(logId, { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, details, error_message: message });
-    return { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, error: message, summary: summarizeDetails(details), details };
+    await finishSyncLog(logId, { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, details, error_message: message, layout_suspect: layoutError });
+    return { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, error: message, summary: summarizeDetails(details), layout_suspect: layoutError, details };
   }
 }

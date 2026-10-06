@@ -1,5 +1,6 @@
 import type { Frame, Page } from 'playwright-core';
 import { openPortalFrame } from './navigation';
+import { PortoLayoutError } from '../porto-layout';
 
 export type PortoEscalaDay = {
   /** Day of month, 1-31. */
@@ -182,7 +183,7 @@ export async function getEscalaForMonth(
     })
     .catch(() => null);
   if (shownMonth && shownMonth !== `${year}-${month}`) {
-    throw new Error(`O calendário do Porto mostrou ${shownMonth} em vez de ${year}-${month}.`);
+    throw new PortoLayoutError(`O calendário do Porto mostrou ${shownMonth} em vez de ${year}-${month}.`);
   }
 
   const parsed = await detailFrame.evaluate((daysInMonth) => {

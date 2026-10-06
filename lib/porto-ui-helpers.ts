@@ -32,6 +32,8 @@ export type PortoSyncLog = {
   details: PortoJobDetail[] | null;
   range_start: string | null;
   range_end: string | null;
+  /** The run points at a Porto screen change (lib/porto-layout.ts). */
+  layout_suspect?: boolean;
 };
 
 export function jobDetailActionLabel(action: string | undefined) {

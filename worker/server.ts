@@ -161,6 +161,11 @@ export function startWorkerServer() {
 
         const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
 
+        // Polled by the app (lib/system-status.ts) to tell the admin when the VPS is down.
+        if (req.method === 'GET' && url.pathname === '/health') {
+          sendJson(res, 200, { ok: true });
+          return;
+        }
         if (req.method === 'GET' && url.pathname === '/run/hours') {
           await handleRunHours(url, res);
           return;

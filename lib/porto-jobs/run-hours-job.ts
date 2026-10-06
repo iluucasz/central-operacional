@@ -5,6 +5,7 @@ import { PortoLoginError } from '../porto-integration/login';
 import { listSocorristas } from '../porto-integration/socorristas';
 import { getServicoEndTime, searchServicosByDateRange, type PortoServiceEndTime, type PortoServiceRow } from '../porto-integration/servicos';
 import { resolveTechnicianByQra } from '../porto-integration/technician-match';
+import { isPortoLayoutError } from '../porto-layout';
 import { finishSyncLog, getPortoConfig, recordHoursImportResult, startSyncLog } from '../porto-sync-log';
 import { sql } from '../db';
 import { buildPortoWarningNote, netOfDailyBreak } from '../organization-settings';
@@ -77,6 +78,8 @@ export type HoursJobResult = {
   range?: { start: string; end: string };
   /** Count of detail entries per `action`, so "12 processed, 2 written" is explained at a glance. */
   summary?: Record<string, number>;
+  /** The failure or warnings point at a Porto screen change — the robot needs a fix on the VPS. */
+  layout_suspect?: boolean;
   /**
    * Health checks that didn't stop the run but mean something is likely wrong (Porto changed its
    * layout, a technician isn't registered, many pages failed…). Shown in the run history and sent
@@ -200,6 +203,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
   const settings = await getOrganizationSettings();
   const details: Array<Record<string, unknown>> = [];
   const warnings: string[] = [];
+  let layoutSuspect = false;
   let techniciansProcessed = 0;
   let importedCount = 0;
   let rowsWritten = 0;
@@ -221,6 +225,7 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       const socorristas = await listSocorristas(page);
       if (!socorristas.length) {
         warnings.push('A lista de socorristas do Porto veio vazia — o portal pode ter mudado de layout.');
+        layoutSuspect = true;
       }
 
       // Resolve all technicians up front so we know which (technician, date) pairs to skip.
@@ -300,9 +305,11 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       const allServices = Array.from(servicesByCode.values());
       if (!allServices.length && rangeStartKey < todayKey) {
         warnings.push(`A busca de serviços do Porto não trouxe nenhum serviço de ${rangeStartKey} a ${todayKey} — o portal pode ter mudado.`);
+        layoutSuspect = true;
       }
       if (allServices.length && !allServices.some((service) => /conclu|cancel/i.test(service.status))) {
         warnings.push('A coluna de status dos serviços não foi reconhecida (nenhum "Concluído"/"Cancelado") — nenhum serviço pôde ser contado.');
+        layoutSuspect = true;
       }
 
       const escalaCache = new Map<string, PortoEscalaDay[]>();
@@ -670,9 +677,15 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
 
       // Many pages failing or laudos unreadable in one run usually means Porto changed something.
       const failedPages = summary.service_detail_failed ?? 0;
-      if (failedPages >= 3) warnings.push(`${failedPages} serviço(s) não puderam ser abertos no Porto — os dias ficaram para a próxima execução.`);
+      if (failedPages >= 3) {
+        warnings.push(`${failedPages} serviço(s) não puderam ser abertos no Porto — os dias ficaram para a próxima execução.`);
+        layoutSuspect = true;
+      }
       const unreadableLaudos = summary.laudo_unreadable_used_concluido ?? 0;
-      if (unreadableLaudos >= 3) warnings.push(`${unreadableLaudos} laudo(s) não puderam ser lidos — o fim do dia usou o Concluído (sem advertência). A página do laudo pode ter mudado.`);
+      if (unreadableLaudos >= 3) {
+        warnings.push(`${unreadableLaudos} laudo(s) não puderam ser lidos — o fim do dia usou o Concluído (sem advertência). A página do laudo pode ter mudado.`);
+        layoutSuspect = true;
+      }
       const invalidDays = summary.invalid_hours ?? 0;
       if (invalidDays) warnings.push(`${invalidDays} dia(s) com horas fora do plausível (0 ou acima de ${settings.portoMaxShiftHours}h) ficaram sem apontamento — confira à mão.`);
       if (budgetExceeded) warnings.push('A execução parou por limite de tempo; o restante fica para a próxima.');
@@ -686,8 +699,9 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           details,
           range,
           error_message: warningMessage,
+          layout_suspect: layoutSuspect,
         });
-        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, partial: budgetExceeded, range, summary, warnings, details };
+        return { status: 'dry_run', technicians_processed: techniciansProcessed, would_write: importedCount, partial: budgetExceeded, range, summary, warnings, layout_suspect: layoutSuspect, details };
       }
 
       const overallStatus = budgetExceeded ? 'partial' : importedCount ? 'success' : 'partial';
@@ -699,9 +713,10 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         details,
         range,
         error_message: warningMessage,
+        layout_suspect: layoutSuspect,
       });
 
-      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, partial: budgetExceeded, range, summary, warnings, details };
+      return { status: overallStatus, technicians_processed: techniciansProcessed, rows_written: rowsWritten, partial: budgetExceeded, range, summary, warnings, layout_suspect: layoutSuspect, details };
     } finally {
       await browser.close();
     }
@@ -712,10 +727,11 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
         ? error.message
         : `Erro inesperado ao importar horas do Porto: ${error instanceof Error ? error.message.split('\n')[0].slice(0, 200) : String(error)}`;
     console.error('[porto-jobs/hours] error:', error);
+    const layoutError = isPortoLayoutError(error);
     if (!options.manual) {
       await recordHoursImportResult({ status: 'error', error: message });
     }
-    await finishSyncLog(logId, { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, details, error_message: message });
-    return { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, error: message, summary: summarizeDetails(details), details };
+    await finishSyncLog(logId, { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, details, error_message: message, layout_suspect: layoutError });
+    return { status: 'error', technicians_processed: techniciansProcessed, rows_written: rowsWritten, error: message, summary: summarizeDetails(details), layout_suspect: layoutError, details };
   }
 }
