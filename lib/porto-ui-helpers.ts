@@ -60,6 +60,8 @@ export function jobDetailActionLabel(action: string | undefined) {
       return 'Falha ao abrir detalhe de um serviço (pulado)';
     case 'start_time_fallback_escala':
       return 'Sem "Hora Prevista" válida — usou horário da escala como aproximação';
+    case 'warning_kept':
+      return 'Dia com advertência — mantido, não é recalculado';
     case 'manual_entry_kept':
       return 'Dia lançado à mão — mantido, o robô não sobrescreve';
     case 'no_concluded_service':

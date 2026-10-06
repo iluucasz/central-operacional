@@ -336,10 +336,9 @@ refazer a busca do dia.
 - **Fim no dia seguinte:** a conta de horas usa a data real do fim. Antes, um Concluído na manhã
   seguinte (ex.: início 08:00, fim 08:30 do dia seguinte) virava 0,5h; agora passa de 16h e é
   rejeitado (`invalid_hours`).
-- **Advertência fica (decisão do dono do produto, 06/10):** um dia com advertência não é revisto
-  além da janela normal de reprocessamento (ontem e hoje). Se o técnico preencher o laudo até a
-  execução da noite seguinte, a advertência sai; depois disso, fica — laudo preenchido dias depois
-  não transforma o dia em normal.
+- **Advertência nunca sai (decisão do dono do produto, 06/10):** um dia que já tem advertência
+  gravada não é mais recalculado pelo robô, nem pela janela de reprocessamento (ontem e hoje). Laudo
+  preenchido depois não muda o dia. Para tirar uma advertência, só corrigindo o dia à mão.
 - **Virada do mês:** a execução automática cobre o mês corrente **mais ontem**, então o último dia do
   mês anterior também é reprocessado no dia 1. Dias fora do mês corrente (esse caso, ou uma execução
   manual de datas passadas) mantêm o "previsto" já gravado, porque só a escala do mês atual é lida.

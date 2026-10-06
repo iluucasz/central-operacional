@@ -122,6 +122,30 @@ export async function getManualWorkHourDates(technicianIds: string[], startDate:
   return new Set(rows.map((row) => `${String(row.technician_id)}::${toDateKey(row.date)}`));
 }
 
+/**
+ * "technicianId::date" keys of Porto-imported days already flagged with a laudo warning. The hours
+ * job never recomputes these (product owner, 2026-10-06): once given, the warning stays, even if
+ * the laudo is filled in afterwards.
+ */
+export async function getPortoWarningDates(technicianIds: string[], startDate: string, endDate: string): Promise<Set<string>> {
+  if (!technicianIds.length) return new Set();
+
+  const rows = await sql.query(
+    `
+      SELECT s.technician_id, s.date
+      FROM schedule s
+      JOIN work_hours w ON w.technician_id = s.technician_id AND w.date = s.date AND w.source = 'porto'
+      WHERE s.notes LIKE '%ADVERTÊNCIA%'
+        AND s.technician_id = ANY($1)
+        AND s.date >= $2
+        AND s.date <= $3
+    `,
+    [technicianIds, startDate, endDate],
+  );
+
+  return new Set(rows.map((row) => `${String(row.technician_id)}::${toDateKey(row.date)}`));
+}
+
 /** The "previsto" already recorded per "technicianId::date" (from the schedule note), when there is one. */
 export async function getStoredPlannedTimes(technicianIds: string[], startDate: string, endDate: string): Promise<Map<string, { start: string; end: string }>> {
   if (!technicianIds.length) return new Map();

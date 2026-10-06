@@ -12,6 +12,7 @@ import {
   getExistingPortoImportedDates,
   getIsoWeekNumber,
   getManualWorkHourDates,
+  getPortoWarningDates,
   getStoredPlannedTimes,
   type WorkHourEntry,
 } from '../work-hours-service';
@@ -238,9 +239,9 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
       // window below touches them.
       const manualDates = await getManualWorkHourDates(technicianIds, rangeStartKey, todayKey);
       const storedPlanned = await getStoredPlannedTimes(technicianIds, rangeStartKey, todayKey);
-      // A laudo warning is deliberately NOT re-checked past the reprocess window below (product
-      // owner, 2026-10-06): a laudo filled in days later must not turn the day back into a normal
-      // one. Only yesterday/today get recomputed, as for any other day.
+      // Once a day gets a laudo warning it is never recomputed, not even by the reprocess window
+      // below (product owner, 2026-10-06): filling the laudo in afterwards must not remove it.
+      const warningDates = await getPortoWarningDates(technicianIds, rangeStartKey, todayKey);
 
       // Porto's own escala calendar doesn't finalize a day's shift time until the day is over — a
       // same-day scrape sees a blank/missing time range for "today" (confirmed live: fetching
@@ -352,6 +353,10 @@ export async function runHoursJob(options: HoursJobOptions): Promise<HoursJobRes
           const dedupKey = `${technician.id}::${dateKey}`;
           if (manualDates.has(dedupKey)) {
             details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'manual_entry_kept', date: dateKey });
+            continue;
+          }
+          if (warningDates.has(dedupKey)) {
+            details.push({ qra, technician_id: technician.id, technician_name: technician.name, action: 'warning_kept', date: dateKey });
             continue;
           }
           if (existingDates.has(dedupKey)) {
