@@ -1,6 +1,7 @@
 // Relative imports only: this module is also compiled into the VPS worker (worker/tsconfig.json),
 // which has no `@/` path alias.
 import { sql } from '../db';
+import { endOfWorkDayMinutes, type OrganizationSettings } from '../organization-settings';
 import { getOrganizationSettings } from '../organization-settings-store';
 import { ensurePortoConfigSchema } from '../porto-config-schema';
 import {
@@ -43,26 +44,60 @@ const PAUSE_BETWEEN_SENDS_MS = 350;
 const CATCH_UP_WINDOW_MINUTES = 180;
 
 /**
- * Whether the day's hours are in for "Fim do expediente". With the Porto import writing hours,
- * they only exist once that night's import has finished for the day; otherwise (automation off or
- * in test mode) hours are entered by hand and the configured time stands as is.
+ * The work day "Fim do expediente" reports at `now`: today once it's over (the default shift end
+ * plus a margin, see endOfWorkDayMinutes), otherwise yesterday. The import time is configurable, so
+ * a run at 00:30 or 10:00 must talk about the finished day, never a partial today.
  */
-async function dailyHoursReady(dateKey: string): Promise<boolean> {
+function dailyHoursDay(now: Date, settings: Pick<OrganizationSettings, 'defaultShiftEnd'>): string {
+  const current = brasiliaNow(now);
+  return current.minutes >= endOfWorkDayMinutes(settings) ? current.dateKey : addDaysToKey(current.dateKey, -1);
+}
+
+/**
+ * Whether the day's hours are in for "Fim do expediente". With the Porto import writing hours,
+ * that's an automatic import covering the day that started after the day was over (a manual or an
+ * earlier run would send a partial day); otherwise (automation off or in test mode) hours are
+ * entered by hand and the configured time stands as is.
+ */
+async function dailyHoursReady(dateKey: string, settings: Pick<OrganizationSettings, 'defaultShiftEnd'>): Promise<boolean> {
   await ensurePortoConfigSchema();
   const [config] = await sql`SELECT automation_enabled, dry_run_only FROM porto_config WHERE id = 1`;
   if (!config?.automation_enabled || config.dry_run_only !== false) return true;
-  // Both conditions: the run covered the day and finished on it or later (Brasília time). The
-  // range alone isn't enough — runs from before the worker's timezone fix ended at 23:00 BRT with
-  // a range already reaching the next day.
   const [run] = await sql`
     SELECT 1 FROM porto_sync_log
     WHERE job_type = 'hours' AND status IN ('success', 'partial') AND range_end >= ${dateKey}
-      AND (finished_at AT TIME ZONE 'America/Sao_Paulo')::date >= ${dateKey}::date
-      -- Only the night's automatic import: a manual afternoon run would send a partial day.
+      AND started_at >= ((${dateKey}::date + make_interval(mins => ${endOfWorkDayMinutes(settings)})) AT TIME ZONE 'America/Sao_Paulo')
       AND COALESCE(run_trigger, 'auto') = 'auto'
     LIMIT 1
   `;
   return Boolean(run);
+}
+
+/** How long a shift reminder waits past its time for the day's escala import before going anyway. */
+const SCHEDULE_WAIT_MINUTES = 60;
+
+/**
+ * Whether a reminder that reads the escala ("Horário do dia seguinte", "Folga") should still wait:
+ * the escala import is due earlier today than the reminder but hasn't finished yet (e.g. it's
+ * queued behind a long hours import). Waits at most SCHEDULE_WAIT_MINUTES, then sends with what
+ * there is.
+ */
+async function scheduleImportPending(now: Date, reminderMinutes: number, settings: Pick<OrganizationSettings, 'portoScheduleImportTime'>): Promise<boolean> {
+  const current = brasiliaNow(now);
+  const importMinutes = timeToMinutes(settings.portoScheduleImportTime);
+  if (importMinutes === null || importMinutes > reminderMinutes || current.minutes >= reminderMinutes + SCHEDULE_WAIT_MINUTES) return false;
+
+  await ensurePortoConfigSchema();
+  const [config] = await sql`SELECT automation_enabled, dry_run_only FROM porto_config WHERE id = 1`;
+  if (!config?.automation_enabled || config.dry_run_only !== false) return false;
+  const [run] = await sql`
+    SELECT 1 FROM porto_sync_log
+    WHERE job_type = 'schedule' AND status IN ('success', 'partial') AND finished_at IS NOT NULL
+      AND started_at >= ((${current.dateKey}::date + make_interval(mins => ${importMinutes})) AT TIME ZONE 'America/Sao_Paulo')
+      AND COALESCE(run_trigger, 'auto') = 'auto'
+    LIMIT 1
+  `;
+  return !run;
 }
 
 function wait(ms: number) {
@@ -373,10 +408,13 @@ async function runDayOff({ config, trigger, createdBy, now }: RunContext) {
 
 async function runDailyHours({ config, trigger, createdBy, now }: RunContext) {
   const summary = emptySummary('daily_hours');
-  const { dateKey: today, monthKey } = brasiliaNow(now);
+  const settings = await getOrganizationSettings();
+  // `today` is the reported work day: yesterday when this runs before today's work is over.
+  const today = dailyHoursDay(now, settings);
+  const monthKey = today.slice(0, 7);
   const template = config.notifications.daily_hours.template;
   // {meta_mes} is Configurações → Jornada mensal.
-  const monthlyHoursTarget = (await getOrganizationSettings()).monthlyHours;
+  const monthlyHoursTarget = settings.monthlyHours;
 
   const [technicians, dayRows, monthRows] = await Promise.all([
     loadActiveTechnicians(),
@@ -463,6 +501,7 @@ export async function runDueNotifications(options: { now?: Date; only?: Notifica
   if (!config.enabled) return [];
 
   const current = brasiliaNow(now);
+  const settings = await getOrganizationSettings();
   const summaries: JobSummary[] = [];
 
   for (const type of NOTIFICATION_TYPES) {
@@ -478,10 +517,13 @@ export async function runDueNotifications(options: { now?: Date; only?: Notifica
       if (scheduledAt === null || current.minutes < scheduledAt || current.minutes >= scheduledAt + CATCH_UP_WINDOW_MINUTES) continue;
     }
 
-    const periodKey = monthly ? current.monthKey : current.dateKey;
+    // "Fim do expediente" is claimed per reported work day, which is yesterday before today's work is over.
+    const periodKey = monthly ? current.monthKey : type === 'daily_hours' ? dailyHoursDay(now, settings) : current.dateKey;
     // Claiming the day with no hours imported yet would send nothing and then block the send that
-    // follows the night's import (the configured time is often earlier than the 23:00 import).
-    if (type === 'daily_hours' && !options.ignoreTime && !(await dailyHoursReady(current.dateKey))) continue;
+    // follows the import (the configured time is often earlier than the import).
+    if (type === 'daily_hours' && !options.ignoreTime && !(await dailyHoursReady(periodKey, settings))) continue;
+    // Shift reminders read the escala: give that day's import a chance to finish first.
+    if ((type === 'next_day_shift' || type === 'day_off') && !options.ignoreTime && scheduledAt !== null && (await scheduleImportPending(now, scheduledAt, settings))) continue;
     if (!(await claimJobRun(type, periodKey))) continue;
 
     try {

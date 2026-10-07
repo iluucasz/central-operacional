@@ -430,6 +430,34 @@ dia combinado).
   Porto (`replaceGeneratedScheduleRows` com `portoAutomationEnabled: false`).
 - Nos dois casos, dias concluídos e apontamentos manuais nunca são substituídos.
 
+## Horários livres (07/10/2026)
+
+O admin pode pôr a importação de horas e a de escala em qualquer horário (em produção: horas 20:00,
+escala 20:30). Para nenhum horário gerar dado errado:
+
+- **Advertência com prazo** (`portoLaudoGraceHours`, padrão 6h, contado do Concluído): se o robô passa
+  antes do prazo, o dia é gravado pelo Concluído **sem** advertência e com `LAUDO PENDENTE: serviço X
+  concluído sem laudo; prazo para preencher até DD/MM HH:MM` na observação. Esses dias são recalculados
+  em toda execução (`getPendingLaudoDates`, mesmo fora da janela e até 14 dias para trás): laudo
+  preenchido → dia normal; prazo vencido sem laudo → advertência (que nunca sai).
+- **Dias reprocessados: mínimo 1** — o dia de hoje, importado antes de acabar, é completado na
+  execução seguinte.
+- **"Fim do expediente" fala do dia já encerrado**: o dia "acaba" 2h depois do fim do turno padrão
+  (`endOfWorkDayMinutes`, 18:00 → 20:00). Importação antes disso (madrugada, manhã) manda a mensagem do
+  dia anterior; o envio pelo horário configurado só sai depois de uma importação automática que
+  começou após o fim daquele dia (`dailyHoursReady`).
+- **Lembretes que leem a escala** ("Horário do dia seguinte", "Folga"): se a importação da escala está
+  marcada para antes do lembrete e ainda não terminou (ex.: esperando a importação de horas, que segura
+  a única sessão do Porto), o lembrete espera até 60 min por ela (`scheduleImportPending`).
+
+## Como o Porto organiza a escala (investigado em 07/10/2026)
+
+Não há publicação mensal: cada técnico tem um turno fixo diário (08:00–18:00; um 08:00–19:00) que já
+aparece preenchido meses à frente (out–jan), e as folgas seguem um rodízio fixo (todo domingo + sábado
+alternado, em dois grupos) já marcado até dezembro. O que muda no dia a dia são as exceções lançadas
+perto da data (férias, atestado, troca) — por isso a reimportação diária. 3 técnicos ativos não têm
+escala no Porto (o dono da conta e dois sem atividade em outubro).
+
 ## VPS nova (BlackHosting, desde 07/10/2026)
 
 A VPS da Oracle (163.176.250.63) deixou de existir em 06/10/2026 (conta encerrada pela Oracle) e a

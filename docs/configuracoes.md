@@ -35,12 +35,13 @@ no dia em que a tela entrou no ar.
 | Último dia da Q1 | 15 | Painel do técnico, para serviço sem quinzena informada. |
 | Serviço cancelado cobra o previsto | não | Saldo no apontamento e no dashboard gerencial. |
 | Faixas de prêmio | 80 OS → R$ 250; 160 OS → R$ 600 | Prêmio da folha (maior faixa atingida) e metas/medidores do painel do técnico. Sem faixas, não há prêmio nem metas. |
-| Horários do robô | horas 23:00, escala 03:00 | Worker: verificação a cada minuto, com tolerância de 60 min para horário perdido; ao reiniciar, não repete uma execução que já aconteceu hoje (consulta `porto_sync_log`). |
-| Dias reprocessados | 1 (ontem e hoje) | Job de horas. Dia com advertência ou manual nunca é recalculado. |
+| Horários do robô | horas 23:00, escala 03:00 (podem ser quaisquer) | Worker: verificação a cada minuto, com tolerância de 60 min para horário perdido; ao reiniciar, não repete uma execução que já aconteceu hoje (consulta `porto_sync_log`). |
+| Dias reprocessados | 1 (ontem e hoje), mínimo 1 | Job de horas. Mínimo 1 porque a importação pode rodar antes do dia acabar: o dia de hoje sempre é completado na execução seguinte. Dia com advertência ou manual nunca é recalculado. |
 | Máximo de horas por dia | 16 h | Job de horas (`invalid_hours`). |
 | Escala do mês seguinte | 7 dias | Job de escala (0 = nunca). |
 | Folga integral a partir de | 90% | Job de escala (indisponibilidade que cobre o turno). |
 | Usar conclusão do laudo | sim | Fim do dia sem assinatura: conclusão do laudo antes do Concluído. |
+| Prazo para preencher o laudo | 6 h | Contado do Concluído. Execução dentro do prazo grava o dia com `LAUDO PENDENTE:` e o recalcula em toda execução (mesmo fora da janela de reprocessamento) até o laudo aparecer ou o prazo vencer — aí entra a advertência. 0 = advertência na hora. |
 | Advertência + texto | ligada | Nota `ADVERTÊNCIA: <texto>`. O marcador `ADVERTÊNCIA:` é fixo, porque é por ele que o robô reconhece um dia advertido. `{servico}` = número do serviço. |
 | Registrar serviço cancelado | sim | Job de horas (situação "Serviço cancelado"). |
 | WhatsApp para alertas do robô | vazio | Worker: aviso quando uma execução automática falha, termina com avisos de saúde ou fica travada (>2h). Vazio = sem alertas. |
