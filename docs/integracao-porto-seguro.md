@@ -429,3 +429,40 @@ dia combinado).
 - **Automação desligada:** o "Montar escala" manda. Ele pode substituir também os dias que vieram do
   Porto (`replaceGeneratedScheduleRows` com `portoAutomationEnabled: false`).
 - Nos dois casos, dias concluídos e apontamentos manuais nunca são substituídos.
+
+## VPS nova (BlackHosting, desde 07/10/2026)
+
+A VPS da Oracle (163.176.250.63) deixou de existir em 06/10/2026 (conta encerrada pela Oracle) e a
+importação das 23:00 desse dia não rodou. O worker foi para uma VPS da BlackHosting, **compartilhada**
+com o NextRotta e a Evolution:
+
+- `143.20.50.58`, Ubuntu 24.04, x86_64, 8 vCPU, 7,6 GB + 4 GB de swap, 30 GB de disco, fuso de Brasília.
+  SSH só por chave: `ssh -i <chave> root@143.20.50.58`.
+- Caddy (`/etc/caddy/Caddyfile`, `evolution-whatsapp.duckdns.org`): `/porto-worker/*` → `127.0.0.1:8090`
+  (este worker); `/nextrotta-worker/*` e `/nextrotta-vps-agent/*` são do NextRotta; o resto → Evolution
+  (`/opt/evolution`, chave global nova em `/opt/evolution/.env`).
+- **Não mexer** em `nextrotta-*`, `evolution-*`, `/opt/nextrotta`, `/opt/evolution` nem nas rotas do Caddy.
+  Não há limpeza automática de disco nesta VPS (a gestão dela é do NextRotta).
+
+Worker desta produção:
+
+- Código em `/opt/porto-worker/app` (só `lib/` e `worker/` do commit em produção); variáveis em
+  `/opt/porto-worker/worker.env` (600): `DATABASE_URL`, `PORTO_CREDENTIALS_KEY`, `PORTO_WORKER_SECRET`
+  (igual ao da Vercel), `PORTO_WORKER_PORT=8090`, `EVOLUTION_API_URL`, `EVOLUTION_API_KEY`,
+  `EVOLUTION_INSTANCE`, `NODE_ENV=production`.
+- Deploy de uma versão nova (`<sha7>` = commit em produção):
+
+  ```sh
+  git archive <sha7> lib worker | ssh root@143.20.50.58 'rm -rf /opt/porto-worker/app && mkdir -p /opt/porto-worker/app && tar -x -C /opt/porto-worker/app'
+  ssh root@143.20.50.58 'cd /opt/porto-worker/app && docker build -f worker/Dockerfile -t porto-worker:<sha7> . && docker builder prune -af'
+  # confira que nenhum job está rodando: docker logs porto-worker | grep -E "Iniciando|Resultado" | tail
+  ssh root@143.20.50.58 'docker rm -f porto-worker && docker run -d --name porto-worker --restart unless-stopped \
+    --memory=3g --shm-size=512m --log-opt max-size=20m --log-opt max-file=5 -p 127.0.0.1:8090:8090 \
+    --env-file /opt/porto-worker/worker.env porto-worker:<sha7>'
+  # depois: docker image rm da versão anterior (o disco é pequeno)
+  ```
+
+- Verificação: `curl https://evolution-whatsapp.duckdns.org/porto-worker/health` → 401 sem segredo,
+  `{"ok":true}` com `Authorization: Bearer <PORTO_WORKER_SECRET>`.
+- Validado em 07/10/2026: login no Portal do Prestador a partir do IP novo funciona; o dia 06/10 foi
+  importado à mão (`/run/hours?start=2026-10-06&write=1`, 7 técnicos, sem avisos).
