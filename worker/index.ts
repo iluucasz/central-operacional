@@ -9,6 +9,7 @@ import { ensurePortoConfigSchema } from '../lib/porto-config-schema';
 import { PORTO_LAYOUT_ALERT_TITLE } from '../lib/porto-layout';
 import { brasiliaNow } from '../lib/whatsapp/dates';
 import { isJobDue } from './job-schedule';
+import { runWithRetries, type RetryInfo } from './job-retry';
 import { portoLockInfo, waitForPortoLock } from './porto-lock';
 import { startWorkerServer } from './server';
 
@@ -20,15 +21,25 @@ function log(...args: unknown[]) {
 // day/month and then fail to send, so WhatsApp only runs here once the container has them.
 const whatsappConfigured = Boolean(process.env.EVOLUTION_API_URL && process.env.EVOLUTION_API_KEY && process.env.EVOLUTION_INSTANCE);
 
+/** Logs why an unattended run is being tried again (the admin only hears about the final outcome). */
+function logRetry(label: string) {
+  return ({ attempt, maxAttempts, delayMs, reason }: RetryInfo) =>
+    log(`${label}: tentativa ${attempt}/${maxAttempts} não deu certo (${reason}). Nova tentativa em ${Math.round(delayMs / 60000)} min.`);
+}
+
 async function runHours() {
   log('Iniciando job de apontamento de horas...');
   // The day this run imports — the end-of-shift message below is about it even when the run
   // (waiting on the lock, or a long catch-up) finishes after midnight.
   const runDay = new Date();
   try {
-    const result = await waitForPortoLock('apontamento de horas (automático)', () => runHoursJob({ manual: false }));
+    // The lock is taken per attempt, so the wait between attempts never blocks the escala run.
+    const { result, attempts } = await runWithRetries({
+      run: () => waitForPortoLock('apontamento de horas (automático)', () => runHoursJob({ manual: false })),
+      onRetry: logRetry('Horas'),
+    });
     log('Resultado (horas):', JSON.stringify(result));
-    await alertOnProblems('importação de horas', result);
+    await alertOnProblems('importação de horas', result, attempts);
     if (result.status !== 'success' && result.status !== 'partial') return;
   } catch (error) {
     log('Job de horas falhou:', error);
@@ -53,9 +64,12 @@ async function runWhatsApp(options: Parameters<typeof runDueNotifications>[0] = 
 async function runSchedule() {
   log('Iniciando job de escala...');
   try {
-    const result = await waitForPortoLock('escala (automática)', () => runScheduleJob({ manual: false }));
+    const { result, attempts } = await runWithRetries({
+      run: () => waitForPortoLock('escala (automática)', () => runScheduleJob({ manual: false })),
+      onRetry: logRetry('Escala'),
+    });
     log('Resultado (escala):', JSON.stringify(result));
-    await alertOnProblems('importação da escala', result);
+    await alertOnProblems('importação da escala', result, attempts);
   } catch (error) {
     log('Job de escala falhou:', error);
     await sendPortoAlert('a importação da escala falhou', [error instanceof Error ? error.message : String(error)]);
@@ -63,16 +77,18 @@ async function runSchedule() {
 }
 
 /** WhatsApp to the admin (Configurações) when an automatic run failed or finished with warnings. */
-async function alertOnProblems(jobLabel: string, result: { status: string; error?: string; warnings?: string[]; layout_suspect?: boolean }) {
+async function alertOnProblems(jobLabel: string, result: { status: string; error?: string; warnings?: string[]; layout_suspect?: boolean }, attempts = 1) {
   let alert: { sent: boolean; reason?: string } | null = null;
+  // Said only when it matters: the problem survived the automatic retries.
+  const attemptsNote = attempts > 1 ? [`Já foram feitas ${attempts} tentativas automáticas.`] : [];
   if (result.layout_suspect) {
     // Its own headline: this one needs the robot's selectors fixed on the VPS, not a retry.
     const problems = result.status === 'error' ? [result.error ?? 'Erro sem detalhe.'] : result.warnings ?? [];
-    alert = await sendPortoAlert(PORTO_LAYOUT_ALERT_TITLE, [`Na ${jobLabel}:`, ...problems]);
+    alert = await sendPortoAlert(PORTO_LAYOUT_ALERT_TITLE, [`Na ${jobLabel}:`, ...problems, ...attemptsNote]);
   } else if (result.status === 'error') {
-    alert = await sendPortoAlert(`a ${jobLabel} falhou`, [result.error ?? 'Erro sem detalhe.']);
+    alert = await sendPortoAlert(`a ${jobLabel} falhou`, [result.error ?? 'Erro sem detalhe.', ...attemptsNote]);
   } else if (result.warnings?.length) {
-    alert = await sendPortoAlert(`a ${jobLabel} terminou com avisos`, result.warnings);
+    alert = await sendPortoAlert(`a ${jobLabel} terminou com avisos`, [...result.warnings, ...attemptsNote]);
   }
   if (alert && !alert.sent) log(`Alerta da ${jobLabel} não enviado:`, alert.reason);
 }
@@ -84,6 +100,8 @@ let lastRunDayLoaded = false;
 /**
  * On (re)start, treat a job as done today when the sync log already has a run of it started today
  * at/after its configured time — so a restart right after 23:00 doesn't run the import twice.
+ * A run that failed, or was still 'running' when the worker was stopped (a deploy mid-import),
+ * doesn't count: it is tried again while the catch-up window (job-schedule.ts) is still open.
  */
 async function loadLastRunDays() {
   await ensurePortoConfigSchema();
@@ -95,6 +113,7 @@ async function loadLastRunDays() {
     WHERE (started_at AT TIME ZONE 'America/Sao_Paulo')::date = ${today}::date
       -- A manual test/"Rodar agora" run doesn't replace the scheduled one.
       AND COALESCE(run_trigger, 'auto') = 'auto'
+      AND status NOT IN ('error', 'running')
     GROUP BY job_type
   `;
   for (const row of rows) {

@@ -11,7 +11,7 @@
     "@neondatabase/serverless": "^1.1.0",
     "@sparticuz/chromium": "^149.0.0",
     "node-cron": "^3.0.3",
-    "playwright-core": "^1.62.1"
+    "playwright-core": "1.64.0"
   },
   "devDependencies": {
     "@types/node": "^22",

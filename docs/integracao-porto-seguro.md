@@ -490,7 +490,33 @@ Worker desta produção:
   # depois: docker image rm da versão anterior (o disco é pequeno)
   ```
 
+  Rode o `git archive | ssh` no **Git Bash**, nunca no PowerShell 5.1: ele passa o pipe como texto,
+  corrompe o `tar` e a pasta `app` fica vazia. O `package.json` do worker fixa a versão exata do
+  `playwright-core` (o Dockerfile não usa lockfile, então uma faixa `^` mudava o Chromium a cada
+  build); suba a versão de propósito e teste antes.
+
 - Verificação: `curl https://evolution-whatsapp.duckdns.org/porto-worker/health` → 401 sem segredo,
   `{"ok":true}` com `Authorization: Bearer <PORTO_WORKER_SECRET>`.
 - Validado em 07/10/2026: login no Portal do Prestador a partir do IP novo funciona; o dia 06/10 foi
   importado à mão (`/run/hours?start=2026-10-06&write=1`, 7 técnicos, sem avisos).
+
+## Tentativas automáticas (desde 13/10/2026)
+
+O portal do Prestador fica lento ou fora do ar em rajadas (um login estourou 2 min às 01:39 de
+13/10 e, nas noites de 08/10 e 10/10, a busca do mês demorou mais de 20s e virou o falso aviso
+"o portal pode ter mudado"). Por isso a execução automática (não o teste manual) tenta de novo:
+
+- **Quando** (`worker/job-retry.ts`): erro da execução (login que não abriu, busca que não terminou,
+  exceção como falha de banco), resultado com `layout_suspect`, ou serviços que não puderam ser
+  abertos (`service_detail_failed`). **Não** repete login rejeitado ("Login no Porto falhou…", já
+  são 2 tentativas por execução e repetir senha errada trava a conta) nem credenciais ausentes.
+- **Quanto**: 3 tentativas no total, com 5 e 15 minutos de espera. O lock do Porto é solto entre
+  elas, então a escala não fica esperando. Cada tentativa gera sua linha no histórico.
+- **Alerta**: só depois da última tentativa, informando quantas foram feitas.
+- **Reinício do worker**: uma execução do dia que terminou em `error` ou ficou `running` (worker
+  parado no meio, por exemplo num deploy) **não** conta como feita; roda de novo enquanto a
+  janela de 60 min depois do horário configurado ainda estiver aberta.
+- **Login**: se o `networkidle` não chega em 30s mas o campo `#cpf` já está visível, segue em frente.
+
+Testes: `node scripts/test-porto-retry.cjs` (regras, instantâneo), `node scripts/test-porto-login.cjs`
+(página de login, ~40s) e `node scripts/test-porto-service-search.cjs` (busca de serviços, ~25s).
