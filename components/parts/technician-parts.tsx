@@ -806,7 +806,7 @@ function CheckoutForm({
             return (
               <label
                 key={value}
-                className={`flex min-h-20 cursor-pointer flex-col gap-1 rounded-xl border p-3 text-sm transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${
+                className={`flex min-h-20 cursor-pointer flex-col gap-1 rounded-xl border p-3 text-sm transition has-focus-visible:ring-2 has-focus-visible:ring-ring ${
                   selected ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:border-primary/40'
                 } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
               >
