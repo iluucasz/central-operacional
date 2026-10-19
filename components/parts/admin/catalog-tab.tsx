@@ -336,7 +336,7 @@ function AffixInput({
       {prefix ? <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">{prefix}</span> : null}
       <input
         {...rest}
-        className={inputClass(`h-11 text-right tabular-nums ${prefix ? 'pl-10' : ''} ${suffix ? 'pr-8' : ''}`)}
+        className={inputClass(`h-11 text-base sm:text-sm text-right tabular-nums ${prefix ? 'pl-10' : ''} ${suffix ? 'pr-8' : ''}`)}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onBlur={() => {
@@ -363,19 +363,29 @@ function FormSection({ title, children }: { title: string; children: React.React
   );
 }
 
-function PriceCard({ step, title, hint, footer, children }: { step: number; title: string; hint: string; footer?: React.ReactNode; children: React.ReactNode }) {
+/** One price: the question and its hint on top, the amount (and optional margin) beneath. */
+function PriceRow({ label, hint, margin, error, children }: { label: string; hint: string; margin?: React.ReactNode; error?: string; children: React.ReactNode }) {
   return (
-    <div className="grid content-start gap-3 rounded-xl border bg-muted/20 p-3.5">
-      <div className="flex items-start gap-2.5">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">{step}</span>
-        <div className="min-w-0">
-          <p className="text-sm font-medium leading-snug">{title}</p>
-          <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
-        </div>
+    <div className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">{label}</p>
+        <p className="text-xs text-muted-foreground">{hint}</p>
       </div>
-      {children}
-      {footer ? <p className="text-xs font-medium">{footer}</p> : null}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 sm:grid-cols-[11rem_auto]">
+        {children}
+        {margin ? <div className="w-32">{margin}</div> : <span className="hidden sm:block sm:w-32" />}
+      </div>
+      {error ? <p className="text-xs text-rose-700 sm:col-span-2">{error}</p> : null}
     </div>
+  );
+}
+
+function MarginInput({ value, onChange, label }: { value: string; onChange: (value: string) => void; label: string }) {
+  return (
+    <label className="grid gap-1 text-[11px] leading-tight text-muted-foreground">
+      {label}
+      <AffixInput suffix="%" value={value} onChange={onChange} inputMode="decimal" placeholder="0" aria-label={label} />
+    </label>
   );
 }
 
@@ -397,6 +407,8 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [step, setStep] = useState(0);
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; tech?: string }>({});
   const fileRef = useRef<HTMLInputElement>(null);
 
   const set = (key: keyof typeof form) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
@@ -416,8 +428,25 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
   const companyGain = technician - cost;
   const technicianGain = suggested - technician;
 
+  // The required fields are checked here (not with `required`) because the inactive step is hidden,
+  // and the browser can't focus a hidden invalid field.
+  function validateStep(index: number) {
+    const next: { name?: string; tech?: string } = {};
+    if (index === 0 && !form.name.trim()) next.name = 'Informe o nome da peça.';
+    if (index === 1 && parseAmount(pricing.tech) === null) next.tech = 'Informe quanto o técnico paga à empresa.';
+    setFieldErrors(next);
+    return Object.keys(next).length === 0;
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    // Creating a part walks through the steps; Enter on the first one goes to the prices.
+    if (!part && step === 0) {
+      if (validateStep(0)) setStep(1);
+      return;
+    }
+    if (!validateStep(0)) return setStep(0);
+    if (!validateStep(1)) return setStep(1);
     setBusy(true);
     setError('');
     try {
@@ -449,89 +478,192 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-5">
+    <form onSubmit={submit} className="grid gap-6">
       <DialogHeader>
         <DialogTitle>{part ? 'Editar peça' : 'Nova peça'}</DialogTitle>
         <DialogDescription>Mudar preços vale só para as próximas vendas. O que já foi vendido não muda.</DialogDescription>
       </DialogHeader>
 
-      <div className="flex items-center gap-4">
-        <div className="grid shrink-0 justify-items-center gap-1.5">
-          <PartImage src={preview} alt={form.name || 'Peça'} className="h-20 w-20" />
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            capture="environment"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              setImage(file);
-              setPreview(URL.createObjectURL(file));
-            }}
-          />
-          <Button type="button" variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
-            <ImagePlus className="h-4 w-4" />
-            {preview ? 'Trocar foto' : 'Foto'}
-          </Button>
-        </div>
-        <div className="min-w-0 flex-1">
-          <Field label="Nome da peça">
-            <input className={inputClassName} value={form.name} onChange={set('name')} required autoFocus={!part} placeholder="Ex.: Cabo de aço 3 m" />
-          </Field>
-        </div>
+      <div role="tablist" aria-label="Etapas do cadastro" className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1">
+        {['Peça', 'Preços'].map((label, index) => (
+          <button
+            key={label}
+            type="button"
+            role="tab"
+            aria-selected={step === index}
+            onClick={() => setStep(index)}
+            className={`flex min-h-11 items-center justify-center gap-2 rounded-lg text-sm font-medium transition ${
+              step === index ? 'bg-card text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <span className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${step === index ? 'bg-primary/10' : 'bg-foreground/5'}`}>{index + 1}</span>
+            {label}
+          </button>
+        ))}
       </div>
 
-      <Field label="Código de barras" hint={barcodeOwner ? undefined : 'Leia com a câmera ou digite. Pode deixar em branco.'}>
-        <div className="flex gap-2">
-          <input className={inputClassName} value={form.barcode} onChange={set('barcode')} inputMode="numeric" placeholder="Somente números" />
-          <Button type="button" variant="outline" size="icon" className="shrink-0" onClick={() => setScanning(true)} aria-label="Ler código de barras">
-            <ScanBarcode className="h-4 w-4" />
-          </Button>
+      <div className={step === 0 ? 'grid gap-6' : 'hidden'}>
+        <div className="flex items-center gap-4">
+          <div className="grid shrink-0 justify-items-center gap-2">
+            <PartImage src={preview} alt={form.name || 'Peça'} className="h-24 w-24" />
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              capture="environment"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                setImage(file);
+                setPreview(URL.createObjectURL(file));
+              }}
+            />
+            <Button type="button" variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+              <ImagePlus className="h-4 w-4" />
+              {preview ? 'Trocar foto' : 'Foto'}
+            </Button>
+          </div>
+          <div className="min-w-0 flex-1">
+            <Field label="Nome da peça" hint="Aparece para o técnico na hora de vender.">
+              <input
+                className={inputClass('h-11 text-base sm:text-sm')}
+                value={form.name}
+                onChange={(event) => {
+                  set('name')(event);
+                  if (fieldErrors.name) setFieldErrors((current) => ({ ...current, name: undefined }));
+                }}
+                autoFocus={!part}
+                placeholder="Ex.: Cabo de aço 3 m"
+                aria-invalid={Boolean(fieldErrors.name)}
+              />
+              {fieldErrors.name ? <span className="text-xs text-rose-700">{fieldErrors.name}</span> : null}
+            </Field>
+          </div>
         </div>
-        {barcodeOwner ? <span className="text-xs text-amber-700">Já usado em “{barcodeOwner.name}”. Cada código só pode ter uma peça.</span> : null}
-      </Field>
 
-      <FormSection title="Preços">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <PriceCard step={1} title="Custo" hint="Quanto a empresa pagou. O técnico não vê.">
+        <Field label="Código de barras (opcional)" hint={barcodeOwner ? undefined : 'Leia com a câmera ou digite os números.'}>
+          <div className="flex gap-2">
+            <input className={inputClass('h-11 text-base sm:text-sm')} value={form.barcode} onChange={set('barcode')} inputMode="numeric" placeholder="Somente números" />
+            <Button type="button" variant="outline" size="icon" className="h-11 w-11 shrink-0" onClick={() => setScanning(true)} aria-label="Ler código de barras">
+              <ScanBarcode className="h-4 w-4" />
+            </Button>
+          </div>
+          {barcodeOwner ? <span className="text-xs text-amber-700">Já usado em “{barcodeOwner.name}”. Cada código só pode ter uma peça.</span> : null}
+        </Field>
+
+        <Field label="Unidade de medida">
+          <select className={inputClass('h-11 text-base sm:text-sm')} value={form.unit} onChange={set('unit')}>
+            {unitOptions.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        {part ? (
+          <label className="flex items-center justify-between gap-4 rounded-xl border px-4 py-3.5">
+            <span className="grid gap-0.5">
+              <span className="text-sm font-medium">Peça ativa</span>
+              <span className="text-xs text-muted-foreground">Desativada, não pode ser enviada aos técnicos.</span>
+            </span>
+            <Switch checked={form.active} onCheckedChange={(checked) => setForm((current) => ({ ...current, active: checked }))} />
+          </label>
+        ) : null}
+
+        <details className="rounded-xl border px-4 py-3.5 text-sm">
+          <summary className="cursor-pointer select-none font-medium">Mais detalhes (opcional)</summary>
+          <div className="mt-4 grid gap-4">
+            <div className="grid items-start gap-4 sm:grid-cols-2">
+              <Field label="Categoria">
+                <input className={inputClass('h-11')} value={form.category} onChange={set('category')} list="part-categories" placeholder="Ex.: Hidráulica" />
+                <datalist id="part-categories">
+                  {categories.map((value) => (
+                    <option key={value} value={value} />
+                  ))}
+                </datalist>
+              </Field>
+              <Field label="Marca">
+                <input className={inputClass('h-11')} value={form.brand} onChange={set('brand')} list="part-brands" />
+                <datalist id="part-brands">
+                  {brands.map((value) => (
+                    <option key={value} value={value} />
+                  ))}
+                </datalist>
+              </Field>
+              <Field label="Código interno" hint="Sua referência, se tiver.">
+                <input className={inputClass('h-11')} value={form.sku} onChange={set('sku')} />
+              </Field>
+              <Field label="Avisar para repor abaixo de" hint="Vazio = não avisar.">
+                <input className={inputClass('h-11 text-right tabular-nums')} value={form.minStock} onChange={set('minStock')} inputMode="numeric" placeholder="Sem mínimo" />
+              </Field>
+            </div>
+            <Field label="Descrição">
+              <textarea className={inputClass('min-h-20 py-2')} value={form.description} onChange={set('description')} />
+            </Field>
+          </div>
+        </details>
+      </div>
+
+      <div className={step === 1 ? 'grid gap-6' : 'hidden'}>
+        <div className="divide-y rounded-xl border">
+          <PriceRow label="Quanto a empresa pagou" hint="O técnico não vê este valor.">
             <AffixInput prefix="R$" value={pricing.cost} onChange={setPrice('cost')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" aria-label="Custo" />
-          </PriceCard>
-          <PriceCard
-            step={2}
-            title="Preço do técnico"
-            hint="Quanto o técnico paga à empresa por peça vendida."
-            footer={
-              technician > 0 && cost > 0 ? (
-                <span className={companyGain < 0 ? 'text-rose-700' : 'text-emerald-700'}>
-                  Empresa ganha {formatCurrency(companyGain)} por peça
-                </span>
-              ) : null
-            }
+          </PriceRow>
+          <PriceRow
+            label="Quanto o técnico paga à empresa"
+            hint="Por peça vendida."
+            error={fieldErrors.tech}
+            margin={<MarginInput value={pricing.techPercent} onChange={setPrice('techPercent')} label="Margem sobre o custo" />}
           >
-            <AffixInput prefix="R$" value={pricing.tech} onChange={setPrice('tech')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" required aria-label="Preço de técnico" />
-            <label className="grid gap-1 text-xs text-muted-foreground">
-              Ou use a margem sobre o custo
-              <AffixInput suffix="%" value={pricing.techPercent} onChange={setPrice('techPercent')} inputMode="decimal" placeholder="0" aria-label="Margem do preço de técnico sobre o custo" />
-            </label>
-          </PriceCard>
-          <PriceCard
-            step={3}
-            title="Sugerido ao cliente"
-            hint="Já aparece na venda do técnico, que pode mudar."
-            footer={
-              suggested > 0 && technician > 0 ? (
-                <span className={technicianGain < 0 ? 'text-rose-700' : 'text-emerald-700'}>Técnico ganha {formatCurrency(technicianGain)} por peça</span>
-              ) : null
-            }
+            <AffixInput
+              prefix="R$"
+              value={pricing.tech}
+              onChange={(value) => {
+                setPrice('tech')(value);
+                if (fieldErrors.tech) setFieldErrors((current) => ({ ...current, tech: undefined }));
+              }}
+              format={formatMoneyInput}
+              inputMode="decimal"
+              placeholder="0,00"
+              aria-label="Preço de técnico"
+              aria-invalid={Boolean(fieldErrors.tech)}
+            />
+          </PriceRow>
+          <PriceRow
+            label="Preço sugerido ao cliente"
+            hint="O técnico pode mudar na hora da venda."
+            margin={<MarginInput value={pricing.suggestedPercent} onChange={setPrice('suggestedPercent')} label="Margem sobre o preço do técnico" />}
           >
             <AffixInput prefix="R$" value={pricing.suggested} onChange={setPrice('suggested')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" aria-label="Preço sugerido ao cliente" />
-            <label className="grid gap-1 text-xs text-muted-foreground">
-              Ou use a margem sobre o preço do técnico
-              <AffixInput suffix="%" value={pricing.suggestedPercent} onChange={setPrice('suggestedPercent')} inputMode="decimal" placeholder="0" aria-label="Margem do preço sugerido sobre o preço de técnico" />
-            </label>
-          </PriceCard>
+          </PriceRow>
+        </div>
+        <p className="-mt-3 text-xs text-muted-foreground">Digite o valor ou a margem: o outro é calculado sozinho.</p>
+
+        <div className="grid gap-3 rounded-xl bg-muted/40 p-4 sm:grid-cols-2">
+          <div>
+            <p className="text-xs text-muted-foreground">A empresa ganha por peça</p>
+            {technician > 0 && cost > 0 ? (
+              <>
+                <p className={`text-xl font-semibold tabular-nums ${companyGain < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>{formatCurrency(companyGain)}</p>
+                <p className="text-xs text-muted-foreground">{fmtPercent((companyGain / cost) * 100)}% sobre o custo</p>
+              </>
+            ) : (
+              <p className="text-xl font-semibold text-muted-foreground">—</p>
+            )}
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">O técnico ganha por peça</p>
+            {suggested > 0 && technician > 0 ? (
+              <>
+                <p className={`text-xl font-semibold tabular-nums ${technicianGain < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>{formatCurrency(technicianGain)}</p>
+                <p className="text-xs text-muted-foreground">se vender pelo preço sugerido</p>
+              </>
+            ) : (
+              <p className="text-xl font-semibold text-muted-foreground">—</p>
+            )}
+          </div>
         </div>
 
         {cost > 0 && technician > 0 && technician < cost ? (
@@ -540,68 +672,21 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
         {technician > 0 && suggested > 0 && suggested < technician ? (
           <Alert tone="warning">O sugerido está abaixo do preço do técnico: o técnico teria prejuízo de {formatCurrency(technician - suggested)} por peça.</Alert>
         ) : null}
-      </FormSection>
-
-      <FormSection title="Estoque">
-        <div className="grid items-start gap-3 sm:grid-cols-2">
-          <Field label="Unidade de medida">
-            <select className={inputClassName} value={form.unit} onChange={set('unit')}>
-              {unitOptions.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Avisar para repor abaixo de" hint="Deixe vazio para não avisar.">
-            <input className={inputClass('text-right tabular-nums')} value={form.minStock} onChange={set('minStock')} inputMode="numeric" placeholder="Sem mínimo" />
-          </Field>
-        </div>
-        <label className="flex items-center justify-between gap-4 rounded-xl border px-3 py-3">
-          <span className="grid gap-0.5">
-            <span className="text-sm font-medium">Peça ativa</span>
-            <span className="text-xs text-muted-foreground">Desativada, não pode ser enviada aos técnicos.</span>
-          </span>
-          <Switch checked={form.active} onCheckedChange={(checked) => setForm((current) => ({ ...current, active: checked }))} />
-        </label>
-      </FormSection>
-
-      <details className="group rounded-xl border px-4 py-3 text-sm">
-        <summary className="cursor-pointer select-none font-medium">Mais detalhes (opcional)</summary>
-        <div className="mt-4 grid gap-3">
-          <div className="grid items-start gap-3 sm:grid-cols-2">
-            <Field label="Categoria">
-              <input className={inputClassName} value={form.category} onChange={set('category')} list="part-categories" placeholder="Ex.: Hidráulica" />
-              <datalist id="part-categories">
-                {categories.map((value) => (
-                  <option key={value} value={value} />
-                ))}
-              </datalist>
-            </Field>
-            <Field label="Marca">
-              <input className={inputClassName} value={form.brand} onChange={set('brand')} list="part-brands" />
-              <datalist id="part-brands">
-                {brands.map((value) => (
-                  <option key={value} value={value} />
-                ))}
-              </datalist>
-            </Field>
-          </div>
-          <Field label="Código interno" hint="Sua referência, se tiver.">
-            <input className={inputClassName} value={form.sku} onChange={set('sku')} />
-          </Field>
-          <Field label="Descrição">
-            <textarea className={inputClass('min-h-16 py-2')} value={form.description} onChange={set('description')} />
-          </Field>
-        </div>
-      </details>
+      </div>
 
       <div className="sticky -bottom-4 -mx-4 -mb-4 grid gap-2 border-t bg-card px-4 py-3 sm:-bottom-6 sm:-mx-6 sm:-mb-6 sm:px-6">
         {error ? <Alert>{error}</Alert> : null}
-        <Button type="submit" size="lg" disabled={busy}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          {part ? 'Salvar alterações' : 'Cadastrar peça'}
-        </Button>
+        <div className={`grid gap-2 ${step > 0 && !part ? 'grid-cols-[auto_minmax(0,1fr)]' : ''}`}>
+          {step > 0 && !part ? (
+            <Button type="button" variant="outline" size="lg" onClick={() => setStep(step - 1)}>
+              Voltar
+            </Button>
+          ) : null}
+          <Button type="submit" size="lg" disabled={busy}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {part ? 'Salvar alterações' : step === 0 ? 'Continuar para os preços' : 'Cadastrar peça'}
+          </Button>
+        </div>
       </div>
       <Dialog open={scanning} onOpenChange={setScanning}>
         <DialogContent className="grid-cols-[minmax(0,1fr)] p-4 sm:p-6 sm:max-w-md">
