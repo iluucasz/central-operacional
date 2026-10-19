@@ -13,7 +13,7 @@ export default function TechnicianPartsPage() {
 
   return (
     <AppShell role="technician" userName={user.name || user.email}>
-      <PageHeader eyebrow="Controle de Peças" title="Minhas peças" description="As peças do seu carro, as vendas e o que você deve à empresa." />
+      <PageHeader title="Minhas peças" />
       <TechnicianParts />
     </AppShell>
   );

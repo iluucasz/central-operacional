@@ -11,6 +11,7 @@ import {
   Package,
   Plus,
   QrCode,
+  Receipt,
   ScanBarcode,
   Search,
   ShoppingCart,
@@ -66,6 +67,7 @@ const STATUS_TONES = { awaiting_payment: 'warning', paid: 'success', canceled: '
 export function TechnicianParts() {
   const { data, error, loading, reload } = useParts<MeResponse>('/api/parts/me');
   const [mpNotice, setMpNotice] = useState<{ tone: 'success' | 'danger' | 'warning'; text: string } | null>(null);
+  const [tab, setTab] = useState('sell');
 
   // Back from Mercado Pago's authorization (?mp=conectado|erro|cancelado).
   useEffect(() => {
@@ -82,32 +84,78 @@ export function TechnicianParts() {
   if (error && !data) return <Alert>{error}</Alert>;
   if (!data) return null;
 
+  const stockUnits = data.parts.reduce((sum, part) => sum + part.stock, 0);
+  const stockValue = data.parts.reduce((sum, part) => sum + part.stock * part.technicianPrice, 0);
+
   return (
     <div className="grid gap-4">
       {mpNotice ? <Alert tone={mpNotice.tone}>{mpNotice.text}</Alert> : null}
       <PendingConfirmations transfers={data.pendingTransfers} debts={data.pendingDebts} onDone={reload} />
-      <div className="grid gap-4 lg:grid-cols-2">
-        <MercadoPagoCard status={data.mercadoPago} onChanged={reload} />
-        <AccountCard account={data.account} month={data.month} settlementDay={data.settlementDay} />
-      </div>
-      <Tabs defaultValue="sell" className="gap-4">
-        <TabsList>
-          <TabsTrigger value="sell">
+      <SummaryTiles stockUnits={stockUnits} stockValue={stockValue} balanceDue={data.account?.balanceDue ?? 0} month={data.month} onOpenAccount={() => setTab('account')} />
+      <Tabs value={tab} onValueChange={setTab} className="gap-4">
+        <TabsList className="grid h-12 w-full grid-cols-3 p-1">
+          <TabsTrigger value="sell" className="text-sm">
             <ShoppingCart className="h-4 w-4" />
             Vender
           </TabsTrigger>
-          <TabsTrigger value="sales">
+          <TabsTrigger value="sales" className="text-sm">
+            <Receipt className="h-4 w-4" />
+            Vendas
+          </TabsTrigger>
+          <TabsTrigger value="account" className="text-sm">
             <Wallet className="h-4 w-4" />
-            Minhas vendas
+            Conta
+            {!data.mercadoPago.connected && data.mercadoPago.available ? <span className="h-2 w-2 rounded-full bg-amber-500" aria-label="Mercado Pago não conectado" /> : null}
           </TabsTrigger>
         </TabsList>
         <TabsContent value="sell">
-          <SellPanel parts={data.parts} paymentMethods={data.paymentMethods} mercadoPagoConnected={data.mercadoPago.connected} onSold={reload} />
+          <SellPanel
+            parts={data.parts}
+            paymentMethods={data.paymentMethods}
+            mercadoPagoConnected={data.mercadoPago.connected}
+            onSold={reload}
+            onOpenAccount={() => setTab('account')}
+          />
         </TabsContent>
         <TabsContent value="sales">
           <MySales paymentMethods={data.paymentMethods} />
         </TabsContent>
+        <TabsContent value="account" className="grid gap-4">
+          <AccountCard account={data.account} settlementDay={data.settlementDay} />
+          <MercadoPagoCard status={data.mercadoPago} onChanged={reload} />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+function SummaryTiles({
+  stockUnits,
+  stockValue,
+  balanceDue,
+  month,
+  onOpenAccount,
+}: {
+  stockUnits: number;
+  stockValue: number;
+  balanceDue: number;
+  month: string;
+  onOpenAccount: () => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <div className="rounded-xl border bg-card p-3.5">
+        <p className="text-xs text-muted-foreground">No carro</p>
+        <p className="mt-0.5 text-xl font-semibold tabular-nums">
+          {stockUnits} <span className="text-sm font-normal text-muted-foreground">{stockUnits === 1 ? 'peça' : 'peças'}</span>
+        </p>
+        <p className="text-xs tabular-nums text-muted-foreground">{formatCurrency(stockValue)}</p>
+      </div>
+      <button type="button" onClick={onOpenAccount} className="rounded-xl border bg-card p-3.5 text-left transition hover:border-primary/40">
+        <p className="text-xs text-muted-foreground">{balanceDue < 0 ? 'Crédito' : 'A pagar'}</p>
+        <p className="mt-0.5 text-xl font-semibold tabular-nums">{formatCurrency(Math.abs(balanceDue))}</p>
+        <p className="truncate text-xs text-muted-foreground">até {formatMonthLabel(month)}</p>
+      </button>
     </div>
   );
 }
@@ -144,36 +192,31 @@ function MercadoPagoCard({ status, onChanged }: { status: MercadoPagoAccountStat
   }
 
   return (
-    <DataPanel
-      title="Mercado Pago"
-      description="As vendas caem na sua própria conta do Mercado Pago. No acerto, você paga à empresa o preço de técnico das peças vendidas."
-    >
+    <DataPanel title="Mercado Pago">
       <div className="grid gap-3">
         {error ? <Alert>{error}</Alert> : null}
         {!status.available ? (
-          <Alert tone="warning">O recebimento pelo Mercado Pago ainda não foi configurado no sistema. Fale com o administrador.</Alert>
+          <Alert tone="warning">O Mercado Pago ainda não foi configurado no sistema. Fale com o administrador.</Alert>
         ) : status.connected ? (
-          <>
-            <div className="flex items-center gap-2 text-sm">
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-              <span>
-                Conectado{status.nickname ? ` como ${status.nickname}` : ''}
-                {status.liveMode === false ? ' (conta de teste)' : ''}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2 text-sm">
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+              <span className="truncate">
+                Conectado{status.nickname ? ` · ${status.nickname}` : ''}
+                {status.liveMode === false ? ' (teste)' : ''}
               </span>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="ghost" size="sm" onClick={disconnect} disabled={busy !== null}>
-                <Unplug className="h-4 w-4" />
-                Desconectar
-              </Button>
-            </div>
-          </>
+            <Button variant="ghost" size="sm" className="shrink-0" onClick={disconnect} disabled={busy !== null}>
+              <Unplug className="h-4 w-4" />
+              Desconectar
+            </Button>
+          </div>
         ) : (
           <>
-            <p className="text-sm text-muted-foreground">Conecte sua conta para cobrar por Pix e link de cartão. Sem conta, não dá para registrar vendas.</p>
+            <p className="text-sm text-muted-foreground">Conecte sua conta para cobrar por Pix e cartão.</p>
             <Button onClick={connect} disabled={busy !== null}>
               {busy === 'connect' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
-              Conectar minha conta do Mercado Pago
+              Conectar Mercado Pago
             </Button>
           </>
         )}
@@ -184,26 +227,27 @@ function MercadoPagoCard({ status, onChanged }: { status: MercadoPagoAccountStat
 
 // ---------------------------------------------------------------- account
 
-function AccountCard({ account, month, settlementDay }: { account: AccountSummaryRow | null; month: string; settlementDay: number }) {
+function AccountCard({ account, settlementDay }: { account: AccountSummaryRow | null; settlementDay: number }) {
   return (
-    <DataPanel title="Minha conta de peças" description={`Acerto do mês até o dia ${settlementDay} do mês seguinte.`}>
+    <DataPanel title="Minha conta">
       {account ? (
-        <div className="grid gap-2 text-sm">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="text-muted-foreground">
-              {account.balanceDue < 0 ? 'Crédito a seu favor' : `Saldo a pagar até ${formatMonthLabel(month)}`}
-            </span>
-            <span className="whitespace-nowrap text-xl font-semibold">{formatCurrency(Math.abs(account.balanceDue))}</span>
+        <div className="grid gap-4 text-sm">
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-primary/5 px-4 py-3">
+            <div>
+              <p className="font-medium">{account.balanceDue < 0 ? 'Crédito a seu favor' : 'Saldo a pagar'}</p>
+              <p className="text-xs text-muted-foreground">Acerto até o dia {settlementDay}</p>
+            </div>
+            <span className="whitespace-nowrap text-2xl font-semibold tabular-nums">{formatCurrency(Math.abs(account.balanceDue))}</span>
           </div>
-          <Row label="Vindo dos meses anteriores" value={account.previousBalance} />
-          <Row label="Peças vendidas no mês (preço de técnico)" value={account.salesInMonth} />
-          {account.installmentsInMonth ? <Row label="Parcelas de débito no mês" value={account.installmentsInMonth} /> : null}
-          {account.adjustmentsInMonth ? <Row label="Ajustes" value={account.adjustmentsInMonth} /> : null}
-          <Row label="Pago no mês" value={-account.paidInMonth} />
-          <p className="pt-1 text-xs text-muted-foreground">
-            No seu estoque: {account.stockUnits} peça(s), {formatCurrency(account.stockValue)} a preço de técnico.
-            {account.futureInstallments ? ` Parcelas futuras: ${formatCurrency(account.futureInstallments)}.` : ''}
-          </p>
+          <div className="grid gap-2">
+            <Row label="Meses anteriores" value={account.previousBalance} />
+            <Row label="Vendas do mês" value={account.salesInMonth} />
+            {account.installmentsInMonth ? <Row label="Parcelas do mês" value={account.installmentsInMonth} /> : null}
+            {account.adjustmentsInMonth ? <Row label="Ajustes" value={account.adjustmentsInMonth} /> : null}
+            <Row label="Pago no mês" value={-account.paidInMonth} />
+            {account.futureInstallments ? <Row label="Parcelas futuras" value={account.futureInstallments} /> : null}
+          </div>
+          <p className="text-xs text-muted-foreground">Vendas valem pelo preço de técnico, não pelo que você cobrou.</p>
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">Sem movimento.</p>
@@ -230,9 +274,12 @@ function PendingConfirmations({ transfers, debts, onDone }: { transfers: MeRespo
     <div className="grid gap-2">
       {transfers.map((transfer) => (
         <Alert key={transfer.id} tone="warning" className="flex flex-wrap items-center justify-between gap-2">
-          <span>
-            {transfer.direction === 'out' ? 'Remessa' : 'Devolução'} nº {transfer.number}: {transfer.units} peça(s),{' '}
-            {formatCurrency(transfer.totalTechnicianPrice)} a preço de técnico. Confira e confirme.
+          <span className="min-w-0">
+            <strong>
+              {transfer.direction === 'out' ? 'Remessa' : 'Devolução'} nº {transfer.number}
+            </strong>
+            <br />
+            {transfer.units} peça(s) · {formatCurrency(transfer.totalTechnicianPrice)}
           </span>
           <Button size="sm" onClick={() => setOpen({ kind: 'transfer', id: transfer.id })}>
             Conferir
@@ -241,8 +288,10 @@ function PendingConfirmations({ transfers, debts, onDone }: { transfers: MeRespo
       ))}
       {debts.map((debt) => (
         <Alert key={debt.id} tone="warning" className="flex flex-wrap items-center justify-between gap-2">
-          <span>
-            Débito nº {debt.number}: {formatCurrency(debt.totalAmount)} em {debt.installments}x. Confira e confirme.
+          <span className="min-w-0">
+            <strong>Débito nº {debt.number}</strong>
+            <br />
+            {formatCurrency(debt.totalAmount)} em {debt.installments}x
           </span>
           <Button size="sm" onClick={() => setOpen({ kind: 'debt', id: debt.id })}>
             Conferir
@@ -380,11 +429,13 @@ function SellPanel({
   paymentMethods,
   mercadoPagoConnected,
   onSold,
+  onOpenAccount,
 }: {
   parts: TechnicianPart[];
   paymentMethods: PaymentMethod[];
   mercadoPagoConnected: boolean;
   onSold: () => void;
+  onOpenAccount: () => void;
 }) {
   const [search, setSearch] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -448,7 +499,14 @@ function SellPanel({
         </Button>
       </div>
       {scanError ? <Alert tone="warning">{scanError}</Alert> : null}
-      {!mercadoPagoConnected ? <Alert tone="warning">Conecte sua conta do Mercado Pago para vender. Sem ela, nenhuma venda pode ser registrada.</Alert> : null}
+      {!mercadoPagoConnected ? (
+        <Alert tone="warning" className="flex items-center justify-between gap-3">
+          <span>Conecte o Mercado Pago para vender.</span>
+          <Button size="sm" className="shrink-0" onClick={onOpenAccount}>
+            Conectar
+          </Button>
+        </Alert>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {visible.map((part) => {
@@ -459,15 +517,21 @@ function SellPanel({
               type="button"
               onClick={() => add(part)}
               disabled={inCart >= part.stock}
-              className="group grid gap-2 rounded-xl border bg-card p-2 text-left shadow-sm transition hover:border-primary/50 disabled:opacity-60"
+              className={`group relative grid gap-2 rounded-xl border bg-card p-2 text-left shadow-sm transition hover:border-primary/50 disabled:cursor-not-allowed ${
+                inCart ? 'border-primary ring-1 ring-primary' : ''
+              }`}
             >
+              {inCart ? (
+                <span className="absolute right-3 top-3 z-10 flex h-6 min-w-6 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground shadow">
+                  {inCart}
+                </span>
+              ) : null}
               <PartImage src={part.imageUrl} alt={part.name} className="aspect-square h-auto w-full" />
               <div className="grid gap-0.5 px-1 pb-1">
                 <span className="line-clamp-2 text-sm font-medium leading-snug">{part.name}</span>
-                <span className="text-sm font-semibold">{formatCurrency(part.suggestedPrice)}</span>
+                <span className="text-sm font-semibold tabular-nums">{formatCurrency(part.suggestedPrice)}</span>
                 <span className="text-xs text-muted-foreground">
-                  No carro: {part.stock - inCart} {part.unit}
-                  {inCart ? ` · ${inCart} na venda` : ''}
+                  {part.stock} {part.unit} no carro
                 </span>
               </div>
             </button>
