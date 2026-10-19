@@ -2,15 +2,19 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Banknote,
   CheckCircle2,
+  CreditCard,
   Link2,
   Loader2,
   Minus,
   Package,
   Plus,
+  QrCode,
   ScanBarcode,
   Search,
   ShoppingCart,
+  Smartphone,
   Trash2,
   Unplug,
   Wallet,
@@ -400,7 +404,8 @@ function SellPanel({
       if (line) {
         return current.map((item) => (item.part.id === part.id ? { ...item, quantity: Math.min(part.stock, item.quantity + 1) } : item));
       }
-      return [...current, { part, quantity: 1, price: part.suggestedPrice.toFixed(2).replace('.', ',') }];
+      // The price starts empty: the suggested one is only a hint the technician can accept or replace.
+      return [...current, { part, quantity: 1, price: '' }];
     });
   }
 
@@ -420,7 +425,8 @@ function SellPanel({
   }
 
   const total = cart.reduce((sum, line) => sum + (parseAmount(line.price) ?? 0) * line.quantity, 0);
-  const owed = cart.reduce((sum, line) => sum + line.part.technicianPrice * line.quantity, 0);
+  const suggestedTotal = cart.reduce((sum, line) => sum + line.part.suggestedPrice * line.quantity, 0);
+  const priced = cart.every((line) => (parseAmount(line.price) ?? 0) > 0);
 
   // The dialogs below stay mounted even when the last unit was just sold (the payment is still open).
   const empty = !parts.some((part) => part.stock > 0);
@@ -476,8 +482,10 @@ function SellPanel({
         <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/95 p-3 shadow-[0_-6px_20px_rgba(0,0,0,0.08)] backdrop-blur md:left-auto md:right-4 md:bottom-4 md:w-96 md:rounded-xl md:border">
           <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
             <div>
-              <p className="text-xs text-muted-foreground">{cart.reduce((sum, line) => sum + line.quantity, 0)} peça(s)</p>
-              <p className="text-lg font-semibold">{formatCurrency(total)}</p>
+              <p className="text-xs text-muted-foreground">
+                {cart.reduce((sum, line) => sum + line.quantity, 0)} peça(s) · {priced ? 'total' : 'sugerido'}
+              </p>
+              <p className="text-lg font-semibold">{formatCurrency(priced ? total : suggestedTotal)}</p>
             </div>
             <Button size="lg" disabled={!mercadoPagoConnected} onClick={() => setCheckout(true)}>
               <ShoppingCart className="h-4 w-4" />
@@ -500,7 +508,7 @@ function SellPanel({
         <DialogContent className="max-h-[92vh] grid-cols-[minmax(0,1fr)] overflow-y-auto p-4 sm:max-w-lg sm:p-6">
           <DialogHeader>
             <DialogTitle>Cobrar o cliente</DialogTitle>
-            <DialogDescription>Você define o preço de venda. À empresa você deve {formatCurrency(owed)} (preço de técnico).</DialogDescription>
+            <DialogDescription>Defina quanto vai cobrar do cliente. O valor sugerido é só uma referência.</DialogDescription>
           </DialogHeader>
           {checkout ? (
             <CheckoutForm
@@ -539,6 +547,28 @@ function SellPanel({
   );
 }
 
+const PAYMENT_ICONS: Record<PaymentMethod, React.ComponentType<{ className?: string }>> = {
+  pix: QrCode,
+  card_link: CreditCard,
+  card_present: Smartphone,
+  cash: Banknote,
+};
+
+const PAYMENT_TILE_LABELS: Record<PaymentMethod, { title: string; hint: string }> = {
+  pix: { title: 'Pix', hint: 'QR Code na hora' },
+  card_link: { title: 'Link de cartão', hint: 'O cliente paga pelo link' },
+  card_present: { title: 'Cartão presencial', hint: 'Cobra pelo app do Mercado Pago' },
+  cash: { title: 'Dinheiro', hint: 'Registro manual' },
+};
+
+function formatPriceInput(value: number) {
+  return value.toFixed(2).replace('.', ',');
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{children}</h3>;
+}
+
 function CheckoutForm({
   cart,
   setCart,
@@ -560,8 +590,10 @@ function CheckoutForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  const missingPrice = cart.some((line) => (parseAmount(line.price) ?? 0) <= 0);
   const total = cart.reduce((sum, line) => sum + (parseAmount(line.price) ?? 0) * line.quantity, 0);
-  const belowTechnicianPrice = cart.filter((line) => (parseAmount(line.price) ?? 0) < line.part.technicianPrice);
+  const owed = cart.reduce((sum, line) => sum + line.part.technicianPrice * line.quantity, 0);
+  const margin = total - owed;
 
   function updateLine(partId: string, change: Partial<CartLine>) {
     setCart((current) => current.map((line) => (line.part.id === partId ? { ...line, ...change } : line)).filter((line) => line.quantity > 0));
@@ -569,6 +601,10 @@ function CheckoutForm({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (missingPrice) {
+      setError('Informe o valor que você vai cobrar de cada peça.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -590,82 +626,143 @@ function CheckoutForm({
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-4">
-      <ul className="grid gap-3">
-        {cart.map((line) => (
-          <li key={line.part.id} className="flex items-center gap-3">
-            <PartImage src={line.part.imageUrl} alt={line.part.name} className="h-12 w-12" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{line.part.name}</p>
-              <p className="text-xs text-muted-foreground">Técnico: {formatCurrency(line.part.technicianPrice)} · sugerido {formatCurrency(line.part.suggestedPrice)}</p>
-              <div className="mt-1 flex items-center gap-2">
-                <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => updateLine(line.part.id, { quantity: line.quantity - 1 })} aria-label="Menos uma">
-                  {line.quantity === 1 ? <Trash2 className="h-3.5 w-3.5" /> : <Minus className="h-3.5 w-3.5" />}
-                </Button>
-                <span className="w-6 text-center text-sm tabular-nums">{line.quantity}</span>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  className="h-8 w-8"
-                  disabled={line.quantity >= line.part.stock}
-                  onClick={() => updateLine(line.part.id, { quantity: line.quantity + 1 })}
-                  aria-label="Mais uma"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-                <span className="ml-auto text-xs text-muted-foreground">R$</span>
-                <input
-                  className={inputClass('min-h-8 w-24 text-right')}
-                  value={line.price}
-                  inputMode="decimal"
-                  onChange={(event) => updateLine(line.part.id, { price: event.target.value })}
-                  aria-label={`Preço de ${line.part.name}`}
-                />
-              </div>
+    <form onSubmit={submit} className="grid gap-5">
+      <section className="grid gap-3">
+        <SectionTitle>Peças e valor</SectionTitle>
+        <ul className="grid gap-3">
+          {cart.map((line) => {
+            const price = parseAmount(line.price) ?? 0;
+            const lineMargin = (price - line.part.technicianPrice) * line.quantity;
+            const inputId = `price-${line.part.id}`;
+            return (
+              <li key={line.part.id} className="grid gap-3 rounded-xl border bg-muted/30 p-3">
+                <div className="flex items-center gap-3">
+                  <PartImage src={line.part.imageUrl} alt={line.part.name} className="h-12 w-12 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <p className="line-clamp-2 text-sm font-medium leading-snug">{line.part.name}</p>
+                    <p className="text-xs text-muted-foreground">Você deve {formatCurrency(line.part.technicianPrice)} à empresa por unidade</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button type="button" size="icon" variant="outline" className="h-9 w-9" onClick={() => updateLine(line.part.id, { quantity: line.quantity - 1 })} aria-label={line.quantity === 1 ? 'Tirar da venda' : 'Menos uma'}>
+                      {line.quantity === 1 ? <Trash2 className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
+                    </Button>
+                    <span className="w-6 text-center text-sm font-medium tabular-nums">{line.quantity}</span>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="outline"
+                      className="h-9 w-9"
+                      disabled={line.quantity >= line.part.stock}
+                      onClick={() => updateLine(line.part.id, { quantity: line.quantity + 1 })}
+                      aria-label="Mais uma"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="grid gap-1.5">
+                  <label htmlFor={inputId} className="text-xs font-medium text-foreground">
+                    Valor que você vai cobrar{line.quantity > 1 ? ' (cada)' : ''}
+                  </label>
+                  <div className="relative">
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">R$</span>
+                    <input
+                      id={inputId}
+                      className={inputClass('h-12 bg-card pl-10 text-lg font-semibold tabular-nums')}
+                      value={line.price}
+                      inputMode="decimal"
+                      autoComplete="off"
+                      placeholder={formatPriceInput(line.part.suggestedPrice)}
+                      onFocus={(event) => event.currentTarget.select()}
+                      onChange={(event) => updateLine(line.part.id, { price: event.target.value })}
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                    <button
+                      type="button"
+                      onClick={() => updateLine(line.part.id, { price: formatPriceInput(line.part.suggestedPrice) })}
+                      className="rounded-full border border-dashed border-primary/50 px-3 py-1 text-xs font-medium text-primary transition hover:bg-primary/5"
+                    >
+                      Sugerido {formatCurrency(line.part.suggestedPrice)} · usar
+                    </button>
+                    {price > 0 ? (
+                      <span className={`text-xs font-medium ${lineMargin >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {lineMargin >= 0 ? `Você fica com ${formatCurrency(lineMargin)}` : `Você paga ${formatCurrency(-lineMargin)} do seu bolso`}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="grid gap-1.5 rounded-xl bg-primary/5 p-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-sm text-muted-foreground">Total a cobrar</span>
+            <span className="text-2xl font-semibold tabular-nums">{missingPrice ? '—' : formatCurrency(total)}</span>
+          </div>
+          <div className="flex justify-between gap-3 text-xs text-muted-foreground">
+            <span>À empresa (preço de técnico)</span>
+            <span className="tabular-nums">{formatCurrency(owed)}</span>
+          </div>
+          {!missingPrice ? (
+            <div className="flex justify-between gap-3 text-xs font-medium">
+              <span>{margin >= 0 ? 'Você fica com' : 'Você paga do seu bolso'}</span>
+              <span className={`tabular-nums ${margin >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{formatCurrency(Math.abs(margin))}</span>
             </div>
-          </li>
-        ))}
-      </ul>
-      {belowTechnicianPrice.length ? (
-        <Alert tone="warning">Abaixo do preço de técnico: {belowTechnicianPrice.map((line) => line.part.name).join(', ')}. Você paga a diferença.</Alert>
-      ) : null}
-      <p className="flex justify-between text-base font-semibold">
-        <span>Total</span>
-        <span>{formatCurrency(total)}</span>
-      </p>
+          ) : null}
+        </div>
+      </section>
 
-      <Field label="WhatsApp do cliente" hint="O link de pagamento e o recibo vão para este número.">
-        <PhoneInput value={customerPhone} onChange={setCustomerPhone} hint={null} className={inputClassName} />
-      </Field>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Nome do cliente (opcional)">
-          <input className={inputClassName} value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
+      <section className="grid gap-3">
+        <SectionTitle>Cliente</SectionTitle>
+        <Field label="WhatsApp do cliente" hint="O link de pagamento e o recibo vão para este número.">
+          <PhoneInput value={customerPhone} onChange={setCustomerPhone} hint={null} className={inputClassName} />
         </Field>
-        <Field label="Nº da OS (opcional)">
-          <input className={inputClassName} value={orderCode} onChange={(event) => setOrderCode(event.target.value)} />
-        </Field>
-      </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Nome (opcional)">
+            <input className={inputClassName} value={customerName} onChange={(event) => setCustomerName(event.target.value)} />
+          </Field>
+          <Field label="Nº da OS (opcional)">
+            <input className={inputClassName} value={orderCode} onChange={(event) => setOrderCode(event.target.value)} />
+          </Field>
+        </div>
+      </section>
 
-      <fieldset className="grid gap-2">
-        <legend className="mb-1 text-sm font-medium">Forma de pagamento</legend>
-        {paymentMethods.map((value) => {
-          const disabled = !mercadoPagoConnected;
-          return (
-            <label key={value} className={`flex items-center gap-3 rounded-lg border px-3 py-2 text-sm ${method === value ? 'border-primary bg-primary/5' : ''} ${disabled ? 'opacity-50' : ''}`}>
-              <input type="radio" name="method" value={value} checked={method === value} disabled={disabled} onChange={() => setMethod(value)} />
-              <span>{PAYMENT_METHOD_LABELS[value]}</span>
-              {disabled ? <span className="ml-auto text-xs text-muted-foreground">conecte o Mercado Pago</span> : null}
-            </label>
-          );
-        })}
+      <fieldset className="grid gap-3">
+        <legend className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Forma de pagamento</legend>
+        <div className="grid grid-cols-2 gap-2">
+          {paymentMethods.map((value) => {
+            const disabled = !mercadoPagoConnected;
+            const selected = method === value;
+            const Icon = PAYMENT_ICONS[value];
+            const tile = PAYMENT_TILE_LABELS[value];
+            return (
+              <label
+                key={value}
+                className={`flex min-h-20 cursor-pointer flex-col gap-1 rounded-xl border p-3 text-sm transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${
+                  selected ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:border-primary/40'
+                } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+              >
+                <input type="radio" className="sr-only" name="method" value={value} checked={selected} disabled={disabled} onChange={() => setMethod(value)} />
+                <Icon className={`h-5 w-5 ${selected ? 'text-primary' : 'text-muted-foreground'}`} />
+                <span className="font-medium leading-tight">{tile.title}</span>
+                <span className="text-xs leading-tight text-muted-foreground">{tile.hint}</span>
+              </label>
+            );
+          })}
+        </div>
       </fieldset>
 
-      {error ? <Alert>{error}</Alert> : null}
-      <Button type="submit" size="lg" disabled={busy || !cart.length || !available.includes(method)}>
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-        {method === 'cash' ? 'Registrar venda' : 'Gerar cobrança'} · {formatCurrency(total)}
-      </Button>
+      <div className="sticky bottom-0 -mx-4 -mb-4 grid gap-2 border-t bg-card px-4 py-3 sm:-mx-6 sm:-mb-6 sm:px-6">
+        {error ? <Alert>{error}</Alert> : null}
+        <Button type="submit" size="lg" disabled={busy || !cart.length || missingPrice || !available.includes(method)}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          {missingPrice ? 'Informe o valor para cobrar' : `${method === 'cash' ? 'Registrar venda' : 'Gerar cobrança'} · ${formatCurrency(total)}`}
+        </Button>
+      </div>
     </form>
   );
 }
