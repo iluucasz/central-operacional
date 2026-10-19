@@ -75,7 +75,7 @@ export function AccountTab() {
       </div>
       {notice ? <Alert tone="success">{notice}</Alert> : null}
 
-      <DataPanel title={`Acerto de ${formatMonthLabel(month)}`} description="Clique em um técnico para ver o extrato e registrar o pagamento.">
+      <DataPanel title={`Acerto de ${formatMonthLabel(month)}`} description="Toque em um técnico para ver o extrato e registrar pagamento.">
         {summary.error ? <Alert>{summary.error}</Alert> : null}
         {!summary.data ? (
           <Spinner />
@@ -170,7 +170,7 @@ export function AccountTab() {
 
       <DataPanel
         title="Débitos de peças"
-        description="Peças que faltaram (no inventário ou registradas à mão), pagas em parcelas mensais. O técnico confirma no app."
+        description="Peças que faltaram, pagas em parcelas. O técnico confirma no app."
         action={
           <Button size="sm" variant="outline" onClick={() => setDialog({ kind: 'debt' })}>
             <Plus className="h-4 w-4" />
@@ -219,7 +219,7 @@ export function AccountTab() {
       </DataPanel>
 
       <Dialog open={dialog !== null} onOpenChange={(open) => !open && setDialog(null)}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-md">
+        <DialogContent className="max-h-[92vh] grid-cols-[minmax(0,1fr)] overflow-y-auto p-4 sm:p-6 sm:max-w-md">
           {dialog?.kind === 'payment' ? <PaymentForm row={dialog.row} month={month} onSaved={() => done('Pagamento registrado.')} /> : null}
           {dialog?.kind === 'adjustment' ? <AdjustmentForm row={dialog.row} month={month} onSaved={() => done('Ajuste registrado.')} /> : null}
           {dialog?.kind === 'debt' ? <DebtForm technicians={catalog.data?.technicians ?? []} onSaved={() => done('Débito criado. O técnico confirma no app.')} /> : null}

@@ -89,8 +89,8 @@ export function CatalogTab() {
       {notice ? <Alert tone="success">{notice}</Alert> : null}
       {error || actionError ? <Alert>{error || actionError}</Alert> : null}
       <DataPanel
-        title="Catálogo e estoque central"
-        description="Custo = quanto a empresa pagou. Preço de técnico = quanto o técnico deve por peça vendida. Sugerido = preço ao cliente (o técnico pode mudar)."
+        title="Peças e estoque central"
+        description="Preços por unidade. O técnico pode vender por outro valor que não o sugerido."
         action={
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => setDialog({ kind: 'import' })}>
@@ -221,7 +221,7 @@ export function CatalogTab() {
       </DataPanel>
 
       <Dialog open={dialog !== null} onOpenChange={(open) => !open && setDialog(null)}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
+        <DialogContent className="max-h-[92vh] grid-cols-[minmax(0,1fr)] overflow-y-auto p-4 sm:p-6 sm:max-w-2xl">
           {dialog?.kind === 'edit' ? <PartForm part={dialog.part} parts={data?.parts ?? []} onSaved={(part, created) => done(created ? `"${part.name}" cadastrada.` : `"${part.name}" salva.`)} /> : null}
           {dialog?.kind === 'purchase' && data ? <PurchaseForm parts={data.parts} initial={dialog.part} onSaved={() => done('Entrada registrada no estoque central.')} /> : null}
           {dialog?.kind === 'adjust' && data ? <AdjustForm part={dialog.part} technicians={data.technicians} onSaved={() => done('Estoque ajustado.')} /> : null}
@@ -592,7 +592,7 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
         </Button>
       </DialogFooter>
       <Dialog open={scanning} onOpenChange={setScanning}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="grid-cols-[minmax(0,1fr)] p-4 sm:p-6 sm:max-w-md">
           <DialogHeader className="sr-only">
             <DialogTitle>Ler código de barras</DialogTitle>
           </DialogHeader>

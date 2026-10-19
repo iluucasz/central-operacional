@@ -16,13 +16,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAppSession } from '@/hooks/use-app-session';
 
 const TABS = [
-  { value: 'overview', label: 'Visão geral', icon: BarChart3 },
-  { value: 'catalog', label: 'Peças e estoque', icon: Package },
-  { value: 'technicians', label: 'Técnicos', icon: Truck },
+  { value: 'overview', label: 'Resumo', icon: BarChart3 },
   { value: 'sales', label: 'Vendas', icon: Receipt },
+  { value: 'catalog', label: 'Peças', icon: Package },
+  { value: 'technicians', label: 'Técnicos', icon: Truck },
   { value: 'inventory', label: 'Inventário', icon: ClipboardCheck },
   { value: 'account', label: 'Acerto', icon: Wallet },
-  { value: 'settings', label: 'Configurações', icon: Settings2 },
+  { value: 'settings', label: 'Ajustes', icon: Settings2 },
 ] as const;
 
 type TabValue = (typeof TABS)[number]['value'];
@@ -51,14 +51,10 @@ export default function AdminPartsPage() {
 
   return (
     <AppShell role="admin" userName={user.name || user.email}>
-      <PageHeader
-        eyebrow="Vendas"
-        title="Controle de Peças"
-        description="Peças em consignação com os técnicos: estoque central, remessas, vendas pelo celular, inventário e acerto mensal. Fica fora da folha."
-      />
-      <Tabs value={tab} onValueChange={changeTab} className="gap-5">
+      <PageHeader title="Controle de Peças" />
+      <Tabs value={tab} onValueChange={changeTab} className="gap-6">
         <div className="-mx-1 overflow-x-auto px-1">
-          <TabsList>
+          <TabsList className="h-11 p-1">
             {TABS.map(({ value, label, icon: Icon }) => (
               <TabsTrigger key={value} value={value}>
                 <Icon className="h-4 w-4" />

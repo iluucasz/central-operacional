@@ -71,7 +71,7 @@ export function InventoryTab() {
 
   return (
     <div className="grid gap-4">
-      <DataPanel title="Novo inventário" description="Conte as peças do carro de um técnico (ou do estoque central) lendo os códigos de barras. O que faltar pode virar débito do técnico, em parcelas.">
+      <DataPanel title="Novo inventário" description="Conte o carro de um técnico ou o estoque central. O que faltar pode virar débito em parcelas.">
         <div className="flex flex-wrap items-end gap-3">
           <Field label="Estoque a contar" className="min-w-56">
             <select className={inputClassName} value={technicianId} onChange={(event) => setTechnicianId(event.target.value)}>
@@ -219,7 +219,7 @@ function InventoryScreen({ id, onBack }: { id: string; onBack: () => void }) {
       </div>
 
       {open ? (
-        <DataPanel title="Contagem" description="Cada leitura soma 1 unidade. Também dá para digitar a quantidade de cada peça na lista.">
+        <DataPanel title="Contagem" description="Cada leitura soma 1. Também dá para digitar a quantidade.">
           {scanning ? (
             <BarcodeScanner continuous title="Leia cada unidade" onDetect={(code) => count({ barcode: code })} onClose={() => setScanning(false)} />
           ) : (
@@ -278,7 +278,7 @@ function InventoryScreen({ id, onBack }: { id: string; onBack: () => void }) {
 
       {open ? (
         closing ? (
-          <DataPanel title="Encerrar inventário" description="O estoque passa a ser o que foi contado. As diferenças ficam registradas.">
+          <DataPanel title="Encerrar inventário" description="O estoque passa a ser o contado. As diferenças ficam registradas.">
             <div className="grid gap-4">
               {inventory.technicianId && shortages.length ? (
                 <>

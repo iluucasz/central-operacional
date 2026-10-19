@@ -79,10 +79,22 @@ export function SalesTab() {
         </Button>
       </div>
 
-      <DataPanel
-        title={`Vendas de ${formatMonthLabel(month)}`}
-        description={`Vendido ${formatCurrency(totals.sold)} · técnicos devem ${formatCurrency(totals.owed)} · custo ${formatCurrency(totals.cost)} · margem da empresa ${formatCurrency(totals.owed - totals.cost)}`}
-      >
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[
+          { label: 'Vendido', value: totals.sold, hint: 'ao cliente' },
+          { label: 'Técnicos devem', value: totals.owed, hint: 'preço de técnico' },
+          { label: 'Custo', value: totals.cost, hint: 'das peças vendidas' },
+          { label: 'Margem', value: totals.owed - totals.cost, hint: 'da empresa' },
+        ].map((item) => (
+          <div key={item.label} className="rounded-xl border bg-card p-3.5">
+            <p className="text-xs text-muted-foreground">{item.label}</p>
+            <p className="mt-0.5 text-xl font-semibold tabular-nums">{formatCurrency(item.value)}</p>
+            <p className="text-xs text-muted-foreground">{item.hint}</p>
+          </div>
+        ))}
+      </div>
+
+      <DataPanel title={`Vendas de ${formatMonthLabel(month)}`}>
         {error ? <Alert>{error}</Alert> : null}
         {loading && !data ? (
           <Spinner />
@@ -125,7 +137,7 @@ export function SalesTab() {
       </DataPanel>
 
       <Dialog open={open !== null} onOpenChange={(value) => !value && setOpen(null)}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-lg">
+        <DialogContent className="max-h-[92vh] grid-cols-[minmax(0,1fr)] overflow-y-auto p-4 sm:p-6 sm:max-w-lg">
           {open ? (
             <SaleDetail
               sale={open}

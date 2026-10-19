@@ -47,7 +47,7 @@ export function SettingsTab() {
     <form onSubmit={save} className="grid gap-4">
       <DataPanel
         title="Formas de pagamento"
-        description="O que os técnicos podem oferecer ao cliente. Pix, link e cartão caem na conta do Mercado Pago do próprio técnico, que precisa conectá-la em “Minhas peças”."
+        description="O que o técnico pode oferecer ao cliente. Pix e cartão caem na conta dele no Mercado Pago."
       >
         <div className="grid gap-2">
           {PAYMENT_METHODS.map((method) => (
