@@ -331,7 +331,8 @@ export async function startPayment(saleId: string, technicianId: string, actor: 
       amount,
       description: describeSale(row, name),
       payerEmail: fallbackPayerEmail(),
-      payerFirstName: (row.customer_name as string | null) ?? undefined,
+      // Pix orders sent without a payer name came back as "processing_error" while named ones worked; the technician often has no name.
+      payerFirstName: (row.customer_name as string | null)?.trim() || 'Cliente',
       expirationMinutes: PIX_EXPIRATION_MINUTES,
       attempt,
     });
