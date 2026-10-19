@@ -371,9 +371,12 @@ function PriceRow({ label, hint, margin, error, children }: { label: string; hin
         <p className="text-sm font-medium">{label}</p>
         <p className="text-xs text-muted-foreground">{hint}</p>
       </div>
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 sm:grid-cols-[11rem_auto]">
-        {children}
-        {margin ? <div className="w-32">{margin}</div> : <span className="hidden sm:block sm:w-32" />}
+      <div className="grid grid-cols-[minmax(0,1fr)_7.5rem] items-end gap-3 sm:grid-cols-[11rem_7.5rem]">
+        <div className="grid gap-1">
+          <span className="text-xs text-muted-foreground">Valor</span>
+          {children}
+        </div>
+        {margin ?? <span aria-hidden="true" />}
       </div>
       {error ? <p className="text-xs text-rose-700 sm:col-span-2">{error}</p> : null}
     </div>
@@ -382,10 +385,10 @@ function PriceRow({ label, hint, margin, error, children }: { label: string; hin
 
 function MarginInput({ value, onChange, label }: { value: string; onChange: (value: string) => void; label: string }) {
   return (
-    <label className="grid gap-1 text-[11px] leading-tight text-muted-foreground">
-      {label}
+    <div className="grid gap-1">
+      <span className="text-xs text-muted-foreground">Margem</span>
       <AffixInput suffix="%" value={value} onChange={onChange} inputMode="decimal" placeholder="0" aria-label={label} />
-    </label>
+    </div>
   );
 }
 
@@ -613,7 +616,7 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
           </PriceRow>
           <PriceRow
             label="Quanto o técnico paga à empresa"
-            hint="Por peça vendida."
+            hint="Por peça vendida. A margem é sobre o custo."
             error={fieldErrors.tech}
             margin={<MarginInput value={pricing.techPercent} onChange={setPrice('techPercent')} label="Margem sobre o custo" />}
           >
@@ -633,7 +636,7 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
           </PriceRow>
           <PriceRow
             label="Preço sugerido ao cliente"
-            hint="O técnico pode mudar na hora da venda."
+            hint="O técnico pode mudar na venda. A margem é sobre o preço do técnico."
             margin={<MarginInput value={pricing.suggestedPercent} onChange={setPrice('suggestedPercent')} label="Margem sobre o preço do técnico" />}
           >
             <AffixInput prefix="R$" value={pricing.suggested} onChange={setPrice('suggested')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" aria-label="Preço sugerido ao cliente" />
