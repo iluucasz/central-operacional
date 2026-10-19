@@ -15,6 +15,13 @@ export interface Delivery {
 
 const POLL_MS = 4000;
 
+// The raw Evolution API answer (JSON) is for the admin's WhatsApp history, not for the technician.
+function friendlyDeliveryError(error: string | null) {
+  if (!error) return '';
+  if (/^Evolution API/i.test(error) || error.includes('{')) return 'Não foi possível enviar pelo WhatsApp da empresa.';
+  return error;
+}
+
 function DeliveryNote({ delivery, what }: { delivery: Delivery | null; what: string }) {
   if (!delivery) return null;
   const status = delivery.whatsapp?.status;
@@ -24,7 +31,7 @@ function DeliveryNote({ delivery, what }: { delivery: Delivery | null; what: str
         <Alert tone="success">{what} enviado para o WhatsApp do cliente.</Alert>
       ) : (
         <Alert tone="warning">
-          {delivery.whatsapp?.error ? `${delivery.whatsapp.error} ` : ''}Envie pelo seu WhatsApp:
+          {delivery.whatsapp?.error ? `${friendlyDeliveryError(delivery.whatsapp.error)} ` : ''}Envie pelo seu WhatsApp:
         </Alert>
       )}
       {status !== 'sent' && delivery.shareUrl ? (
@@ -282,8 +289,8 @@ export function PaymentPanel({
         <div className="grid gap-2">
           <DeliveryNote delivery={linkDelivery} what="Link de pagamento" />
           {linkDelivery?.whatsapp?.status === 'sent' || sale.paymentLinkSentAt ? null : (
-            <Button variant="ghost" size="sm" onClick={() => act('send-link')} disabled={busy !== null}>
-              <MessageCircle className="h-4 w-4" />
+            <Button variant="ghost" size="sm" className="h-auto min-h-8 whitespace-normal py-1.5 text-center" onClick={() => act('send-link')} disabled={busy !== null}>
+              <MessageCircle className="h-4 w-4 shrink-0" />
               Enviar o pagamento pelo WhatsApp da empresa
             </Button>
           )}
@@ -294,7 +301,7 @@ export function PaymentPanel({
         <summary className="cursor-pointer select-none text-muted-foreground">Outras opções</summary>
         <div className="mt-3 grid gap-2">
           {sale.paymentMethod !== 'cash' ? (
-            <Button variant="outline" size="sm" onClick={() => act('confirm')} disabled={busy !== null}>
+            <Button variant="outline" size="sm" className="h-auto min-h-8 whitespace-normal py-1.5 text-center" onClick={() => act('confirm')} disabled={busy !== null}>
               Recebi de outra forma (dinheiro ou fora do sistema)
             </Button>
           ) : null}
@@ -321,7 +328,7 @@ export function PaymentPanel({
               </Button>
             </div>
           ) : (
-            <Button variant="ghost" size="sm" className="text-rose-700" onClick={() => setShowCancel(true)}>
+            <Button variant="ghost" size="sm" className="h-auto min-h-8 whitespace-normal py-1.5 text-center text-rose-700" onClick={() => setShowCancel(true)}>
               Cancelar venda (as peças voltam para o seu estoque)
             </Button>
           )}

@@ -113,8 +113,6 @@ export function TechnicianParts() {
 function MercadoPagoCard({ status, onChanged }: { status: MercadoPagoAccountStatus; onChanged: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
-  const [terminals, setTerminals] = useState<Array<{ id: string; operatingMode: string | null }> | null>(null);
-  const [selected, setSelected] = useState(status.terminalId ?? '');
 
   async function connect() {
     setBusy('connect');
@@ -141,34 +139,6 @@ function MercadoPagoCard({ status, onChanged }: { status: MercadoPagoAccountStat
     }
   }
 
-  async function loadTerminals() {
-    setBusy('terminals');
-    setError('');
-    try {
-      const result = await partsApi<{ terminals: Array<{ id: string; operatingMode: string | null }>; selected: string | null }>('/api/mercadopago/terminals');
-      setTerminals(result.terminals);
-      setSelected(result.selected ?? '');
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function saveTerminal() {
-    setBusy('save-terminal');
-    setError('');
-    try {
-      await partsApi('/api/mercadopago/terminals', { method: 'PUT', json: { terminalId: selected || null } });
-      setTerminals(null);
-      onChanged();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(null);
-    }
-  }
-
   return (
     <DataPanel
       title="Mercado Pago"
@@ -187,31 +157,7 @@ function MercadoPagoCard({ status, onChanged }: { status: MercadoPagoAccountStat
                 {status.liveMode === false ? ' (conta de teste)' : ''}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Cartão presencial: {status.terminalId ? `cobranças vão para a maquininha ${status.terminalId}.` : 'cobre pelo app do Mercado Pago (Point Tap) e confira aqui.'}
-            </p>
-            {terminals ? (
-              <div className="grid gap-2">
-                <select className={inputClassName} value={selected} onChange={(event) => setSelected(event.target.value)} aria-label="Maquininha">
-                  <option value="">Sem maquininha (cobrar pelo app — Point Tap)</option>
-                  {terminals.map((terminal) => (
-                    <option key={terminal.id} value={terminal.id}>
-                      {terminal.id}
-                      {terminal.operatingMode && terminal.operatingMode !== 'PDV' ? ' (vai para o modo integrado)' : ''}
-                    </option>
-                  ))}
-                </select>
-                {!terminals.length ? <p className="text-xs text-muted-foreground">Nenhuma maquininha Point encontrada na sua conta.</p> : null}
-                <Button size="sm" onClick={saveTerminal} disabled={busy !== null}>
-                  Salvar
-                </Button>
-              </div>
-            ) : null}
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" onClick={loadTerminals} disabled={busy !== null}>
-                {busy === 'terminals' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Maquininha Point
-              </Button>
               <Button variant="ghost" size="sm" onClick={disconnect} disabled={busy !== null}>
                 <Unplug className="h-4 w-4" />
                 Desconectar
@@ -220,7 +166,7 @@ function MercadoPagoCard({ status, onChanged }: { status: MercadoPagoAccountStat
           </>
         ) : (
           <>
-            <p className="text-sm text-muted-foreground">Conecte sua conta para cobrar por Pix, link de cartão e maquininha. Sem conta, só dá para registrar vendas em dinheiro.</p>
+            <p className="text-sm text-muted-foreground">Conecte sua conta para cobrar por Pix e link de cartão. Sem conta, não dá para registrar vendas.</p>
             <Button onClick={connect} disabled={busy !== null}>
               {busy === 'connect' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
               Conectar minha conta do Mercado Pago
@@ -300,7 +246,7 @@ function PendingConfirmations({ transfers, debts, onDone }: { transfers: MeRespo
         </Alert>
       ))}
       <Dialog open={open !== null} onOpenChange={(value) => !value && setOpen(null)}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        <DialogContent className="max-h-[90vh] grid-cols-[minmax(0,1fr)] overflow-y-auto p-4 sm:max-w-lg sm:p-6">
           {open?.kind === 'transfer' ? <TransferReview id={open.id} onDone={() => { setOpen(null); onDone(); }} /> : null}
           {open?.kind === 'debt' ? <DebtReview id={open.id} onDone={() => { setOpen(null); onDone(); }} /> : null}
         </DialogContent>
@@ -542,7 +488,7 @@ function SellPanel({
       ) : null}
 
       <Dialog open={scanning} onOpenChange={setScanning}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="grid-cols-[minmax(0,1fr)] p-4 sm:max-w-md sm:p-6">
           <DialogHeader className="sr-only">
             <DialogTitle>Ler código de barras</DialogTitle>
           </DialogHeader>
@@ -551,7 +497,7 @@ function SellPanel({
       </Dialog>
 
       <Dialog open={checkout} onOpenChange={setCheckout}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-lg">
+        <DialogContent className="max-h-[92vh] grid-cols-[minmax(0,1fr)] overflow-y-auto p-4 sm:max-w-lg sm:p-6">
           <DialogHeader>
             <DialogTitle>Cobrar o cliente</DialogTitle>
             <DialogDescription>Você define o preço de venda. À empresa você deve {formatCurrency(owed)} (preço de técnico).</DialogDescription>
@@ -574,7 +520,7 @@ function SellPanel({
       </Dialog>
 
       <Dialog open={charging !== null} onOpenChange={(value) => !value && setCharging(null)}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-md">
+        <DialogContent className="max-h-[92vh] grid-cols-[minmax(0,1fr)] overflow-y-auto p-4 sm:max-w-md sm:p-6">
           <DialogHeader className="sr-only">
             <DialogTitle>Pagamento</DialogTitle>
           </DialogHeader>
@@ -764,7 +710,7 @@ function MySales({ paymentMethods }: { paymentMethods: PaymentMethod[] }) {
         </ul>
       )}
       <Dialog open={open !== null} onOpenChange={(value) => !value && setOpen(null)}>
-        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-md">
+        <DialogContent className="max-h-[92vh] grid-cols-[minmax(0,1fr)] overflow-y-auto p-4 sm:max-w-md sm:p-6">
           <DialogHeader className="sr-only">
             <DialogTitle>Venda</DialogTitle>
           </DialogHeader>
