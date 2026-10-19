@@ -20,9 +20,14 @@ type Json = Record<string, unknown>;
 function describe(body: unknown, status: number) {
   if (body && typeof body === 'object') {
     const data = body as Json;
-    const errors = Array.isArray(data.errors) ? (data.errors as Json[]).map((e) => e.message ?? e.code).filter(Boolean) : [];
+    // Orders API failures ("The following transactions failed") keep the real reason in `details`.
+    const errors = Array.isArray(data.errors)
+      ? (data.errors as Json[]).flatMap((e) => [e.message ?? e.code, ...(Array.isArray(e.details) ? (e.details as unknown[]).map((item) => (typeof item === 'string' ? item : JSON.stringify(item))) : [])]).filter(Boolean)
+      : [];
     const cause = Array.isArray(data.cause) ? (data.cause as Json[]).map((c) => c.description ?? c.code).filter(Boolean) : [];
     const detail = [data.message, data.error_description, ...errors, ...cause].filter(Boolean).join(' · ');
+    // A payment refused with nothing but the generic text: show the raw answer so the cause can be found.
+    if (status === 402 && !errors.some((item) => String(item).includes(':'))) return `Mercado Pago (${status}): ${detail || 'cobrança recusada'} — ${JSON.stringify(body).slice(0, 400)}`;
     if (detail) return `Mercado Pago (${status}): ${detail}`;
   }
   return `Mercado Pago respondeu ${status}.`;
