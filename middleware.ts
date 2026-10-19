@@ -7,7 +7,17 @@ const JWT_SECRET = new TextEncoder().encode(
 
 const COOKIE_NAME = 'auth-token';
 
-const publicRoutes = ['/login', '/api/auth/login', '/api/auth/register', '/api/auth/me'];
+// The two Mercado Pago routes are called by Mercado Pago / the OAuth redirect, not by a logged-in
+// browser request: the webhook trusts nothing in its body and the OAuth callback is gated by a
+// single-use `state` (see app/api/webhooks/mercadopago and app/api/mercadopago/oauth/callback).
+const publicRoutes = [
+  '/login',
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/me',
+  '/api/webhooks/mercadopago',
+  '/api/mercadopago/oauth/callback',
+];
 const adminRoutes = ['/admin'];
 const technicianRoutes = ['/dashboard'];
 const hiddenTechnicianRoutes = ['/dashboard/services'];

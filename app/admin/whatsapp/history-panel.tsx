@@ -20,6 +20,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   MESSAGE_STATUS_LABELS,
+  MESSAGE_ONLY_TYPES,
   MESSAGE_STATUSES,
   MESSAGE_TRIGGER_LABELS,
   MESSAGE_TYPE_LABELS,
@@ -228,7 +229,7 @@ export function HistoryPanel({ technicians }: HistoryPanelProps) {
       })),
     [technicians],
   );
-  const typeOptions = [...NOTIFICATION_TYPES, 'test' as const].map((type) => ({ value: type, label: MESSAGE_TYPE_LABELS[type] }));
+  const typeOptions = [...NOTIFICATION_TYPES, ...MESSAGE_ONLY_TYPES].map((type) => ({ value: type, label: MESSAGE_TYPE_LABELS[type] }));
   const statusOptions = MESSAGE_STATUSES.map((status) => ({ value: status, label: MESSAGE_STATUS_LABELS[status] }));
   const yearOptions = Array.from({ length: 5 }, (_, index) => String(Number(today.slice(0, 4)) - index));
 

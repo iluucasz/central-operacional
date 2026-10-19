@@ -175,7 +175,7 @@ export interface NewMessage {
   technicianId: string | null;
   technicianName: string | null;
   phone: string | null;
-  type: NotificationType | 'test';
+  type: NotificationType | 'test' | 'parts_sale';
   trigger: MessageTrigger;
   dedupeKey: string | null;
   referenceDate: string | null;

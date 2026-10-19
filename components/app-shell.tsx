@@ -21,6 +21,7 @@ import {
   LogOut,
   Menu,
   MessageCircle,
+  Package,
   PanelLeftClose,
   PanelLeftOpen,
   Settings,
@@ -66,6 +67,7 @@ const adminLinks: NavItem[] = [
   { href: '/admin/faturamento', label: 'Faturamento', icon: TrendingUp },
   { href: '/admin/financeiro', label: 'Controle de Despesas', icon: Landmark },
   { href: '/admin/library', label: 'Biblioteca', icon: BookOpen },
+  { href: '/admin/pecas', label: 'Controle de Peças', icon: Package },
   { href: '/admin/assistente', label: 'Assistente IA', icon: Sparkles },
   { href: '/admin/whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { href: '/admin/config-porto', label: 'Config. Porto', icon: ShieldCheck },
@@ -77,6 +79,7 @@ const technicianLinks: NavItem[] = [
   { href: '/dashboard/hours', label: 'Banco de horas', icon: Clock3 },
   { href: '/dashboard/schedule', label: 'Agenda', icon: CalendarDays },
   { href: '/dashboard/payroll', label: 'Pagamento', icon: WalletCards },
+  { href: '/dashboard/pecas', label: 'Minhas peças', icon: Package },
   { href: '/dashboard/library', label: 'Biblioteca', icon: BookOpen },
 ];
 

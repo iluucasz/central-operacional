@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
 import { resendMessage } from '@/lib/whatsapp/notifications';
-import { MESSAGE_STATUSES, NOTIFICATION_TYPES } from '@/lib/whatsapp/notification-types';
+import { MESSAGE_ONLY_TYPES, MESSAGE_STATUSES, NOTIFICATION_TYPES } from '@/lib/whatsapp/notification-types';
 import { requireWhatsAppAdmin } from '@/lib/whatsapp/require-admin';
 import { ensureWhatsAppSchema } from '@/lib/whatsapp/store';
 
@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     const technicianIds = listParam(searchParams, 'technicianIds');
     if (technicianIds.length) conditions.push(`m.technician_id = ANY(${addParam(technicianIds)}::text[])`);
 
-    const allowedTypes: string[] = [...NOTIFICATION_TYPES, 'test'];
+    const allowedTypes: string[] = [...NOTIFICATION_TYPES, ...MESSAGE_ONLY_TYPES];
     const types = listParam(searchParams, 'types').filter((type) => allowedTypes.includes(type));
     if (types.length) conditions.push(`m.type = ANY(${addParam(types)}::text[])`);
 

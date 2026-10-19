@@ -267,7 +267,11 @@ export const MESSAGE_TRIGGER_LABELS: Record<MessageTrigger, string> = {
   test: 'Teste',
 };
 
-export const MESSAGE_TYPE_LABELS: Record<NotificationType | 'test', string> = {
+/** Messages that are not technician notifications: the admin's test and the customer messages of a parts sale. */
+export const MESSAGE_ONLY_TYPES = ['test', 'parts_sale'] as const;
+
+export const MESSAGE_TYPE_LABELS: Record<NotificationType | (typeof MESSAGE_ONLY_TYPES)[number], string> = {
   ...(Object.fromEntries(NOTIFICATION_TYPES.map((type) => [type, NOTIFICATION_DEFINITIONS[type].label])) as Record<NotificationType, string>),
   test: 'Mensagem de teste',
+  parts_sale: 'Venda de peças (cliente)',
 };
