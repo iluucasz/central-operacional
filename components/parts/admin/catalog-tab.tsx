@@ -363,14 +363,18 @@ function FormSection({ title, children }: { title: string; children: React.React
   );
 }
 
-function PriceRow({ label, hint, children }: { label: string; hint: string; children: React.ReactNode }) {
+function PriceCard({ step, title, hint, footer, children }: { step: number; title: string; hint: string; footer?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="grid gap-1.5">
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{label}</p>
-        <p className="text-xs text-muted-foreground">{hint}</p>
+    <div className="grid content-start gap-3 rounded-xl border bg-muted/20 p-3.5">
+      <div className="flex items-start gap-2.5">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">{step}</span>
+        <div className="min-w-0">
+          <p className="text-sm font-medium leading-snug">{title}</p>
+          <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
+        </div>
       </div>
-      <div className="grid grid-cols-[minmax(0,1fr)_7.5rem] gap-3">{children}</div>
+      {children}
+      {footer ? <p className="text-xs font-medium">{footer}</p> : null}
     </div>
   );
 }
@@ -490,40 +494,51 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
       </Field>
 
       <FormSection title="Preços">
-        <PriceRow label="Quanto a empresa pagou" hint="O técnico não vê este valor.">
-          <AffixInput prefix="R$" value={pricing.cost} onChange={setPrice('cost')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" aria-label="Custo" />
-          <span />
-        </PriceRow>
-        <PriceRow label="Quanto o técnico paga à empresa" hint="Por peça vendida. Se preferir, digite a margem ao lado.">
-          <AffixInput prefix="R$" value={pricing.tech} onChange={setPrice('tech')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" required aria-label="Preço de técnico" />
-          <AffixInput suffix="%" value={pricing.techPercent} onChange={setPrice('techPercent')} inputMode="decimal" placeholder="margem" aria-label="Margem do preço de técnico sobre o custo" />
-        </PriceRow>
-        <PriceRow label="Preço sugerido ao cliente" hint="Já aparece na venda do técnico, que pode mudar.">
-          <AffixInput prefix="R$" value={pricing.suggested} onChange={setPrice('suggested')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" aria-label="Preço sugerido ao cliente" />
-          <AffixInput suffix="%" value={pricing.suggestedPercent} onChange={setPrice('suggestedPercent')} inputMode="decimal" placeholder="margem" aria-label="Margem do preço sugerido sobre o preço de técnico" />
-        </PriceRow>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <PriceCard step={1} title="Custo" hint="Quanto a empresa pagou. O técnico não vê.">
+            <AffixInput prefix="R$" value={pricing.cost} onChange={setPrice('cost')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" aria-label="Custo" />
+          </PriceCard>
+          <PriceCard
+            step={2}
+            title="Preço do técnico"
+            hint="Quanto o técnico paga à empresa por peça vendida."
+            footer={
+              technician > 0 && cost > 0 ? (
+                <span className={companyGain < 0 ? 'text-rose-700' : 'text-emerald-700'}>
+                  Empresa ganha {formatCurrency(companyGain)} por peça
+                </span>
+              ) : null
+            }
+          >
+            <AffixInput prefix="R$" value={pricing.tech} onChange={setPrice('tech')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" required aria-label="Preço de técnico" />
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              Ou use a margem sobre o custo
+              <AffixInput suffix="%" value={pricing.techPercent} onChange={setPrice('techPercent')} inputMode="decimal" placeholder="0" aria-label="Margem do preço de técnico sobre o custo" />
+            </label>
+          </PriceCard>
+          <PriceCard
+            step={3}
+            title="Sugerido ao cliente"
+            hint="Já aparece na venda do técnico, que pode mudar."
+            footer={
+              suggested > 0 && technician > 0 ? (
+                <span className={technicianGain < 0 ? 'text-rose-700' : 'text-emerald-700'}>Técnico ganha {formatCurrency(technicianGain)} por peça</span>
+              ) : null
+            }
+          >
+            <AffixInput prefix="R$" value={pricing.suggested} onChange={setPrice('suggested')} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" aria-label="Preço sugerido ao cliente" />
+            <label className="grid gap-1 text-xs text-muted-foreground">
+              Ou use a margem sobre o preço do técnico
+              <AffixInput suffix="%" value={pricing.suggestedPercent} onChange={setPrice('suggestedPercent')} inputMode="decimal" placeholder="0" aria-label="Margem do preço sugerido sobre o preço de técnico" />
+            </label>
+          </PriceCard>
+        </div>
 
-        {technician > 0 ? (
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-xl bg-muted/40 px-3 py-2.5">
-              <p className="text-xs text-muted-foreground">Empresa ganha</p>
-              <p className={`text-base font-semibold tabular-nums ${companyGain < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>{formatCurrency(companyGain)}</p>
-              {cost > 0 ? <p className="text-xs text-muted-foreground">{fmtPercent((companyGain / cost) * 100)}% sobre o custo</p> : null}
-            </div>
-            {suggested > 0 ? (
-              <div className="rounded-xl bg-muted/40 px-3 py-2.5">
-                <p className="text-xs text-muted-foreground">Técnico ganha</p>
-                <p className={`text-base font-semibold tabular-nums ${technicianGain < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>{formatCurrency(technicianGain)}</p>
-                <p className="text-xs text-muted-foreground">vendendo pelo sugerido</p>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
         {cost > 0 && technician > 0 && technician < cost ? (
-          <Alert tone="warning">O preço de técnico está abaixo do custo: a empresa perde {formatCurrency(cost - technician)} a cada peça vendida.</Alert>
+          <Alert tone="warning">O preço do técnico está abaixo do custo: a empresa perde {formatCurrency(cost - technician)} a cada peça vendida.</Alert>
         ) : null}
         {technician > 0 && suggested > 0 && suggested < technician ? (
-          <Alert tone="warning">O sugerido está abaixo do preço de técnico: o técnico teria prejuízo de {formatCurrency(technician - suggested)} por peça.</Alert>
+          <Alert tone="warning">O sugerido está abaixo do preço do técnico: o técnico teria prejuízo de {formatCurrency(technician - suggested)} por peça.</Alert>
         ) : null}
       </FormSection>
 
@@ -581,7 +596,7 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
         </div>
       </details>
 
-      <div className="sticky bottom-0 -mx-4 -mb-4 grid gap-2 border-t bg-card px-4 py-3 sm:-mx-6 sm:-mb-6 sm:px-6">
+      <div className="sticky -bottom-4 -mx-4 -mb-4 grid gap-2 border-t bg-card px-4 py-3 sm:-bottom-6 sm:-mx-6 sm:-mb-6 sm:px-6">
         {error ? <Alert>{error}</Alert> : null}
         <Button type="submit" size="lg" disabled={busy}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

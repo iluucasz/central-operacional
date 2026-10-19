@@ -820,7 +820,7 @@ function CheckoutForm({
         </div>
       </fieldset>
 
-      <div className="sticky bottom-0 -mx-4 -mb-4 grid gap-2 border-t bg-card px-4 py-3 sm:-mx-6 sm:-mb-6 sm:px-6">
+      <div className="sticky -bottom-4 -mx-4 -mb-4 grid gap-2 border-t bg-card px-4 py-3 sm:-bottom-6 sm:-mx-6 sm:-mb-6 sm:px-6">
         {error ? <Alert>{error}</Alert> : null}
         <Button type="submit" size="lg" disabled={busy || !cart.length || missingPrice || !available.includes(method)}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
