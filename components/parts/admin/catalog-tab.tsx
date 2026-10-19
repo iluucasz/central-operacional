@@ -411,8 +411,13 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [step, setStep] = useState(0);
-  const [fieldErrors, setFieldErrors] = useState<{ name?: string; tech?: string }>({});
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; tech?: string; quantity?: string }>({});
+  // How many units the company has right now (new parts only; later changes go through stock entries).
+  const [initialStock, setInitialStock] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  // If a later step of a save fails (stock, photo), a retry must not create the part or the stock twice.
+  const createdRef = useRef<Part | null>(null);
+  const stockAddedRef = useRef(false);
 
   const set = (key: keyof typeof form) => (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setForm((current) => ({ ...current, [key]: event.target.value }));
@@ -434,8 +439,9 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
   // The required fields are checked here (not with `required`) because the inactive step is hidden,
   // and the browser can't focus a hidden invalid field.
   function validateStep(index: number) {
-    const next: { name?: string; tech?: string } = {};
+    const next: { name?: string; tech?: string; quantity?: string } = {};
     if (index === 0 && !form.name.trim()) next.name = 'Informe o nome da peça.';
+    if (index === 0 && !part && initialStock.trim() && !/^\d+$/.test(initialStock.trim())) next.quantity = 'Use só números inteiros, como 5.';
     if (index === 1 && parseAmount(pricing.tech) === null) next.tech = 'Informe quanto o técnico paga à empresa.';
     setFieldErrors(next);
     return Object.keys(next).length === 0;
@@ -460,10 +466,24 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
         suggestedPrice: pricing.suggested,
         minStock: form.minStock === '' ? null : form.minStock,
       };
-      const result = part
-        ? await partsApi<{ part: Part }>(`/api/parts/${part.id}`, { method: 'PATCH', json: body })
+      const existing = part ?? createdRef.current;
+      const result = existing
+        ? await partsApi<{ part: Part }>(`/api/parts/${existing.id}`, { method: 'PATCH', json: body })
         : await partsApi<{ part: Part }>('/api/parts', { method: 'POST', json: body });
       let saved = result.part;
+      if (!part) createdRef.current = saved;
+      const units = Number(initialStock.trim() || 0);
+      if (!part && units > 0 && !stockAddedRef.current) {
+        try {
+          await partsApi('/api/parts/stock', {
+            method: 'POST',
+            json: { action: 'purchase', note: 'Estoque inicial', updateCost: false, items: [{ partId: saved.id, quantity: units, unitCost: parseAmount(pricing.cost) ?? '' }] },
+          });
+          stockAddedRef.current = true;
+        } catch (reason) {
+          throw new Error(`Peça salva, mas a quantidade não entrou no estoque: ${reason instanceof Error ? reason.message : String(reason)} Tente de novo.`);
+        }
+      }
       if (image) {
         const data = new FormData();
         const resized = await resizeImage(image);
@@ -555,15 +575,33 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
           {barcodeOwner ? <span className="text-xs text-amber-700">Já usado em “{barcodeOwner.name}”. Cada código só pode ter uma peça.</span> : null}
         </Field>
 
-        <Field label="Unidade de medida">
-          <select className={inputClass('h-11 text-base sm:text-sm')} value={form.unit} onChange={set('unit')}>
-            {unitOptions.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div className="grid items-start gap-4 sm:grid-cols-2">
+          {!part ? (
+            <Field label="Quantidade em estoque" hint="Quantas você tem agora. Pode deixar vazio e dar entrada depois.">
+              <input
+                className={inputClass('h-11 text-base sm:text-sm')}
+                value={initialStock}
+                onChange={(event) => {
+                  setInitialStock(event.target.value);
+                  if (fieldErrors.quantity) setFieldErrors((current) => ({ ...current, quantity: undefined }));
+                }}
+                inputMode="numeric"
+                placeholder="0"
+                aria-invalid={Boolean(fieldErrors.quantity)}
+              />
+              {fieldErrors.quantity ? <span className="text-xs text-rose-700">{fieldErrors.quantity}</span> : null}
+            </Field>
+          ) : null}
+          <Field label="Unidade de medida">
+            <select className={inputClass('h-11 text-base sm:text-sm')} value={form.unit} onChange={set('unit')}>
+              {unitOptions.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
 
         {part ? (
           <label className="flex items-center justify-between gap-4 rounded-xl border px-4 py-3.5">
