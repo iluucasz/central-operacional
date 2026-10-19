@@ -73,7 +73,7 @@ export function SalesTab() {
           <option value="paid">Pagas</option>
           <option value="canceled">Canceladas</option>
         </select>
-        <Button variant="outline" size="sm" onClick={exportSheet} disabled={!sales.length} className="ml-auto">
+        <Button variant="outline" size="lg" onClick={exportSheet} disabled={!sales.length} className="ml-auto">
           <Download className="h-4 w-4" />
           Exportar
         </Button>
@@ -296,7 +296,7 @@ function SaleDetail({ sale, onChanged }: { sale: Sale; onChanged: (sale: Sale) =
         </Button>
       ) : null}
       {sale.status !== 'canceled' && !cancelOpen ? (
-        <Button variant="ghost" size="sm" className="justify-self-start text-rose-700" onClick={() => setCancelOpen(true)}>
+        <Button variant="ghost" size="lg" className="justify-self-start text-rose-700" onClick={() => setCancelOpen(true)}>
           <XCircle className="h-4 w-4" />
           Cancelar venda
         </Button>

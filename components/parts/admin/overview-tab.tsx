@@ -124,7 +124,7 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: string) => void 
             <DataPanel
               title="Saldo por técnico"
               action={
-                <Button variant="outline" size="sm" onClick={() => onNavigate('account')}>
+                <Button variant="outline" size="lg" onClick={() => onNavigate('account')}>
                   Ver acerto
                 </Button>
               }

@@ -184,7 +184,7 @@ export function AccountTab() {
                         </div>
 
                         <div>
-                          <Button size="sm" variant="outline" onClick={() => setDialog({ kind: 'adjustment', row })}>
+                          <Button size="lg" variant="outline" onClick={() => setDialog({ kind: 'adjustment', row })}>
                             Dar desconto ou cobrar a mais
                           </Button>
                         </div>
@@ -208,7 +208,7 @@ export function AccountTab() {
         title="Peças que faltaram"
         description="Se faltar peça no carro de um técnico (perda ou roubo), o valor vira uma cobrança, dividida em parcelas. Faltas achadas no inventário entram aqui sozinhas."
         action={
-          <Button size="sm" variant="outline" onClick={() => setDialog({ kind: 'debt' })}>
+          <Button size="lg" variant="outline" onClick={() => setDialog({ kind: 'debt' })}>
             <Plus className="h-4 w-4" />
             Cobrar peça faltante
           </Button>
@@ -246,7 +246,7 @@ export function AccountTab() {
                   </p>
                 </div>
                 {debt.status === 'active' ? (
-                  <Button size="sm" variant="ghost" className="text-rose-700" onClick={() => setDialog({ kind: 'cancel-debt', debt })}>
+                  <Button size="lg" variant="ghost" className="text-rose-700" onClick={() => setDialog({ kind: 'cancel-debt', debt })}>
                     Cancelar cobrança
                   </Button>
                 ) : null}

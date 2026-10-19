@@ -93,15 +93,15 @@ export function CatalogTab() {
         description="Preços por unidade. O técnico pode vender por outro valor que não o sugerido."
         action={
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={() => setDialog({ kind: 'import' })}>
+            <Button variant="outline" size="lg" onClick={() => setDialog({ kind: 'import' })}>
               <Upload className="h-4 w-4" />
               Importar planilha
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setDialog({ kind: 'purchase', part: null })}>
+            <Button variant="outline" size="lg" onClick={() => setDialog({ kind: 'purchase', part: null })}>
               <PackagePlus className="h-4 w-4" />
               Entrada de estoque
             </Button>
-            <Button size="sm" onClick={() => setDialog({ kind: 'edit', part: null })}>
+            <Button size="lg" onClick={() => setDialog({ kind: 'edit', part: null })}>
               <Plus className="h-4 w-4" />
               Nova peça
             </Button>
@@ -542,7 +542,7 @@ function PartForm({ part, parts, onSaved }: { part: Part | null; parts: Part[]; 
                 setPreview(URL.createObjectURL(file));
               }}
             />
-            <Button type="button" variant="outline" size="sm" onClick={() => fileRef.current?.click()}>
+            <Button type="button" variant="outline" size="lg" onClick={() => fileRef.current?.click()}>
               <ImagePlus className="h-4 w-4" />
               {preview ? 'Trocar foto' : 'Foto'}
             </Button>
@@ -848,12 +848,12 @@ function PurchaseForm({ parts, initial, onSaved }: { parts: Part[]; initial: Par
           </div>
         ))}
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => setLines((current) => [...current, { partId: active[0]?.id ?? '', quantity: '', unitCost: active[0] ? money(active[0].costPrice) : '' }])}>
+          <Button type="button" variant="outline" size="lg" onClick={() => setLines((current) => [...current, { partId: active[0]?.id ?? '', quantity: '', unitCost: active[0] ? money(active[0].costPrice) : '' }])}>
             <Plus className="h-4 w-4" />
             Outra peça
           </Button>
           {!scanning ? (
-            <Button type="button" variant="outline" size="sm" onClick={() => setScanning(true)}>
+            <Button type="button" variant="outline" size="lg" onClick={() => setScanning(true)}>
               <ScanBarcode className="h-4 w-4" />
               Ler códigos
             </Button>
@@ -1248,7 +1248,7 @@ function ImportForm({ onSaved }: { onSaved: (message: string) => void }) {
         </DialogDescription>
       </DialogHeader>
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="outline" size="sm" onClick={downloadTemplate}>
+        <Button type="button" variant="outline" size="lg" onClick={downloadTemplate}>
           <Download className="h-4 w-4" />
           Baixar modelo
         </Button>

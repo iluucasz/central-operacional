@@ -55,7 +55,7 @@ export function TechniciansTab() {
         <StatusBadge tone="success">Mercado Pago{technician.mercadoPago.nickname ? ` · ${technician.mercadoPago.nickname}` : ''}</StatusBadge>
         {technician.mercadoPago.liveMode === false ? <StatusBadge tone="warning">conta de teste</StatusBadge> : null}
         {allowDisconnect ? (
-          <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => disconnect(technician.id, technician.name)}>
+          <Button variant="ghost" size="lg" className="px-3" onClick={() => disconnect(technician.id, technician.name)}>
             <Unplug className="h-3.5 w-3.5" />
             Desconectar
           </Button>
@@ -78,11 +78,11 @@ export function TechniciansTab() {
               description={`${units} peça(s) no carro · ${formatCurrency(value)}`}
               action={
                 <div className="flex gap-2">
-                  <Button size="sm" onClick={() => setDialog({ kind: 'out', technicianId: technician.id })} disabled={technician.status !== 'active'}>
+                  <Button size="lg" onClick={() => setDialog({ kind: 'out', technicianId: technician.id })} disabled={technician.status !== 'active'}>
                     <ArrowUpFromLine className="h-4 w-4" />
                     Enviar peças
                   </Button>
-                  <Button size="sm" variant="outline" onClick={() => setDialog({ kind: 'return', technicianId: technician.id })}>
+                  <Button size="lg" variant="outline" onClick={() => setDialog({ kind: 'return', technicianId: technician.id })}>
                     <ArrowDownToLine className="h-4 w-4" />
                     Devolução
                   </Button>
@@ -119,7 +119,7 @@ export function TechniciansTab() {
               <li key={technician.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{technician.name}</span>
                 <span className="flex flex-wrap items-center gap-2 text-xs">{mercadoPagoStatus(technician, false)}</span>
-                <Button size="sm" variant="outline" onClick={() => setDialog({ kind: 'out', technicianId: technician.id })} disabled={technician.status !== 'active'}>
+                <Button size="lg" variant="outline" onClick={() => setDialog({ kind: 'out', technicianId: technician.id })} disabled={technician.status !== 'active'}>
                   <ArrowUpFromLine className="h-4 w-4" />
                   Enviar peças
                 </Button>
@@ -173,7 +173,7 @@ export function TechniciansTab() {
                       )}
                     </td>
                     <td className="py-2 text-right">
-                      <Button variant="ghost" size="sm" onClick={() => printTerm(transfer.id)}>
+                      <Button variant="ghost" size="lg" onClick={() => printTerm(transfer.id)}>
                         <Printer className="h-4 w-4" />
                         Termo
                       </Button>
@@ -315,12 +315,12 @@ function TransferForm({
               </div>
             ))}
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => setLines((current) => [...current, { partId: options[0]?.id ?? '', quantity: '' }])}>
+              <Button type="button" variant="outline" size="lg" onClick={() => setLines((current) => [...current, { partId: options[0]?.id ?? '', quantity: '' }])}>
                 <Plus className="h-4 w-4" />
                 Outra peça
               </Button>
               {!scanning ? (
-                <Button type="button" variant="outline" size="sm" onClick={() => setScanning(true)}>
+                <Button type="button" variant="outline" size="lg" onClick={() => setScanning(true)}>
                   <ScanBarcode className="h-4 w-4" />
                   Ler códigos
                 </Button>
