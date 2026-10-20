@@ -59,7 +59,15 @@ async function request<T = Json>(path: string, init: RequestInit & { token?: str
       body = text;
     }
     if (!response.ok) {
-      console.error('[mercadopago]', rest.method ?? 'GET', path, response.status, typeof body === 'string' ? body.slice(0, 300) : JSON.stringify(body).slice(0, 500));
+      // x-request-id is what Mercado Pago's support asks for when a payment fails with "processing_error".
+      console.error(
+        '[mercadopago]',
+        rest.method ?? 'GET',
+        path,
+        response.status,
+        `x-request-id=${response.headers.get('x-request-id') ?? 'n/a'}`,
+        typeof body === 'string' ? body.slice(0, 300) : JSON.stringify(body).slice(0, 900),
+      );
       throw new MercadoPagoError(describe(body, response.status), response.status === 401 ? 401 : 502, body);
     }
     return body as T;
