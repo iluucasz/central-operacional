@@ -51,7 +51,7 @@ export default function AdminPartsPage() {
 
   return (
     <AppShell role="admin" userName={user.name || user.email}>
-      <PageHeader title="Controle de Peças" />
+      <PageHeader title="Venda de Peças" />
       <Tabs value={tab} onValueChange={changeTab} className="gap-6">
         <div className="-mx-1 overflow-x-auto px-1">
           <TabsList className="h-14 gap-1 rounded-xl p-1.5">

@@ -1,4 +1,4 @@
-# Controle de Peças
+# Venda de Peças
 
 Módulo de vendas de peças em **consignação** com os técnicos. Fica **fora da folha**: não é comissão, é venda de peças ao técnico. Portado do NextRotta (`sistema-operacional`) para uma empresa só (sem `organization_id`, planos ou subdomínios).
 
@@ -55,7 +55,7 @@ O sistema tem **um** aplicativo no Mercado Pago. Cada técnico conecta a **próp
 | `MERCADOPAGO_REDIRECT_URI`, `MERCADOPAGO_WEBHOOK_URL` | Opcionais: sobrescrevem os endereços montados a partir de `APP_URL` |
 | `MERCADOPAGO_FALLBACK_PAYER_EMAIL` | Opcional: e-mail do pagador no Pix quando a venda não tem (padrão: `pagador@<domínio>`). Não pode ser o e-mail do técnico. |
 
-5. Em Controle de Peças → Configurações: nome da empresa (aparece para o cliente), formas de pagamento, rodapé do recibo e dia do acerto.
+5. Em Venda de Peças → Ajustes: nome da empresa (aparece para o cliente), formas de pagamento, rodapé do recibo e dia do acerto.
 
 Cada técnico precisa de conta no Mercado Pago com Pix habilitado (chave cadastrada) e, para maquininha, um Point vinculado.
 

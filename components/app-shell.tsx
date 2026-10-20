@@ -67,7 +67,7 @@ const adminLinks: NavItem[] = [
   { href: '/admin/faturamento', label: 'Faturamento', icon: TrendingUp },
   { href: '/admin/financeiro', label: 'Controle de Despesas', icon: Landmark },
   { href: '/admin/library', label: 'Biblioteca', icon: BookOpen },
-  { href: '/admin/pecas', label: 'Controle de Peças', icon: Package },
+  { href: '/admin/pecas', label: 'Venda de Peças', icon: Package },
   { href: '/admin/assistente', label: 'Assistente IA', icon: Sparkles },
   { href: '/admin/whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { href: '/admin/config-porto', label: 'Config. Porto', icon: ShieldCheck },
