@@ -88,11 +88,11 @@ export function TechnicianParts() {
   const stockValue = data.parts.reduce((sum, part) => sum + part.stock * part.technicianPrice, 0);
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       {mpNotice ? <Alert tone={mpNotice.tone}>{mpNotice.text}</Alert> : null}
       <PendingConfirmations transfers={data.pendingTransfers} debts={data.pendingDebts} onDone={reload} />
       <SummaryTiles stockUnits={stockUnits} stockValue={stockValue} balanceDue={data.account?.balanceDue ?? 0} month={data.month} onOpenAccount={() => setTab('account')} />
-      <Tabs value={tab} onValueChange={setTab} className="gap-4">
+      <Tabs value={tab} onValueChange={setTab} className="min-w-0 gap-4">
         <TabsList className="grid h-12 w-full grid-cols-3 p-1">
           <TabsTrigger value="sell" className="text-sm">
             <ShoppingCart className="h-4 w-4" />
@@ -488,7 +488,7 @@ function SellPanel({
   const empty = !parts.some((part) => part.stock > 0);
 
   return (
-    <div className="grid gap-4 pb-28">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4 pb-28">
       {empty ? (
         <EmptyState icon={Package} title="Nenhuma peça no seu estoque" description="Quando a empresa enviar peças para você, elas aparecem aqui para vender." />
       ) : (
