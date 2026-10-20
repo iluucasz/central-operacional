@@ -36,6 +36,8 @@ interface InventoryDetail extends Omit<InventorySummary, 'counted' | 'surplusUni
 const STATUS_LABELS = { open: 'Em contagem', closed: 'Encerrado', canceled: 'Cancelado' } as const;
 const STATUS_TONES = { open: 'warning', closed: 'success', canceled: 'neutral' } as const;
 
+type HistoryResult = 'all' | 'shortage' | 'clean' | 'canceled';
+
 // ---------------------------------------------------------------- list
 
 export function InventoryTab() {
@@ -45,6 +47,9 @@ export function InventoryTab() {
   const [technicianId, setTechnicianId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyWhere, setHistoryWhere] = useState('');
+  const [historyResult, setHistoryResult] = useState<HistoryResult>('all');
 
   async function start() {
     setBusy(true);
@@ -75,6 +80,23 @@ export function InventoryTab() {
   const inventories = list.data?.inventories ?? [];
   const inProgress = inventories.filter((inventory) => inventory.status === 'open');
   const history = inventories.filter((inventory) => inventory.status !== 'open');
+
+  // Past counts can be searched by number or place, narrowed to one place and to one result.
+  const locations = Array.from(new Map(history.map((inventory): [string, string] => [inventory.technicianId ?? 'central', inventory.technicianName ?? 'Estoque central'])).entries());
+  const resultOf = (inventory: InventorySummary): Exclude<HistoryResult, 'all'> => (inventory.status === 'canceled' ? 'canceled' : inventory.shortageValue ? 'shortage' : 'clean');
+  const term = normalizeText(historySearch);
+  const matching = history.filter(
+    (inventory) =>
+      (!term || normalizeText(`${inventory.number} ${inventory.technicianName ?? 'Estoque central'}`).includes(term)) &&
+      (!historyWhere || (inventory.technicianId ?? 'central') === historyWhere),
+  );
+  const shownHistory = matching.filter((inventory) => historyResult === 'all' || resultOf(inventory) === historyResult);
+  const resultFilters: Array<[HistoryResult, string, number]> = [
+    ['all', 'Todos', matching.length],
+    ['shortage', 'Com faltas', matching.filter((inventory) => resultOf(inventory) === 'shortage').length],
+    ['clean', 'Sem faltas', matching.filter((inventory) => resultOf(inventory) === 'clean').length],
+    ['canceled', 'Cancelados', matching.filter((inventory) => resultOf(inventory) === 'canceled').length],
+  ];
 
   return (
     <div className="grid gap-6">
@@ -122,13 +144,52 @@ export function InventoryTab() {
 
       <section className="grid gap-3">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Histórico</h3>
+        {history.length ? (
+          <div className="grid gap-3">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_16rem]">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  className={inputClass('h-11 pl-9 text-base sm:text-sm')}
+                  value={historySearch}
+                  onChange={(event) => setHistorySearch(event.target.value)}
+                  placeholder="Buscar por número ou técnico"
+                  aria-label="Buscar inventário"
+                />
+              </div>
+              <select className={inputClass('h-11 text-base sm:text-sm')} value={historyWhere} onChange={(event) => setHistoryWhere(event.target.value)} aria-label="Filtrar por local">
+                <option value="">Todos os locais</option>
+                {locations.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar por resultado">
+              {resultFilters.map(([value, label, total]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setHistoryResult(value)}
+                  aria-pressed={historyResult === value}
+                  className={`rounded-full border px-3.5 py-1.5 text-sm transition ${historyResult === value ? 'border-primary bg-primary/5 font-medium text-primary' : 'text-muted-foreground hover:border-primary/40'}`}
+                >
+                  {label} <span className="tabular-nums opacity-70">{total}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {!list.data ? (
           <Spinner />
         ) : !history.length ? (
           <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">Nenhum inventário encerrado ainda.</p>
+        ) : !shownHistory.length ? (
+          <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">Nenhum inventário com esses filtros.</p>
         ) : (
           <ul className="grid gap-2">
-            {history.map((inventory) => (
+            {shownHistory.map((inventory) => (
               <li key={inventory.id}>
                 <button
                   type="button"

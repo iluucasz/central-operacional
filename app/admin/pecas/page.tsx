@@ -54,7 +54,7 @@ export default function AdminPartsPage() {
       <PageHeader title="Venda de Peças" />
       <Tabs value={tab} onValueChange={changeTab} className="gap-6">
         <div className="-mx-1 overflow-x-auto px-1">
-          <TabsList className="h-14 gap-1 rounded-xl p-1.5">
+          <TabsList className="h-14 w-full min-w-max gap-1 rounded-xl p-1.5">
             {TABS.map(({ value, label, icon: Icon }) => (
               <TabsTrigger key={value} value={value} className="gap-2 rounded-lg px-5 text-base">
                 <Icon className="h-5 w-5" />
