@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeftRight, BarChart3, ClipboardCheck, Package, Receipt, Settings2, Truck, Wallet } from 'lucide-react';
+import { ArrowLeftRight, BarChart3, ChartNoAxesCombined, ClipboardCheck, Package, Receipt, Settings2, Truck, Wallet } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { LoadingShell } from '@/components/page-skeleton';
 import { PageHeader } from '@/components/page-header';
 import { AccountTab } from '@/components/parts/admin/account-tab';
 import { CatalogTab } from '@/components/parts/admin/catalog-tab';
+import { FinanceTab } from '@/components/parts/admin/finance-tab';
 import { InventoryTab } from '@/components/parts/admin/inventory-tab';
 import { MovementsTab } from '@/components/parts/admin/movements-tab';
 import { OverviewTab } from '@/components/parts/admin/overview-tab';
@@ -24,6 +25,7 @@ const TABS = [
   { value: 'technicians', label: 'Técnicos', icon: Truck },
   { value: 'inventory', label: 'Inventário', icon: ClipboardCheck },
   { value: 'account', label: 'Acerto', icon: Wallet },
+  { value: 'finance', label: 'Financeiro', icon: ChartNoAxesCombined },
   { value: 'settings', label: 'Ajustes', icon: Settings2 },
 ] as const;
 
@@ -72,6 +74,7 @@ export default function AdminPartsPage() {
         <TabsContent value="sales">{tab === 'sales' ? <SalesTab /> : null}</TabsContent>
         <TabsContent value="inventory">{tab === 'inventory' ? <InventoryTab /> : null}</TabsContent>
         <TabsContent value="account">{tab === 'account' ? <AccountTab /> : null}</TabsContent>
+        <TabsContent value="finance">{tab === 'finance' ? <FinanceTab /> : null}</TabsContent>
         <TabsContent value="settings">{tab === 'settings' ? <SettingsTab /> : null}</TabsContent>
       </Tabs>
     </AppShell>
