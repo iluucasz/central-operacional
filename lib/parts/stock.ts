@@ -290,39 +290,109 @@ export async function acknowledgeTransfer(transferId: unknown, technicianId: str
 
 // ---------------------------------------------------------------- movements
 
-export async function listMovements(filters: { partId?: unknown; technicianId?: unknown; central?: boolean }) {
+/** Kinds of movement shown together in the movements screen's filter. */
+export const MOVEMENT_GROUPS = ['purchase', 'transfer', 'sale', 'adjustment', 'inventory'] as const;
+export type MovementGroup = (typeof MOVEMENT_GROUPS)[number];
+
+export interface MovementFilters {
+  partId?: unknown;
+  technicianId?: unknown;
+  central?: boolean;
+  /** YYYY-MM-DD, inclusive, Brasília time. */
+  from?: unknown;
+  to?: unknown;
+  group?: unknown;
+  search?: unknown;
+  limit?: unknown;
+  offset?: unknown;
+}
+
+/** What a transfer row means depends on the direction of the transfer and on whose stock the row belongs to. */
+function movementLabel(kind: MovementKind, direction: string | null, technicianId: string | null) {
+  if (kind === 'transfer' && direction) {
+    if (direction === 'out') return technicianId ? 'Remessa recebida do estoque central' : 'Remessa enviada ao técnico';
+    return technicianId ? 'Devolução ao estoque central' : 'Devolução recebida do técnico';
+  }
+  return MOVEMENT_KIND_LABELS[kind] ?? String(kind);
+}
+
+export async function listMovements(filters: MovementFilters) {
   const partId = isUuid(filters.partId) ? filters.partId : null;
   const technicianId = typeof filters.technicianId === 'string' && filters.technicianId ? filters.technicianId : null;
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  const from = typeof filters.from === 'string' && datePattern.test(filters.from) ? filters.from : null;
+  const to = typeof filters.to === 'string' && datePattern.test(filters.to) ? filters.to : null;
+  const group = typeof filters.group === 'string' && (MOVEMENT_GROUPS as readonly string[]).includes(filters.group) ? filters.group : null;
+  const search = typeof filters.search === 'string' && filters.search.trim() ? `%${filters.search.trim().slice(0, 80).replace(/[\\%_]/g, '\\$&')}%` : null;
+  // One part's history is read whole; the general screen pages through.
+  const requestedLimit = Number(filters.limit);
+  const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 500) : partId ? 500 : 50;
+  const requestedOffset = Number(filters.offset);
+  const offset = Number.isInteger(requestedOffset) && requestedOffset > 0 ? requestedOffset : 0;
+
+  // The totals are window aggregates over the whole filtered set, so they don't depend on the page.
   const rows = await sql`
-    SELECT m.*, p.name AS part_name, t.name AS technician_name, u.name AS created_by_name
+    SELECT m.*, p.name AS part_name, t.name AS technician_name, u.name AS created_by_name,
+      tr.direction AS transfer_direction, tr.number AS transfer_number, s.number AS sale_number, inv.number AS inventory_number,
+      COUNT(*) OVER () AS total_rows,
+      COALESCE(SUM(m.quantity) FILTER (WHERE m.kind = 'purchase') OVER (), 0) AS sum_purchased,
+      COALESCE(SUM(m.quantity) FILTER (WHERE m.kind = 'transfer' AND tr.direction = 'out' AND m.technician_id IS NOT NULL) OVER (), 0) AS sum_sent,
+      COALESCE(SUM(m.quantity) FILTER (WHERE m.kind = 'transfer' AND tr.direction = 'return' AND m.technician_id IS NULL) OVER (), 0) AS sum_returned,
+      COALESCE(-SUM(m.quantity) FILTER (WHERE m.kind IN ('sale', 'sale_canceled')) OVER (), 0) AS sum_sold,
+      COALESCE(SUM(m.quantity) FILTER (WHERE m.kind IN ('adjustment', 'inventory_shortage', 'inventory_surplus')) OVER (), 0) AS sum_adjusted
     FROM part_movements m
     JOIN parts p ON p.id = m.part_id
+    LEFT JOIN part_transfers tr ON tr.id = m.transfer_id
+    LEFT JOIN part_sales s ON s.id = m.sale_id
+    LEFT JOIN part_inventories inv ON inv.id = m.inventory_id
     LEFT JOIN technicians t ON t.id::text = m.technician_id
     LEFT JOIN neon_auth."user" u ON u.id::text = m.created_by
     WHERE (${partId}::uuid IS NULL OR m.part_id = ${partId}::uuid)
       AND (${technicianId}::text IS NULL OR m.technician_id = ${technicianId}::text)
       AND (${filters.central === true} = FALSE OR m.technician_id IS NULL)
-    ORDER BY m.created_at DESC
-    LIMIT 500
+      AND (${from}::date IS NULL OR m.created_at >= (${from}::date)::timestamp AT TIME ZONE 'America/Sao_Paulo')
+      AND (${to}::date IS NULL OR m.created_at < ((${to}::date + 1))::timestamp AT TIME ZONE 'America/Sao_Paulo')
+      AND (${group}::text IS NULL OR CASE ${group}::text
+            WHEN 'sale' THEN m.kind IN ('sale', 'sale_canceled')
+            WHEN 'inventory' THEN m.kind IN ('inventory_shortage', 'inventory_surplus')
+            ELSE m.kind = ${group}::text
+          END)
+      AND (${search}::text IS NULL OR p.name ILIKE ${search}::text OR m.note ILIKE ${search}::text)
+    ORDER BY m.created_at DESC, m.id
+    LIMIT ${limit} OFFSET ${offset}
   `;
-  return rows.map((row) => ({
-    id: String(row.id),
-    partId: String(row.part_id),
-    partName: String(row.part_name),
-    technicianId: (row.technician_id as string | null) ?? null,
-    technicianName: (row.technician_name as string | null) ?? null,
-    quantity: Number(row.quantity),
-    kind: row.kind as MovementKind,
-    kindLabel: MOVEMENT_KIND_LABELS[row.kind as MovementKind] ?? String(row.kind),
-    unitCost: row.unit_cost === null ? null : money(row.unit_cost),
-    unitTechnicianPrice: row.unit_technician_price === null ? null : money(row.unit_technician_price),
-    transferId: (row.transfer_id as string | null) ?? null,
-    saleId: (row.sale_id as string | null) ?? null,
-    inventoryId: (row.inventory_id as string | null) ?? null,
-    note: (row.note as string | null) ?? null,
-    createdAt: toIso(row.created_at)!,
-    createdByName: (row.created_by_name as string | null) ?? null,
-  }));
+  const first = rows[0];
+  return {
+    total: first ? Number(first.total_rows) : 0,
+    summary: {
+      purchased: first ? Number(first.sum_purchased) : 0,
+      sent: first ? Number(first.sum_sent) : 0,
+      returned: first ? Number(first.sum_returned) : 0,
+      sold: first ? Number(first.sum_sold) : 0,
+      adjusted: first ? Number(first.sum_adjusted) : 0,
+    },
+    movements: rows.map((row) => ({
+      id: String(row.id),
+      partId: String(row.part_id),
+      partName: String(row.part_name),
+      technicianId: (row.technician_id as string | null) ?? null,
+      technicianName: (row.technician_name as string | null) ?? null,
+      quantity: Number(row.quantity),
+      kind: row.kind as MovementKind,
+      kindLabel: movementLabel(row.kind as MovementKind, (row.transfer_direction as string | null) ?? null, (row.technician_id as string | null) ?? null),
+      unitCost: row.unit_cost === null ? null : money(row.unit_cost),
+      unitTechnicianPrice: row.unit_technician_price === null ? null : money(row.unit_technician_price),
+      transferId: (row.transfer_id as string | null) ?? null,
+      transferNumber: row.transfer_number === null ? null : Number(row.transfer_number),
+      saleId: (row.sale_id as string | null) ?? null,
+      saleNumber: row.sale_number === null ? null : Number(row.sale_number),
+      inventoryId: (row.inventory_id as string | null) ?? null,
+      inventoryNumber: row.inventory_number === null ? null : Number(row.inventory_number),
+      note: (row.note as string | null) ?? null,
+      createdAt: toIso(row.created_at)!,
+      createdByName: (row.created_by_name as string | null) ?? null,
+    })),
+  };
 }
 
 // ---------------------------------------------------------------- inventories (contagem)
