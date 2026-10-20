@@ -10,6 +10,7 @@ import {
   ImagePlus,
   Loader2,
   MoreHorizontal,
+  Minus,
   PackagePlus,
   Pencil,
   Plus,
@@ -817,63 +818,126 @@ function PurchaseForm({ parts, initial, onSaved }: { parts: Part[]; initial: Par
     }
   }
 
+  const filled = lines.filter((line) => line.partId && Number(line.quantity) > 0);
+  const totalUnits = filled.reduce((sum, line) => sum + Number(line.quantity), 0);
+  const totalCost = filled.reduce((sum, line) => sum + Number(line.quantity) * (parseAmount(line.unitCost) ?? 0), 0);
+
   return (
-    <form onSubmit={submit} className="grid gap-4">
+    <form onSubmit={submit} className="grid gap-5">
       <DialogHeader>
         <DialogTitle>Entrada no estoque central</DialogTitle>
-        <DialogDescription>Peças compradas pela empresa. Leia os códigos de barras ou escolha na lista.</DialogDescription>
+        <DialogDescription>Registre as peças que a empresa comprou. Escolha na lista ou leia o código de barras.</DialogDescription>
       </DialogHeader>
+
       {scanning ? <BarcodeScanner continuous title="Leia cada peça (cada leitura soma 1)" onDetect={onScan} onClose={() => setScanning(false)} /> : null}
-      <div className="grid gap-2">
-        {lines.map((line, index) => (
-          <div key={index} className="grid grid-cols-[1fr_80px_100px_auto] items-end gap-2">
-            <Field label={index === 0 ? 'Peça' : ''}>
-              <select className={inputClassName} value={line.partId} onChange={(event) => setLine(index, { partId: event.target.value })}>
-                {active.map((part) => (
-                  <option key={part.id} value={part.id}>
-                    {part.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label={index === 0 ? 'Qtd.' : ''}>
-              <input className={inputClassName} value={line.quantity} onChange={(event) => setLine(index, { quantity: event.target.value })} inputMode="numeric" />
-            </Field>
-            <Field label={index === 0 ? 'Custo un.' : ''}>
-              <input className={inputClassName} value={line.unitCost} onChange={(event) => setLine(index, { unitCost: event.target.value })} inputMode="decimal" />
-            </Field>
-            <Button type="button" variant="ghost" size="icon" onClick={() => setLines((current) => current.filter((_, position) => position !== index))} disabled={lines.length === 1} aria-label="Remover linha">
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </div>
-        ))}
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="lg" onClick={() => setLines((current) => [...current, { partId: active[0]?.id ?? '', quantity: '', unitCost: active[0] ? money(active[0].costPrice) : '' }])}>
+
+      <div className="grid gap-3">
+        {lines.map((line, index) => {
+          const part = parts.find((item) => item.id === line.partId);
+          const quantity = Number(line.quantity) || 0;
+          const lineTotal = quantity * (parseAmount(line.unitCost) ?? 0);
+          return (
+            <div key={index} className="grid gap-3 rounded-xl border bg-muted/20 p-3.5">
+              <div className="flex items-center gap-3">
+                <PartImage src={part?.imageUrl ?? null} alt={part?.name ?? 'Peça'} className="h-11 w-11 shrink-0" />
+                <select
+                  className={inputClass('h-11 min-w-0 flex-1 text-base sm:text-sm')}
+                  value={line.partId}
+                  onChange={(event) => setLine(index, { partId: event.target.value })}
+                  aria-label="Peça"
+                >
+                  {active.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-11 w-11 shrink-0"
+                  onClick={() => setLines((current) => current.filter((_, position) => position !== index))}
+                  disabled={lines.length === 1}
+                  aria-label="Remover esta peça"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Quantas entraram?">
+                  <div className="flex items-center gap-1.5">
+                    <Button type="button" variant="outline" size="icon" className="h-11 w-11 shrink-0" onClick={() => setLine(index, { quantity: String(Math.max(0, quantity - 1) || '') })} disabled={quantity === 0} aria-label="Menos uma">
+                      <Minus className="h-4 w-4" />
+                    </Button>
+                    <input
+                      className={inputClass('h-11 min-w-0 text-center text-base tabular-nums sm:text-sm')}
+                      value={line.quantity}
+                      onChange={(event) => setLine(index, { quantity: event.target.value.replace(/\D/g, '') })}
+                      inputMode="numeric"
+                      placeholder="0"
+                    />
+                    <Button type="button" variant="outline" size="icon" className="h-11 w-11 shrink-0" onClick={() => setLine(index, { quantity: String(quantity + 1) })} aria-label="Mais uma">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </Field>
+                <Field label="Quanto custou cada uma?">
+                  <AffixInput prefix="R$" value={line.unitCost} onChange={(value) => setLine(index, { unitCost: value })} format={formatMoneyInput} inputMode="decimal" placeholder="0,00" />
+                </Field>
+              </div>
+
+              {lineTotal > 0 ? (
+                <p className="text-right text-xs text-muted-foreground">
+                  {quantity} × {formatCurrency(parseAmount(line.unitCost) ?? 0)} = <strong className="tabular-nums text-foreground">{formatCurrency(lineTotal)}</strong>
+                </p>
+              ) : null}
+            </div>
+          );
+        })}
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Button type="button" variant="outline" size="lg" className="h-11" onClick={() => setLines((current) => [...current, { partId: active[0]?.id ?? '', quantity: '', unitCost: active[0] ? money(active[0].costPrice) : '' }])}>
             <Plus className="h-4 w-4" />
-            Outra peça
+            Adicionar outra peça
           </Button>
           {!scanning ? (
-            <Button type="button" variant="outline" size="lg" onClick={() => setScanning(true)}>
+            <Button type="button" variant="outline" size="lg" className="h-11" onClick={() => setScanning(true)}>
               <ScanBarcode className="h-4 w-4" />
-              Ler códigos
+              Ler códigos de barras
             </Button>
           ) : null}
         </div>
       </div>
-      <Field label="Observação (nota fiscal, fornecedor…)">
-        <input className={inputClassName} value={note} onChange={(event) => setNote(event.target.value)} />
+
+      <Field label="Observação (opcional)" hint="Nota fiscal, fornecedor…">
+        <input className={inputClass('h-11 text-base sm:text-sm')} value={note} onChange={(event) => setNote(event.target.value)} />
       </Field>
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={updateCost} onChange={(event) => setUpdateCost(event.target.checked)} />
-        Atualizar o custo da peça com o custo desta compra
+
+      <label className="flex items-center justify-between gap-4 rounded-xl border px-4 py-3.5">
+        <span className="grid gap-0.5">
+          <span className="text-sm font-medium">Atualizar o custo cadastrado</span>
+          <span className="text-xs text-muted-foreground">O custo de cada peça passa a ser o desta compra.</span>
+        </span>
+        <Switch checked={updateCost} onCheckedChange={setUpdateCost} />
       </label>
-      {error ? <Alert>{error}</Alert> : null}
-      <DialogFooter>
-        <Button type="submit" disabled={busy || !lines.some((line) => line.partId && Number(line.quantity) > 0)}>
+
+      <div className="sticky -bottom-4 -mx-4 -mb-4 grid gap-2 border-t bg-card px-4 py-3 sm:-bottom-6 sm:-mx-6 sm:-mb-6 sm:px-6">
+        {error ? <Alert>{error}</Alert> : null}
+        {filled.length ? (
+          <p className="flex justify-between gap-3 text-sm">
+            <span className="text-muted-foreground">
+              {filled.length} peça(s) · {totalUnits} unidade(s)
+            </span>
+            <strong className="tabular-nums">{formatCurrency(totalCost)}</strong>
+          </p>
+        ) : null}
+        <Button type="submit" size="lg" disabled={busy || !filled.length}>
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           Registrar entrada
         </Button>
-      </DialogFooter>
+      </div>
     </form>
   );
 }
