@@ -74,7 +74,7 @@ export default function AdminPartsPage() {
         <TabsContent value="sales">{tab === 'sales' ? <SalesTab /> : null}</TabsContent>
         <TabsContent value="inventory">{tab === 'inventory' ? <InventoryTab /> : null}</TabsContent>
         <TabsContent value="account">{tab === 'account' ? <AccountTab /> : null}</TabsContent>
-        <TabsContent value="finance">{tab === 'finance' ? <FinanceTab /> : null}</TabsContent>
+        <TabsContent value="finance">{tab === 'finance' ? <FinanceTab onNavigate={changeTab} /> : null}</TabsContent>
         <TabsContent value="settings">{tab === 'settings' ? <SettingsTab /> : null}</TabsContent>
       </Tabs>
     </AppShell>
