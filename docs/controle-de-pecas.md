@@ -59,6 +59,8 @@ O sistema tem **um** aplicativo no Mercado Pago. Cada técnico conecta a **próp
 
 Cada técnico precisa de conta no Mercado Pago com Pix habilitado (chave cadastrada) e, para maquininha, um Point vinculado.
 
+**Sem chave Pix, o Pix falha:** a API não oferece como consultar se a conta tem chave, e a criação do pedido volta `402` com `processing_error` (confirmado em teste real: uma conta sem chave falhava, a mesma com chave funcionou). O sistema não bloqueia antes; ele reconhece esse erro em `paymentFailureMessage` (`lib/parts/sales.ts`) e mostra ao técnico a orientação "Pix > Minhas chaves", e a aba Conta e o aviso pós-conexão lembram da chave. O detalhe bruto (com `x-request-id`) fica no log `[mercadopago]` da Vercel.
+
 ## Mensagens ao cliente
 
 Link de pagamento (Pix: link + copia e cola numa mensagem só dele) e **recibo**, depois de pago, saem pelo WhatsApp da empresa (Evolution API, `lib/parts/notify.ts`), com histórico (tipo `parts_sale`, aparece no histórico de `/admin/whatsapp`) e deduplicação. Respeita o número de teste das Configurações do WhatsApp. **Não depende** do interruptor geral de notificações: o link de pagamento precisa chegar ao cliente. Sem a instância conectada, a tela oferece **Enviar pelo meu WhatsApp** (link `wa.me` com o texto pronto).

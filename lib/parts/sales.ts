@@ -299,7 +299,7 @@ export async function createSale(technicianId: string, input: Record<string, unk
       await startPayment(id, technician.id, actor);
     } catch (error) {
       // The sale stays; the screen shows the error with "tentar de novo" or another method.
-      const message = error instanceof Error ? error.message : String(error);
+      const message = paymentFailureMessage(error, paymentMethod);
       await sql`UPDATE part_sales SET payment_error = ${message} WHERE id = ${id}`;
     }
   }
@@ -410,11 +410,24 @@ export async function retryPayment(saleId: unknown, technicianId: string, input:
   try {
     await startPayment(String(row.id), technicianId, actor);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const currentMethod = isPaymentMethod(input.paymentMethod) ? input.paymentMethod : (row.payment_method as PaymentMethod);
+    const message = paymentFailureMessage(error, currentMethod);
     await sql`UPDATE part_sales SET payment_error = ${message} WHERE id = ${row.id}`;
-    throw error;
+    throw message === (error instanceof Error ? error.message : String(error)) ? error : new PartsError(message, 502);
   }
   return getSale(row.id, technicianId);
+}
+
+/**
+ * What the technician sees when the charge can't be created. A Pix refused with "processing_error"
+ * is, in practice, a Mercado Pago account without a Pix key; the raw answer stays in the server logs.
+ */
+function paymentFailureMessage(error: unknown, method: PaymentMethod) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (method === 'pix' && error instanceof MercadoPagoError && /processing_error/i.test(message)) {
+    return 'O Mercado Pago não conseguiu gerar o Pix. O motivo mais comum é a conta não ter uma chave Pix: abra o app do Mercado Pago, vá em Pix > Minhas chaves e cadastre uma. Depois toque em "Tentar de novo". Se já tem chave, aguarde um pouco e tente de novo.';
+  }
+  return message;
 }
 
 async function cancelOpenOrder(row: Record<string, unknown>) {

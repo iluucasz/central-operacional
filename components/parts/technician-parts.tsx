@@ -74,7 +74,7 @@ export function TechnicianParts() {
     const params = new URLSearchParams(window.location.search);
     const status = params.get('mp');
     if (!status) return;
-    if (status === 'conectado') setMpNotice({ tone: 'success', text: 'Conta do Mercado Pago conectada. Você já pode receber por Pix, link e cartão.' });
+    if (status === 'conectado') setMpNotice({ tone: 'success', text: 'Conta do Mercado Pago conectada. Para vender por Pix, confira se ela tem uma chave Pix (app do Mercado Pago > Pix > Minhas chaves).' });
     else if (status === 'cancelado') setMpNotice({ tone: 'warning', text: 'A conexão com o Mercado Pago foi cancelada.' });
     else setMpNotice({ tone: 'danger', text: params.get('motivo') || 'Não foi possível conectar o Mercado Pago.' });
     window.history.replaceState(null, '', window.location.pathname);
@@ -198,19 +198,24 @@ function MercadoPagoCard({ status, onChanged }: { status: MercadoPagoAccountStat
         {!status.available ? (
           <Alert tone="warning">O Mercado Pago ainda não foi configurado no sistema. Fale com o administrador.</Alert>
         ) : status.connected ? (
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2 text-sm">
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
-              <span className="truncate">
-                Conectado{status.nickname ? ` · ${status.nickname}` : ''}
-                {status.liveMode === false ? ' (teste)' : ''}
-              </span>
+          <>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2 text-sm">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                <span className="truncate">
+                  Conectado{status.nickname ? ` · ${status.nickname}` : ''}
+                  {status.liveMode === false ? ' (teste)' : ''}
+                </span>
+              </div>
+              <Button variant="ghost" size="sm" className="shrink-0" onClick={disconnect} disabled={busy !== null}>
+                <Unplug className="h-4 w-4" />
+                Desconectar
+              </Button>
             </div>
-            <Button variant="ghost" size="sm" className="shrink-0" onClick={disconnect} disabled={busy !== null}>
-              <Unplug className="h-4 w-4" />
-              Desconectar
-            </Button>
-          </div>
+            <p className="rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+              Para receber por Pix, sua conta precisa ter uma <strong>chave Pix</strong>. No app do Mercado Pago: Pix &gt; Minhas chaves.
+            </p>
+          </>
         ) : (
           <>
             <p className="text-sm text-muted-foreground">Conecte sua conta para cobrar por Pix e cartão.</p>
