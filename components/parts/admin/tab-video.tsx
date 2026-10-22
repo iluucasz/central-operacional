@@ -334,7 +334,7 @@ function VideoPlayer({ videoId, vertical = false, onUnavailable }: { videoId: st
 // ---------------------------------------------------------------- button + modal
 
 /** The tutorial of the technician's "Minhas peças" screen: one video for the computer and a vertical one for phones. */
-const TECHNICIAN_VIDEO = { desktop: 'ugExX4-YM9s', mobile: 'q6cxordQsUM' };
+const TECHNICIAN_VIDEO = { desktop: 'ugExX4-YM9s', mobile: 'IszisQ8-rDY' };
 
 /**
  * A "Ver vídeo" button that opens a tutorial in a modal. The player is only created while the modal is open, so
