@@ -13,6 +13,7 @@ import { MovementsTab } from '@/components/parts/admin/movements-tab';
 import { OverviewTab } from '@/components/parts/admin/overview-tab';
 import { SalesTab } from '@/components/parts/admin/sales-tab';
 import { SettingsTab } from '@/components/parts/admin/settings-tab';
+import { TabVideo } from '@/components/parts/admin/tab-video';
 import { TechniciansTab } from '@/components/parts/admin/technicians-tab';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAppSession } from '@/hooks/use-app-session';
@@ -67,6 +68,7 @@ export default function AdminPartsPage() {
             ))}
           </TabsList>
         </div>
+        <TabVideo key={tab} tab={tab} />
         <TabsContent value="overview">{tab === 'overview' ? <OverviewTab onNavigate={changeTab} /> : null}</TabsContent>
         <TabsContent value="catalog">{tab === 'catalog' ? <CatalogTab /> : null}</TabsContent>
         <TabsContent value="movements">{tab === 'movements' ? <MovementsTab /> : null}</TabsContent>
