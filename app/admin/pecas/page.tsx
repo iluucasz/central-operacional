@@ -13,7 +13,7 @@ import { MovementsTab } from '@/components/parts/admin/movements-tab';
 import { OverviewTab } from '@/components/parts/admin/overview-tab';
 import { SalesTab } from '@/components/parts/admin/sales-tab';
 import { SettingsTab } from '@/components/parts/admin/settings-tab';
-import { TabVideo } from '@/components/parts/admin/tab-video';
+import { TabVideoButton } from '@/components/parts/admin/tab-video';
 import { TechniciansTab } from '@/components/parts/admin/technicians-tab';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAppSession } from '@/hooks/use-app-session';
@@ -56,7 +56,9 @@ export default function AdminPartsPage() {
 
   return (
     <AppShell role="admin" userName={user.name || user.email}>
-      <PageHeader title="Venda de Peças" />
+      <PageHeader title="Venda de Peças">
+        <TabVideoButton key={tab} tab={tab} />
+      </PageHeader>
       <Tabs value={tab} onValueChange={changeTab} className="gap-6">
         <div className="-mx-1 overflow-x-auto px-1">
           <TabsList className="h-14 w-full min-w-max gap-1 rounded-xl p-1.5">
@@ -68,7 +70,6 @@ export default function AdminPartsPage() {
             ))}
           </TabsList>
         </div>
-        <TabVideo key={tab} tab={tab} />
         <TabsContent value="overview">{tab === 'overview' ? <OverviewTab onNavigate={changeTab} /> : null}</TabsContent>
         <TabsContent value="catalog">{tab === 'catalog' ? <CatalogTab /> : null}</TabsContent>
         <TabsContent value="movements">{tab === 'movements' ? <MovementsTab /> : null}</TabsContent>
