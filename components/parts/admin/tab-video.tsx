@@ -44,7 +44,7 @@ interface YouTubeApi {
       width?: string;
       height?: string;
       playerVars?: Record<string, string | number>;
-      events?: { onReady?: (event: { target: YouTubePlayer }) => void; onStateChange?: (event: { data: number }) => void };
+      events?: { onReady?: (event: { target: YouTubePlayer }) => void; onStateChange?: (event: { data: number }) => void; onError?: (event: { data: number }) => void };
     },
   ) => YouTubePlayer;
 }
@@ -92,7 +92,7 @@ function formatTime(seconds: number) {
  * YouTube" in the way. The frame is taller than the visible box and shifted up, so whatever YouTube draws
  * over the top of a video (title, channel) falls outside the box and is clipped.
  */
-function VideoPlayer({ videoId }: { videoId: string }) {
+function VideoPlayer({ videoId, vertical = false, onUnavailable }: { videoId: string; vertical?: boolean; onUnavailable?: () => void }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mountRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YouTubePlayer | null>(null);
@@ -108,12 +108,23 @@ function VideoPlayer({ videoId }: { videoId: string }) {
   const [fullscreen, setFullscreen] = useState(false);
   const [failed, setFailed] = useState('');
 
+  const onUnavailableRef = useRef(onUnavailable);
+  onUnavailableRef.current = onUnavailable;
+
   useEffect(() => {
     let cancelled = false;
     const mount = mountRef.current;
     if (!mount) return;
     const host = document.createElement('div');
     mount.appendChild(host);
+    // A new video starts from zero (the player is rebuilt when the video changes).
+    setReady(false);
+    setStarted(false);
+    setPlaying(false);
+    setEnded(false);
+    setCurrent(0);
+    setDuration(0);
+    setFailed('');
 
     loadYouTubeApi()
       .then((YT) => {
@@ -144,6 +155,12 @@ function VideoPlayer({ videoId }: { videoId: string }) {
                 setPlaying(false);
                 setEnded(true);
               }
+            },
+            // 100 (not found or private), 101/150 (the owner does not allow embedding), 2/5 (bad id, player error).
+            onError: () => {
+              if (cancelled) return;
+              if (onUnavailableRef.current) onUnavailableRef.current();
+              else setFailed('Não foi possível carregar este vídeo agora. Tente de novo mais tarde.');
             },
           },
         });
@@ -228,8 +245,15 @@ function VideoPlayer({ videoId }: { videoId: string }) {
   return (
     <div ref={containerRef} className={cn('flex w-full flex-col bg-black', fullscreen && 'h-screen justify-center')}>
       <div
-        className="relative mx-auto aspect-video w-full overflow-hidden bg-black"
-        style={fullscreen ? { width: `min(100vw, calc((100vh - ${controlsHeight}) * 16 / 9))` } : undefined}
+        className={cn('relative mx-auto w-full overflow-hidden bg-black', vertical ? 'aspect-9/16' : 'aspect-video')}
+        style={
+          fullscreen
+            ? { width: `min(100vw, calc((100vh - ${controlsHeight}) * ${vertical ? '9 / 16' : '16 / 9'}))` }
+            : // a vertical video must fit the screen's height too (window header and controls take about 7 rem)
+              vertical
+              ? { maxWidth: 'calc((100dvh - 9rem) * 9 / 16)' }
+              : undefined
+        }
       >
         <div
           ref={mountRef}
@@ -309,34 +333,70 @@ function VideoPlayer({ videoId }: { videoId: string }) {
 
 // ---------------------------------------------------------------- button + modal
 
+/** The tutorial of the technician's "Minhas peças" screen: one video for the computer and a vertical one for phones. */
+const TECHNICIAN_VIDEO = { desktop: 'ugExX4-YM9s', mobile: 'q6cxordQsUM' };
+
 /**
- * The "Ver vídeo" button for the title bar of Venda de Peças: opens the tutorial of the current tab in a modal.
- * Render it with `key={tab}`. The player is only created while the modal is open, so nothing is loaded
- * from YouTube until someone asks for it, and closing the modal stops the video.
+ * A "Ver vídeo" button that opens a tutorial in a modal. The player is only created while the modal is open, so
+ * nothing is loaded from YouTube until someone asks for it, and closing the modal stops the video.
+ * With a `mobile` video, phones (narrow screens) get that one, in a vertical player.
  */
-export function TabVideoButton({ tab }: { tab: string }) {
+function VideoModalButton({ title, description, desktop, mobile }: { title: string; description: string; desktop: string; mobile?: string }) {
   const [open, setOpen] = useState(false);
-  const video = TAB_VIDEOS[tab];
-  if (!video) return null;
+  const [vertical, setVertical] = useState(false);
+
+  function show() {
+    setVertical(Boolean(mobile) && window.matchMedia('(max-width: 767px)').matches);
+    setOpen(true);
+  }
 
   return (
     <>
-      <Button type="button" variant="outline" size="lg" onClick={() => setOpen(true)}>
+      <Button type="button" variant="outline" size="lg" onClick={show}>
         <Play className="h-4 w-4" />
         Ver vídeo
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent showCloseButton={false} className="w-full gap-0 overflow-hidden border-0 bg-black p-0 sm:max-w-4xl">
+        <DialogContent showCloseButton={false} className={cn('w-full grid-cols-[minmax(0,1fr)] gap-0 overflow-hidden border-0 bg-black p-0', vertical ? 'sm:max-w-md' : 'sm:max-w-4xl')}>
           <div className="flex items-center justify-between gap-3 bg-[#211f32] px-4 py-3 text-white">
-            <DialogTitle className="text-sm font-semibold">Como usar a aba {video.label}</DialogTitle>
+            <DialogTitle className="text-sm font-semibold">{title}</DialogTitle>
             <DialogClose className="grid h-8 w-8 place-content-center rounded-md hover:bg-white/10" aria-label="Fechar vídeo">
               <X className="h-5 w-5" />
             </DialogClose>
           </div>
-          <DialogDescription className="sr-only">Vídeo curto que mostra, passo a passo, como usar a aba {video.label} de Venda de Peças.</DialogDescription>
-          <VideoPlayer videoId={video.id} />
+          <DialogDescription className="sr-only">{description}</DialogDescription>
+          {/* If the vertical video cannot be shown (embedding turned off, removed), phones fall back to the other one. */}
+          <VideoPlayer videoId={vertical && mobile ? mobile : desktop} vertical={vertical} onUnavailable={vertical ? () => setVertical(false) : undefined} />
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+/**
+ * The "Ver vídeo" button for the title bar of Venda de Peças (administrator): the tutorial of the current tab.
+ * Render it with `key={tab}`.
+ */
+export function TabVideoButton({ tab }: { tab: string }) {
+  const video = TAB_VIDEOS[tab];
+  if (!video) return null;
+  return (
+    <VideoModalButton
+      title={`Como usar a aba ${video.label}`}
+      description={`Vídeo curto que mostra, passo a passo, como usar a aba ${video.label} de Venda de Peças.`}
+      desktop={video.id}
+    />
+  );
+}
+
+/** The "Ver vídeo" button for the title bar of the technician's "Minhas peças". */
+export function TechnicianVideoButton() {
+  return (
+    <VideoModalButton
+      title="Como usar a área Minhas peças"
+      description="Vídeo curto que mostra, passo a passo, como vender as peças do carro, acompanhar as vendas e ver a sua conta."
+      desktop={TECHNICIAN_VIDEO.desktop}
+      mobile={TECHNICIAN_VIDEO.mobile}
+    />
   );
 }
