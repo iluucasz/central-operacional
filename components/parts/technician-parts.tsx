@@ -118,9 +118,9 @@ export function TechnicianParts() {
           />
         </TabsContent>
         <TabsContent value="sales">
-          <MySales paymentMethods={data.paymentMethods} />
+          <MySales paymentMethods={data.paymentMethods} onSaleCanceled={reload} />
         </TabsContent>
-        <TabsContent value="account" className="grid gap-4">
+        <TabsContent value="account" className="grid grid-cols-[minmax(0,1fr)] gap-4">
           <AccountCard account={data.account} settlementDay={data.settlementDay} />
           <MercadoPagoCard status={data.mercadoPago} onChanged={reload} />
         </TabsContent>
@@ -193,7 +193,7 @@ function MercadoPagoCard({ status, onChanged }: { status: MercadoPagoAccountStat
 
   return (
     <DataPanel title="Mercado Pago">
-      <div className="grid gap-3">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-3">
         {error ? <Alert>{error}</Alert> : null}
         {!status.available ? (
           <Alert tone="warning">O Mercado Pago ainda não foi configurado no sistema. Fale com o administrador.</Alert>
@@ -455,6 +455,7 @@ function SellPanel({
   }, [parts, search]);
 
   function add(part: TechnicianPart) {
+    setScanError('');
     setCart((current) => {
       const line = current.find((item) => item.part.id === part.id);
       if (line) {
@@ -487,6 +488,11 @@ function SellPanel({
   // The dialogs below stay mounted even when the last unit was just sold (the payment is still open).
   const empty = !parts.some((part) => part.stock > 0);
 
+  // Taking the last part out of the sale (the trash button) leaves nothing to charge: close the form instead of leaving it empty.
+  useEffect(() => {
+    if (checkout && !cart.length) setCheckout(false);
+  }, [checkout, cart.length]);
+
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-4 pb-28">
       {empty ? (
@@ -498,12 +504,19 @@ function SellPanel({
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input className={inputClass('pl-9')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar peça" aria-label="Buscar peça" />
         </div>
-        <Button variant="outline" onClick={() => setScanning(true)}>
+        <Button
+          variant="outline"
+          aria-label="Ler código de barras"
+          onClick={() => {
+            setScanError('');
+            setScanning(true);
+          }}
+        >
           <ScanBarcode className="h-4 w-4" />
           <span className="hidden sm:inline">Ler código</span>
         </Button>
       </div>
-      {scanError ? <Alert tone="warning">{scanError}</Alert> : null}
+      {!scanning && scanError ? <Alert tone="warning">{scanError}</Alert> : null}
       {!mercadoPagoConnected ? (
         <Alert tone="warning" className="flex items-center justify-between gap-3">
           <span>Conecte o Mercado Pago para vender.</span>
@@ -569,7 +582,10 @@ function SellPanel({
           <DialogHeader className="sr-only">
             <DialogTitle>Ler código de barras</DialogTitle>
           </DialogHeader>
-          {scanning ? <BarcodeScanner showClose={false} onDetect={onScan} onClose={() => setScanning(false)} /> : null}
+          {/* The error shows here too: the one on the page is hidden behind this window while the scanner is open. */}
+          {scanning && scanError ? <Alert tone="warning">{scanError}</Alert> : null}
+          {/* continuous: a code that is not in the car must not stop the camera; a good one closes the window (see onScan). */}
+          {scanning ? <BarcodeScanner continuous showClose={false} onDetect={onScan} onClose={() => setScanning(false)} /> : null}
         </DialogContent>
       </Dialog>
 
@@ -838,7 +854,7 @@ function CheckoutForm({
 
 // ---------------------------------------------------------------- my sales
 
-function MySales({ paymentMethods }: { paymentMethods: PaymentMethod[] }) {
+function MySales({ paymentMethods, onSaleCanceled }: { paymentMethods: PaymentMethod[]; onSaleCanceled: () => void }) {
   const [month, setMonth] = useState(currentMonthKey());
   const { data, error, loading, reload } = useParts<{ sales: Sale[] }>(`/api/parts/sales?month=${month}`);
   const [open, setOpen] = useState<Sale | null>(null);
@@ -881,7 +897,16 @@ function MySales({ paymentMethods }: { paymentMethods: PaymentMethod[] }) {
             <DialogTitle>Venda</DialogTitle>
           </DialogHeader>
           {open ? (
-            <PaymentPanel initialSale={open} paymentMethods={paymentMethods} onChanged={() => reload()} onClose={() => setOpen(null)} />
+            <PaymentPanel
+              initialSale={open}
+              paymentMethods={paymentMethods}
+              // A canceled sale gives the parts back and leaves the account: the stock and "A pagar" tiles above must follow.
+              onChanged={(sale) => {
+                reload();
+                if (sale.status === 'canceled') onSaleCanceled();
+              }}
+              onClose={() => setOpen(null)}
+            />
           ) : null}
         </DialogContent>
       </Dialog>

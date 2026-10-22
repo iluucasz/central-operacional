@@ -211,7 +211,8 @@ export async function createSale(technicianId: string, input: Record<string, unk
     if (!isUuid(item?.partId)) throw new PartsError('Peça inválida na venda.');
     const quantity = parseQuantity(item.quantity);
     const unitPrice = parseAmount(item.unitPrice);
-    if (unitPrice === null) throw new PartsError('Preço de venda inválido.');
+    // The screen already asks for a price per part; a zero would register a free sale that still charges the technician.
+    if (unitPrice === null || unitPrice <= 0) throw new PartsError('Informe o valor cobrado de cada peça (maior que zero).');
     const previous = requested.get(item.partId);
     if (previous && previous.unitPrice !== unitPrice) throw new PartsError('A mesma peça aparece com dois preços diferentes.');
     requested.set(item.partId, { quantity: (previous?.quantity ?? 0) + quantity, unitPrice });
@@ -540,6 +541,22 @@ export async function cancelSale(saleId: unknown, input: { reason?: unknown; tec
   }
   const reason = typeof input.reason === 'string' && input.reason.trim() ? input.reason.trim().slice(0, 300) : null;
   if (!reason) throw new PartsError('Informe o motivo do cancelamento.');
+
+  // The customer may have paid since the screen last looked: ask Mercado Pago first, so a technician never
+  // cancels (and gets the parts back for) a sale whose money has already arrived. Only for charges tied to an
+  // order or a link; "cartão presencial" is matched by amount and could pair with an unrelated payment.
+  if (input.technicianId && row.status === 'awaiting_payment' && (row.mp_order_id || row.payment_method === 'card_link')) {
+    let paidMeanwhile = false;
+    try {
+      paidMeanwhile = (await checkPayment(row.id, input.technicianId)).sale.status === 'paid';
+    } catch (error) {
+      // Mercado Pago unreachable (or the charge never existed): cancel anyway, as before.
+      console.warn('[parts] check before cancel:', error instanceof Error ? error.message : error);
+    }
+    if (paidMeanwhile) {
+      throw new PartsError('O cliente acabou de pagar esta venda. Se precisar cancelar, peça ao administrador (e faça o estorno no Mercado Pago).', 409);
+    }
+  }
   await cancelOpenOrder(row);
 
   const items = await sql`SELECT part_id, quantity, unit_cost, unit_technician_price FROM part_sale_items WHERE sale_id = ${row.id}`;

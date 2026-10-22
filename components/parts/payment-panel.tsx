@@ -86,6 +86,19 @@ export function PaymentPanel({
     !sale.paymentError &&
     (sale.paymentMethod === 'pix' || sale.paymentMethod === 'card_link' || (sale.paymentMethod === 'card_present' && sale.sentToTerminal));
 
+  // A Pix QR Code lasts an hour and a payment link a day: say so when it is over, with a way to get a new one.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
+  const expired =
+    sale.status === 'awaiting_payment' &&
+    !sale.paymentError &&
+    (sale.paymentMethod === 'pix' || sale.paymentMethod === 'card_link') &&
+    Boolean(sale.paymentExpiresAt) &&
+    new Date(sale.paymentExpiresAt!).getTime() < now;
+
   // Polls while the customer pays (the webhook does the same on the server when it is reachable).
   useEffect(() => {
     if (!waitingMercadoPago) return;
@@ -194,6 +207,16 @@ export function PaymentPanel({
       {error ? <Alert>{error}</Alert> : null}
       {notice ? <Alert tone="info">{notice}</Alert> : null}
 
+      {expired ? (
+        <div className="grid gap-2">
+          <Alert tone="warning">{sale.paymentMethod === 'pix' ? 'Este QR Code expirou: o cliente não consegue mais pagar por ele.' : 'Este link expirou: o cliente não consegue mais pagar por ele.'}</Alert>
+          <Button onClick={() => act('retry', { paymentMethod: sale.paymentMethod })} disabled={busy !== null}>
+            {busy === 'retry' ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {sale.paymentMethod === 'pix' ? 'Gerar novo QR Code' : 'Gerar novo link'}
+          </Button>
+        </div>
+      ) : null}
+
       {sale.paymentError ? (
         <div className="grid gap-3">
           <Alert>Não foi possível criar a cobrança: {sale.paymentError}</Alert>
@@ -278,7 +301,7 @@ export function PaymentPanel({
         </div>
       ) : null}
 
-      {waitingMercadoPago ? (
+      {waitingMercadoPago && !expired ? (
         <p className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           Aguardando o pagamento…
