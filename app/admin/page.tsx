@@ -10,11 +10,11 @@ import { MetricCard } from '@/components/metric-card';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
-import { compactName, formatCurrency, formatNumber, normalizeText, resolveCompetenceMonth } from '@/lib/formatters';
+import { brasiliaDateKey, compactName, formatCurrency, formatNumber, normalizeText, resolveCompetenceMonth } from '@/lib/formatters';
 import type { Payroll, Service, Technician } from '@/lib/types';
 import { useAppSession } from '@/hooks/use-app-session';
 
-const defaultCompetenceMonth = new Date().toISOString().slice(0, 7);
+const defaultCompetenceMonth = brasiliaDateKey().slice(0, 7);
 const monthNames = [
   'Janeiro',
   'Fevereiro',

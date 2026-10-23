@@ -394,6 +394,20 @@ export async function startPayment(saleId: string, technicianId: string, actor: 
 export async function retryPayment(saleId: unknown, technicianId: string, input: { paymentMethod?: unknown }, actor: PartsActor) {
   const row = await loadSaleRow(saleId, technicianId);
   if (row.status !== 'awaiting_payment') throw new PartsError('Esta venda não está aguardando pagamento.', 409);
+
+  // The customer may have paid the charge being replaced since the screen last looked: a paid order can't
+  // be canceled, so a new charge would orphan that payment (money received, sale still open). Same
+  // reasoning and scope as the check in cancelSale.
+  if (row.mp_order_id || row.payment_method === 'card_link') {
+    try {
+      const checked = await checkPayment(row.id, technicianId);
+      if (checked.sale.status === 'paid') return checked.sale;
+    } catch (error) {
+      // Mercado Pago unreachable (or the charge never existed): go on and charge again.
+      console.warn('[parts] check before retry:', error instanceof Error ? error.message : error);
+    }
+  }
+
   if (input.paymentMethod !== undefined && input.paymentMethod !== row.payment_method) {
     const settings = await getPartsSettings();
     if (!isPaymentMethod(input.paymentMethod) || !settings.paymentMethods.includes(input.paymentMethod)) {

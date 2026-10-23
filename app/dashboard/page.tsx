@@ -21,7 +21,7 @@ import { resolveAllowedMonth } from '@/lib/technician-visibility';
 import { CHART_COLORS as chartColors } from '@/lib/chart-theme';
 
 const SERVICES_PAGE_SIZE = 12;
-const defaultCompetenceMonth = new Date().toISOString().slice(0, 7);
+const defaultCompetenceMonth = brasiliaDateKey().slice(0, 7);
 const monthNames = [
   'Janeiro',
   'Fevereiro',

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/auth';
 import { sql } from '@/lib/db';
 import { ensureFinanceSchema } from '@/lib/finance-schema';
+import { brasiliaDateKey } from '@/lib/formatters';
 import type { FinancialEntryStatus, FinancialEntryType } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -31,9 +32,9 @@ function roundCurrency(value: number | string | null | undefined) {
   return Math.round((numericValue + Number.EPSILON) * 100) / 100;
 }
 
+// Brasília's calendar day: the server runs in UTC, which already says tomorrow from 21:00.
 function getTodayKey() {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  return brasiliaDateKey();
 }
 
 function normalizeDateValue(value: unknown) {

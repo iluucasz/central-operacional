@@ -274,9 +274,10 @@ export async function calculateHourBank(
   const extraHours = Math.max(0, totalHours - monthlyHours);
 
   // Get current bank balance
-  const previousMonth = new Date(competenceMonth + '-01');
-  previousMonth.setMonth(previousMonth.getMonth() - 1);
-  const previousMonthStr = previousMonth.toISOString().slice(0, 7);
+  // Plain arithmetic on the key: Date's local-time getters moved "2026-03" to January on machines west of UTC.
+  const [competenceYear, competenceMonthNumber] = competenceMonth.split('-').map(Number);
+  const previousMonthDate = new Date(Date.UTC(competenceYear, competenceMonthNumber - 2, 1));
+  const previousMonthStr = previousMonthDate.toISOString().slice(0, 7);
 
   const previousPayroll = await sql`
     SELECT hour_bank_balance
